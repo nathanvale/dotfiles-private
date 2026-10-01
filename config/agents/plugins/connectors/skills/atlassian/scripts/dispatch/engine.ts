@@ -168,7 +168,6 @@ export function readSchema(result: TransportResult): SchemaTool[] | null {
 // stderr, or tool message can carry a secret or private content into the
 // envelope.
 export const REPAIR_TEXT: Record<Exclude<CauseCode, "success">, string> = {
-	"usage-invalid": "correct the invocation",
 	"input-invalid": "correct the input object",
 	"site-unresolved": "the tenant's credential item must expose a valid site_url field",
 	"refused-preview": "the preview is unknown, consumed, expired, or no longer matches the input, provider arguments, or target revision; preview again",

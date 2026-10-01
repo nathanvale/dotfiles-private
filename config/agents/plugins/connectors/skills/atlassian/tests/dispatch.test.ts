@@ -1,8 +1,9 @@
 // Atlassian dispatcher: nineteen semantic operations over two static product
 // routes on the one Community Provider, every read and write behind live
 // schema confirmation, writes behind the durable preview and apply journal,
-// and the operator path. Policy is proved in-process with an in-memory
-// transport and a real journal in a temp state root; the public route is
+// and the operator path. Policy is proved in-process through the typed
+// invocationFor and dispatch seam with an in-memory transport and a real
+// journal in a temp state root; the public route is
 // proved through the packaged front door in packaged.test.ts, and one
 // process row here proves the module is no longer an entry.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -10,10 +11,11 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import os from "node:os";
 import path from "node:path";
 import { OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
-import { run } from "../scripts/atlassian-dispatch.ts";
-import { ALLOWED_TOOLS, OPERATION_SPECS, productFor, PROVIDER, type ProviderName, registryToolVocabulary, REST_SERVER, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
-import { type Dependencies, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
+import { type Dispatched, dispatch, invocationFor, type Request } from "../scripts/atlassian-dispatch.ts";
+import { ALLOWED_TOOLS, OPERATION_SPECS, type OperationId, type OperationSpec, productFor, PROVIDER, type ProviderName, registryToolVocabulary, REST_SERVER, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
+import { type Dependencies, readInput, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
 import { openJournal } from "../scripts/dispatch/journal.ts";
+import { writeInput } from "../scripts/dispatch/writes.ts";
 import { stageFile } from "../scripts/outbox.ts";
 import type { ProviderFailureCause } from "../scripts/dispatch/translate.ts";
 import { CustodyFixture, PROVIDER_TOKEN } from "./fixtures/custody-fixture.ts";
@@ -62,9 +64,6 @@ function testCanonical(value: unknown): string {
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
 const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.attachment.delete", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
-const EXPECTED_COMMANDS = ["receipts", "receipt", "adjudicate", "unlock"];
-const EXPECTED_PATHS = [...EXPECTED_OPERATIONS, ...EXPECTED_COMMANDS].map((entry) => `atlassian.${entry}`).sort();
-const WRITE_OPERATIONS = EXPECTED_OPERATIONS.filter((id) => !id.endsWith(".get") && !id.endsWith(".search") && id !== "issue.transitions");
 
 // Independent oracle: the exact Community tool and product per operation,
 // from the v0.23.1 Community reference.
@@ -184,11 +183,24 @@ function deps(overrides: Partial<Dependencies> = {}): Dependencies {
 	};
 }
 
-const dispatch = (argv: string[], dependencies: Dependencies) =>
-	run(["--tenant", "example", ...argv], (tenant) => {
-		tenants.push(tenant);
-		return dependencies;
-	});
+// Typed requests through the dispatcher's own validation, then one dispatch.
+// A request the validator refuses never builds dependencies, as in production.
+const TENANT = "example";
+type Step = Request extends infer R ? (R extends { tenant: string } ? Omit<R, "tenant"> : never) : never;
+async function send(step: Step, dependencies: Dependencies, tenant = TENANT): Promise<Dispatched> {
+	const validated = invocationFor({ tenant, ...step } as Request);
+	if (!validated.ok) throw new Error(`the typed request was refused: ${validated.cause}`);
+	tenants.push(validated.invocation.tenant);
+	return dispatch(validated.invocation, dependencies);
+}
+const specOf = (operation: string): OperationSpec => OPERATION_SPECS[operation as OperationId];
+const readOp = (operation: string, input: unknown, dependencies: Dependencies, tenant?: string) => send({ kind: "read", spec: specOf(operation), input }, dependencies, tenant);
+const previewOp = (operation: string, input: unknown, dependencies: Dependencies) => send({ kind: "preview", spec: specOf(operation), input }, dependencies);
+const applyOp = (operation: string, input: unknown, previewId: string, dependencies: Dependencies) => send({ kind: "apply", spec: specOf(operation), input, previewId }, dependencies);
+const listReceipts = (dependencies: Dependencies) => send({ kind: "receipts" }, dependencies);
+const showReceipt = (runId: string, dependencies: Dependencies) => send({ kind: "receipt", runId }, dependencies);
+const unlockRun = (runId: string, dependencies: Dependencies) => send({ kind: "unlock", runId }, dependencies);
+const adjudicateRun = (runId: string, input: unknown, dependencies: Dependencies) => send({ kind: "adjudicate", runId, input }, dependencies);
 const stateDir = (name: string) => path.join(stateRoot, "connectors", "atlassian", "example", name);
 const receiptsDir = () => stateDir("receipts");
 const previewsDir = () => stateDir("previews");
@@ -196,7 +208,16 @@ const readJsonDir = (directory: string) => (existsSync(directory) ? readdirSync(
 // The in-memory transport emits translated failures, exactly as the runtime
 // adapter does after translate.ts; raw provider text never enters policy.
 const failure = (cause: ProviderFailureCause, hint: string | null = null): TransportResult => ({ ok: false, cause, hint });
-const previewData = (envelope: Awaited<ReturnType<typeof run>>) => envelope.result.data as { previewId: string; provider: string; objectIdentity: string; revision: string | null; baseline: { effectIds: string[]; commentIds: string[]; revision: string | null }; arguments: Record<string, unknown>; tool: string; server: string };
+// The effects a settled outcome names, as kind:id; none when it names none.
+const effectIds = (dispatched: Dispatched): string[] => ((dispatched.outcome.data as { effects?: { kind: string; id: string }[] } | null)?.effects ?? []).map((effect) => `${effect.kind}:${effect.id}`);
+// The object an open, unknown receipt blocks.
+const blockedObject = (dispatched: Dispatched): unknown => (dispatched.outcome.data as { objectIdentity?: unknown } | null)?.objectIdentity;
+// What the typed validator says of a request: its refusal cause, or accepted.
+const refusal = (request: Request) => {
+	const validated = invocationFor(request);
+	return validated.ok ? "accepted" : validated.cause;
+};
+const previewData = (dispatched: Dispatched) => dispatched.outcome.data as { previewId: string; provider: string; objectIdentity: string; revision: string | null; baseline: { effectIds: string[]; commentIds: string[]; revision: string | null }; arguments: Record<string, unknown>; tool: string; server: string };
 
 describe("operation contract and routes", () => {
 	test("maps every operation to its exact Community tool, kind, and product", () => {
@@ -251,40 +272,35 @@ describe("operation contract and routes", () => {
 		retired.mcpServers["atlassian-official-jira"] = { allowedTools: ["getJiraIssue"] };
 		expect(() => registryToolVocabulary(retired)).toThrow(/registry-invalid/);
 	});
+});
 
-	test("the retired provider selector and parity command are usage refusals before any dependency is built", async () => {
-		for (const argv of [
-			["--tenant", "example", "--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}'],
-			["--tenant", "example", "--provider", "official", "issue.get", "--input", '{"issueKey":"PROJ-1"}'],
-			["--tenant", "example", "parity", "--input", '{"operation":"issue.get"}'],
-		]) {
-			const envelope = await run(argv, (tenant) => {
-				tenants.push(tenant);
-				return deps();
-			});
-			expect([argv[2], envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode]).toEqual([argv[2], "refused", "usage-invalid", 2]);
+describe("typed invocation validation", () => {
+	const issueGet = { kind: "read", spec: OPERATION_SPECS["issue.get"], input: { issueKey: "PROJ-1" } } as const;
+
+	test("a malformed tenant or identifier is a usage refusal, whatever the input holds", () => {
+		for (const tenant of ["", "Example", "example team", "a/b", "../x", "-example"]) expect([tenant, refusal({ tenant, ...issueGet })]).toEqual([tenant, "usage-invalid"]);
+		const comment = { spec: OPERATION_SPECS["issue.comment"], input: { issueKey: "PROJ-1", body: "x" } };
+		for (const previewId of ["", "-lead", "has space", "x".repeat(129)]) expect([previewId, refusal({ tenant: TENANT, kind: "apply", previewId, ...comment })]).toEqual([previewId, "usage-invalid"]);
+		for (const runId of ["", "-lead", "has space", "../receipt"]) {
+			expect([runId, refusal({ tenant: TENANT, kind: "receipt", runId }), refusal({ tenant: TENANT, kind: "unlock", runId }), refusal({ tenant: TENANT, kind: "adjudicate", runId, input: {} })]).toEqual([runId, "usage-invalid", "usage-invalid", "usage-invalid"]);
 		}
-		expect(tenants).toEqual([]);
+		// Identifiers are checked before input, so a bad id wins over a bad input.
+		expect(refusal({ tenant: "Example", ...issueGet, input: { issueKey: "" } })).toBe("usage-invalid");
+	});
+
+	test("an input the operation's contract refuses is a schema refusal; well-formed requests are accepted", () => {
+		for (const input of [{ issueKey: "" }, { issueKey: "PROJ-1", issue_key: "OTHER-1" }, {}, [], null, "PROJ-1"]) expect([JSON.stringify(input), refusal({ tenant: TENANT, ...issueGet, input })]).toEqual([JSON.stringify(input), "input-invalid"]);
+		expect(refusal({ tenant: TENANT, ...issueGet, kind: "read" })).toBe("accepted");
+		expect(refusal({ tenant: TENANT, kind: "receipts" })).toBe("accepted");
+		expect(refusal({ tenant: TENANT, kind: "receipt", runId: "run-1.a_b" })).toBe("accepted");
 	});
 });
 
-describe("tenant is parsed exactly once", () => {
-	test("a repeated --tenant is a usage refusal before any dependency is built", async () => {
-		const envelope = await run(["--tenant", "example", "--tenant", "other", "issue.get", "--input", '{"issueKey":"PROJ-1"}'], (tenant) => {
-			tenants.push(tenant);
-			return deps();
-		});
-		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode]).toEqual(["refused", "usage-invalid", 2]);
-		expect(envelope.result.repairAction).toBe("--tenant may appear only once");
-		expect(tenants).toEqual([]);
-	});
-
-	test("the validated tenant is the one the dependency factory receives, wherever the option sits", async () => {
+describe("tenant identity", () => {
+	test("the validated tenant is the one the credential binding and the journal receive", async () => {
 		seen.length = 0;
-		await run(["issue.get", "--input", '{"issueKey":"PROJ-1"}', "--tenant", "example-team"], (tenant) => {
-			tenants.push(tenant);
-			return deps();
-		});
+		const { transport } = fakeTransport();
+		await readOp("issue.get", { issueKey: "PROJ-1" }, deps({ transport }), "example-team");
 		expect(tenants).toEqual(["example-team"]);
 		expect(seen).toEqual([{ tenant: "example-team", product: "jira" }]);
 	});
@@ -294,12 +310,12 @@ describe("Community reads", () => {
 	test("issue.get binds the Jira product credential, confirms the live schema, then calls the exact tool on the Jira route", async () => {
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", fields: { summary: "hello" } } } });
 		seen.length = 0;
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", "success", 0, "inspect", "atlassian.issue.get"]);
-		expect(envelope.result.data).toEqual({ key: "PROJ-1", fields: { summary: "hello" } });
+		const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+		expect([dispatched.outcome.cause]).toEqual(["success"]);
+		expect(dispatched.outcome.data).toEqual({ key: "PROJ-1", fields: { summary: "hello" } });
 		expect(calls).toEqual([{ server: CJ, tool: "jira_get_issue", args: { issue_key: "PROJ-1" } }]);
-		expect(envelope.result.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: "success" }]);
-		expect([envelope.result.retryable, envelope.result.transactionState, envelope.result.nextAction]).toEqual([false, "unchanged", "use the data"]);
+		expect(dispatched.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: "success" }]);
+		expect([dispatched.outcome.transactionState]).toEqual(["unchanged"]);
 		expect(seen).toEqual([{ tenant: "example", product: "jira" }]);
 	});
 
@@ -307,7 +323,7 @@ describe("Community reads", () => {
 		const { transport, bindings } = fakeTransport();
 		let binds = 0;
 		const binding = Object.freeze({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID });
-		await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, bindCredential: async () => ({ ok: true, binding: { ...binding, itemVersion: `${ITEM_VERSION}:${++binds}` } }) }));
+		await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport, bindCredential: async () => ({ ok: true, binding: { ...binding, itemVersion: `${ITEM_VERSION}:${++binds}` } }) }));
 		expect(binds).toBe(1);
 		expect(bindings).toHaveLength(2);
 		expect(bindings.every((entry) => entry === bindings[0])).toBe(true);
@@ -317,10 +333,10 @@ describe("Community reads", () => {
 	test("issue.search, page.get, and page.search shape their arguments per Community tool on the product route", async () => {
 		const { transport, calls } = fakeTransport();
 		seen.length = 0;
-		await dispatch(["issue.search", "--input", '{"jql":"project = PROJ","maxResults":5,"fields":["summary"]}'], deps({ transport }));
-		await dispatch(["page.get", "--input", '{"pageId":"123"}'], deps({ transport }));
-		await dispatch(["page.search", "--input", '{"cql":"type=page","maxResults":3}'], deps({ transport }));
-		await dispatch(["issue.transitions", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
+		await readOp("issue.search", {"jql":"project = PROJ","maxResults":5,"fields":["summary"]}, deps({ transport }));
+		await readOp("page.get", {"pageId":"123"}, deps({ transport }));
+		await readOp("page.search", {"cql":"type=page","maxResults":3}, deps({ transport }));
+		await readOp("issue.transitions", {"issueKey":"PROJ-1"}, deps({ transport }));
 		expect(calls.map((call) => [call.server, call.tool, call.args])).toEqual([
 			[CJ, "jira_search", { jql: "project = PROJ", limit: 5, fields: "summary" }],
 			[CC, "confluence_get_page", { page_id: "123" }],
@@ -332,37 +348,25 @@ describe("Community reads", () => {
 
 	test("product swap is impossible: a Jira operation never touches the Confluence route, even when only that route has the tool", async () => {
 		const { transport, calls } = fakeTransport({}, { [CJ]: [], [CC]: [tool("jira_get_issue", ["issue_key"])] });
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["failed", "capability-unavailable"]);
+		const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+		expect([dispatched.outcome.cause]).toEqual(["capability-unavailable"]);
 		expect(calls).toEqual([]);
-	});
-
-	test("a write without --preview or --apply is a usage refusal that touches no provider", async () => {
-		const { transport, calls } = fakeTransport();
-		for (const operation of WRITE_OPERATIONS) {
-			const envelope = await dispatch([operation, "--input", "{}"], deps({ transport }));
-			expect([operation, envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode]).toEqual([operation, "refused", "usage-invalid", 2]);
-		}
-		const both = await dispatch(["issue.comment", "--input", "{}", "--preview", "--apply", "p1"], deps({ transport }));
-		expect(both.result.causeCode).toBe("usage-invalid");
-		expect(calls).toEqual([]);
-		expect(readJsonDir(previewsDir()).length).toBe(0);
 	});
 });
 
 describe("refusals and failures are final: no second Provider, no retry", () => {
 	test("an unresolved site origin refuses before any provider call", async () => {
 		const { transport, calls } = fakeTransport();
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, bindCredential: async () => ({ ok: false, cause: "site-unresolved", detail: "the tenant's credential item must expose a valid site_url field" }) }));
-		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["refused", "site-unresolved"]);
-		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url field");
+		const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport, bindCredential: async () => ({ ok: false, cause: "site-unresolved", detail: "the tenant's credential item must expose a valid site_url field" }) }));
+		expect([dispatched.outcome.cause]).toEqual(["site-unresolved"]);
+		expect(dispatched.outcome.detail).toBe("the tenant's credential item must expose a valid site_url field");
 		expect(calls).toEqual([]);
 	});
 
 	test("credential custody failures preserve a precondition refusal instead of claiming the site is unresolved", async () => {
 		const { transport, calls } = fakeTransport();
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, bindCredential: async () => ({ ok: false, cause: "refused-precondition", detail: "a provider precondition failed before any request; run the provider readiness checks" }) }));
-		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.repairAction]).toEqual(["refused", "refused-precondition", "a provider precondition failed before any request; run the provider readiness checks"]);
+		const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport, bindCredential: async () => ({ ok: false, cause: "refused-precondition", detail: "a provider precondition failed before any request; run the provider readiness checks" }) }));
+		expect([dispatched.outcome.cause, dispatched.outcome.detail]).toEqual(["refused-precondition", "a provider precondition failed before any request; run the provider readiness checks"]);
 		expect(calls).toEqual([]);
 	});
 
@@ -374,42 +378,42 @@ describe("refusals and failures are final: no second Provider, no retry", () => 
 			["failed-unknown", "failed"],
 		] as const) {
 			const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: failure(cause) });
-			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-			expect([cause, envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode, envelope.result.retryable]).toEqual([cause, outcome, cause, 3, false]);
-			expect([cause, envelope.result.repairAction]).toEqual([cause, REPAIR[cause]]);
+			const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+			expect([cause, dispatched.outcome.cause]).toEqual([cause, cause]);
+			expect([cause, dispatched.outcome.detail]).toEqual([cause, REPAIR[cause]]);
 			expect([cause, calls.map((call) => [call.server, call.tool])]).toEqual([cause, [[CJ, "jira_get_issue"]]]);
-			expect(envelope.result.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: cause }]);
+			expect(dispatched.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: cause }]);
 		}
 	});
 
 	test("a failed schema list is reported as the list step and makes no call", async () => {
 		const { transport, calls } = fakeTransport({}, { [CJ]: failure("failed-transport") });
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["failed", "failed-transport"]);
-		expect(envelope.result.provenance).toEqual([{ provider: CJ, tool: "list", status: "failed-transport" }]);
+		const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+		expect([dispatched.outcome.cause]).toEqual(["failed-transport"]);
+		expect(dispatched.provenance).toEqual([{ provider: CJ, tool: "list", status: "failed-transport" }]);
 		expect(calls).toEqual([]);
 	});
 
 	test("schema mismatch: the live schema lacks the tool or a required argument", async () => {
 		const missingTool = fakeTransport({}, { [CJ]: [tool("jira_search", ["jql"])] });
-		const absent = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport: missingTool.transport }));
-		expect([absent.result.outcome, absent.result.causeCode]).toEqual(["failed", "capability-unavailable"]);
+		const absent = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport: missingTool.transport }));
+		expect([absent.outcome.cause]).toEqual(["capability-unavailable"]);
 		expect(missingTool.calls).toEqual([]);
 		const renamed = fakeTransport({}, { [CJ]: [tool("jira_get_issue", ["issueKey"])] });
-		const mismatch = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport: renamed.transport }));
-		expect([mismatch.result.outcome, mismatch.result.causeCode]).toEqual(["failed", "capability-unavailable"]);
+		const mismatch = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport: renamed.transport }));
+		expect([mismatch.outcome.cause]).toEqual(["capability-unavailable"]);
 		// Fixed text only; never a schema name and never a fallback verdict.
-		expect(mismatch.result.repairAction).toBe(REPAIR["capability-unavailable"]);
+		expect(mismatch.outcome.detail).toBe(REPAIR["capability-unavailable"]);
 		expect(renamed.calls).toEqual([]);
 	});
 
-	test("a hostile live schema cannot smuggle text into the envelope through required or property names", async () => {
+	test("a hostile live schema cannot smuggle text into the outcome through required or property names", async () => {
 		const hostile = ["customer SSN 123-45-6789", `token ${OP_TOKEN_SENTINEL}`, "op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential"];
 		for (const name of hostile) {
 			const { transport, calls } = fakeTransport({}, { [CJ]: [{ name: "jira_get_issue", inputSchema: { required: ["issue_key", name], properties: { issue_key: {}, [name]: {} } } }] });
-			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-			expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["failed", "capability-unavailable"]);
-			expect(JSON.stringify(envelope)).not.toContain(name);
+			const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+			expect([dispatched.outcome.cause]).toEqual(["capability-unavailable"]);
+			expect(JSON.stringify(dispatched)).not.toContain(name);
 			expect(calls).toEqual([]);
 		}
 	});
@@ -417,9 +421,9 @@ describe("refusals and failures are final: no second Provider, no retry", () => 
 	test("a Provider precondition carries its fixed hint after the fixed repair text", async () => {
 		const translated = failure("refused-precondition", "add a username field to the tenant's product credential item");
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: translated });
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["refused", "refused-precondition"]);
-		expect(envelope.result.repairAction).toBe(`${REPAIR["refused-precondition"]}; add a username field to the tenant's product credential item`);
+		const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+		expect([dispatched.outcome.cause]).toEqual(["refused-precondition"]);
+		expect(dispatched.outcome.detail).toBe(`${REPAIR["refused-precondition"]}; add a username field to the tenant's product credential item`);
 		expect(calls).toHaveLength(1);
 	});
 
@@ -432,23 +436,23 @@ describe("refusals and failures are final: no second Provider, no retry", () => 
 		];
 		for (const [label, schema] of cases) {
 			const { transport, calls } = fakeTransport({}, { [CJ]: schema });
-			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-			expect([label, envelope.result.outcome, envelope.result.causeCode]).toEqual([label, "failed", "capability-unavailable"]);
+			const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+			expect([label, dispatched.outcome.cause]).toEqual([label, "capability-unavailable"]);
 			expect([label, calls]).toEqual([label, []]);
 		}
 	});
 
 	test("invalid input is a schema refusal before any provider call", async () => {
 		const { transport, calls } = fakeTransport();
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":""}'], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode]).toEqual(["refused", "input-invalid", 4]);
-		const smuggled = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1","issue_key":"OTHER-1"}'], deps({ transport }));
-		expect([smuggled.result.causeCode, smuggled.result.repairAction]).toEqual(["input-invalid", "unknown input key issue_key"]);
-		expect(calls).toEqual([]);
+		const read = (input: unknown): Request => ({ tenant: TENANT, kind: "read", spec: OPERATION_SPECS["issue.get"], input });
+		expect([refusal(read({ issueKey: "" })), refusal(read({ issueKey: "PROJ-1", issue_key: "OTHER-1" }))]).toEqual(["input-invalid", "input-invalid"]);
+		// The contract names the offending key in its reason; the adapter never forwards it.
+		expect(readInput("issue.get", { issueKey: "PROJ-1", issue_key: "OTHER-1" })).toEqual({ ok: false, reason: "unknown input key issue_key" });
+		expect([tenants, calls]).toEqual([[], []]);
 	});
 });
 
-describe("provider text never reaches the envelope", () => {
+describe("provider text never reaches the outcome", () => {
 	const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", OP_TOKEN_SENTINEL, "op://", "Bearer", "Basic "];
 	const leak = `token=fixture-secret-value Authorization: Basic ${OP_TOKEN_SENTINEL} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789; connect ETIMEDOUT`;
 
@@ -460,13 +464,13 @@ describe("provider text never reaches the envelope", () => {
 			[precondition, "refused-precondition", "a provider precondition failed before any request; run the provider readiness checks; add a username field to the tenant's product credential item"],
 		] as const) {
 			const { transport } = fakeTransport({ [`${CJ}.jira_get_issue`]: translated });
-			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-			expect([envelope.result.causeCode, envelope.result.repairAction]).toEqual([cause, detail]);
-			expect(envelope.result.provenance.at(-1)).toEqual({ provider: CJ, tool: "jira_get_issue", status: cause });
+			const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport }));
+			expect([dispatched.outcome.cause, dispatched.outcome.detail]).toEqual([cause, detail]);
+			expect(dispatched.provenance.at(-1)).toEqual({ provider: CJ, tool: "jira_get_issue", status: cause });
 		}
 	});
 
-	test("an unexpected transport throw becomes a fixed failed-unknown envelope", async () => {
+	test("an unexpected transport throw becomes a fixed failed-unknown outcome", async () => {
 		const throwing: Transport = {
 			async listTools() {
 				return { ok: true, data: SCHEMAS[CJ] ?? [] };
@@ -475,11 +479,11 @@ describe("provider text never reaches the envelope", () => {
 				throw new Error(`boom ${leak}`);
 			},
 		};
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport: throwing }));
-		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode]).toEqual(["failed", "failed-unknown", 3]);
-		const serialized = JSON.stringify(envelope);
+		const dispatched = await readOp("issue.get", {"issueKey":"PROJ-1"}, deps({ transport: throwing }));
+		expect([dispatched.outcome.cause]).toEqual(["failed-unknown"]);
+		const serialized = JSON.stringify(dispatched);
 		for (const fragment of ["boom", ...PRIVATE]) expect(serialized).not.toContain(fragment);
-		expect(envelope.result.provenance.map((entry) => entry.status)).toEqual(["failed-unknown"]);
+		expect(dispatched.provenance.map((entry) => entry.status)).toEqual(["failed-unknown"]);
 	});
 });
 
@@ -490,9 +494,9 @@ describe("journaled writes", () => {
 
 	test("preview records a durable Community preview bound to the exact provider arguments and touches no write tool", async () => {
 		const { transport, calls } = fakeTransport();
-		const envelope = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.exitCode, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", 0, "repository-local", "atlassian.issue.comment.preview"]);
-		const data = previewData(envelope);
+		const dispatched = await previewOp("issue.comment", COMMENT, deps({ transport }));
+		expect(dispatched.outcome.cause).toBe("success");
+		const data = previewData(dispatched);
 		expect([data.provider, data.server, data.tool, data.objectIdentity, data.revision]).toEqual(["community", CJ, "jira_add_comment", "issue:PROJ-1", null]);
 		expect(data.arguments).toEqual({ issue_key: "PROJ-1", body: COMMENT.body });
 		expect(calls).toEqual([{ server: CJ, tool: "jira_get_issue", args: BASELINE_READ }]);
@@ -507,10 +511,10 @@ describe("journaled writes", () => {
 			if (call.tool === "jira_add_comment") sendStates.push(...readJsonDir(receiptsDir()).map((entry) => `${entry.status}:${entry.send}`));
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
-		const envelope = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
-		expect([envelope.result.outcome, envelope.result.exitCode, envelope.result.effectClass, envelope.result.transactionState]).toEqual(["success", 0, "external", "completed"]);
-		expect(envelope.result.effects).toEqual({ completed: ["jira-comment:10001"], remaining: [], uncertain: [], inventoryComplete: true });
+		const preview = previewData(await previewOp("issue.comment", COMMENT, dependencies));
+		const dispatched = await applyOp("issue.comment", COMMENT, preview.previewId, dependencies);
+		expect([dispatched.outcome.transactionState]).toEqual(["completed"]);
+		expect(effectIds(dispatched)).toEqual(["jira-comment:10001"]);
 		expect(sendStates).toEqual(["intent:possible"]);
 		const sent = calls.filter((call) => call.tool === "jira_add_comment");
 		expect(sent).toHaveLength(1);
@@ -519,19 +523,19 @@ describe("journaled writes", () => {
 		expect(testDigest(sent[0]?.args)).toBe(stored?.argsDigest as string);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.provider, entry.status, entry.send, entry.effects])).toEqual([["community", "completed", "possible", [{ kind: "jira-comment", id: "10001" }]]]);
 		// The same preview cannot be applied twice.
-		const again = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
-		expect([again.result.causeCode, again.result.repairAction?.endsWith("preview-consumed")]).toEqual(["refused-preview", true]);
+		const again = await applyOp("issue.comment", COMMENT, preview.previewId, dependencies);
+		expect([again.outcome.cause, again.outcome.detail?.endsWith("preview-consumed")]).toEqual(["refused-preview", true]);
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
 	});
 
 	test("changed input or a foreign preview id refuse the apply before any send", async () => {
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_add_comment`]: commentReply });
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
-		const changed = await dispatch(["issue.comment", "--input", JSON.stringify({ ...COMMENT, body: "edited" }), "--apply", preview.previewId], dependencies);
-		expect([changed.result.causeCode, changed.result.repairAction?.endsWith("preview-input-mismatch")]).toEqual(["refused-preview", true]);
-		const unknown = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", "nope"], dependencies);
-		expect([unknown.result.causeCode, unknown.result.repairAction?.endsWith("preview-unknown")]).toEqual(["refused-preview", true]);
+		const preview = previewData(await previewOp("issue.comment", COMMENT, dependencies));
+		const changed = await applyOp("issue.comment", { ...COMMENT, body: "edited" }, preview.previewId, dependencies);
+		expect([changed.outcome.cause, changed.outcome.detail?.endsWith("preview-input-mismatch")]).toEqual(["refused-preview", true]);
+		const unknown = await applyOp("issue.comment", COMMENT, "nope", dependencies);
+		expect([unknown.outcome.cause, unknown.outcome.detail?.endsWith("preview-unknown")]).toEqual(["refused-preview", true]);
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toEqual([]);
 		expect(readJsonDir(receiptsDir())).toEqual([]);
 	});
@@ -540,34 +544,33 @@ describe("journaled writes", () => {
 		const lost = failure("failed-transport");
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_add_comment`]: lost, [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", fields: { updated: "t1", comment: { comments: [{ id: "777", body: "unrelated" }] } } } } });
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
-		const envelope = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
-		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.transactionState, envelope.result.exitCode, envelope.result.retryable]).toEqual(["failed", "outcome-unknown", "unknown", 3, false]);
-		expect(envelope.result.effects).toEqual({ completed: [], remaining: [], uncertain: ["issue:PROJ-1"], inventoryComplete: false });
-		expect(envelope.result.nextAction).toBe("run adjudicate --run <result.data.runId> with the same input; never retry the write before it resolves");
+		const preview = previewData(await previewOp("issue.comment", COMMENT, dependencies));
+		const dispatched = await applyOp("issue.comment", COMMENT, preview.previewId, dependencies);
+		expect([dispatched.outcome.cause, dispatched.outcome.transactionState]).toEqual(["outcome-unknown", "unknown"]);
+		expect([effectIds(dispatched), blockedObject(dispatched)]).toEqual([[], "issue:PROJ-1"]);
 		// Preview and apply both bind the matching-comment baseline before the
 		// possible send. The immediate read-back found nothing, which proves
 		// nothing after a possible send, and the dispatcher never retries.
 		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_issue", "jira_add_comment", "jira_get_issue"]);
-		const runId = (envelope.result.data as { runId: string }).runId;
-		const receipts = await dispatch(["receipts"], dependencies);
-		expect((receipts.result.data as { open: { runId: string; status: string; send: string }[] }).open.map((entry) => [entry.runId, entry.status, entry.send])).toEqual([[runId, "unknown", "possible"]]);
+		const runId = (dispatched.outcome.data as { runId: string }).runId;
+		const receipts = await listReceipts(dependencies);
+		expect((receipts.outcome.data as { open: { runId: string; status: string; send: string }[] }).open.map((entry) => [entry.runId, entry.status, entry.send])).toEqual([[runId, "unknown", "possible"]]);
 		// Any write on the object is blocked while the receipt is open.
 		const blockedInput = { issueKey: "PROJ-1", body: "a separate comment" };
-		const blockedPreview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(blockedInput), "--preview"], dependencies));
-		const blocked = await dispatch(["issue.comment", "--input", JSON.stringify(blockedInput), "--apply", blockedPreview.previewId], dependencies);
-		expect([blocked.result.causeCode, blocked.result.repairAction?.endsWith("write-blocked-open-receipt")]).toEqual(["refused-write-blocked", true]);
+		const blockedPreview = previewData(await previewOp("issue.comment", blockedInput, dependencies));
+		const blocked = await applyOp("issue.comment", blockedInput, blockedPreview.previewId, dependencies);
+		expect([blocked.outcome.cause, blocked.outcome.detail?.endsWith("write-blocked-open-receipt")]).toEqual(["refused-write-blocked", true]);
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
 		// Adjudication with the wrong input is refused; with read-back still absent the receipt stays open.
-		const wrong = await dispatch(["adjudicate", "--run", runId, "--input", '{"issueKey":"PROJ-1","body":"other"}'], dependencies);
-		expect(wrong.result.causeCode).toBe("input-invalid");
-		const absent = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(COMMENT)], dependencies);
-		expect([absent.result.outcome, absent.result.causeCode, absent.result.repairAction?.endsWith("evidence-insufficient")]).toEqual(["refused", "refused-evidence", true]);
+		const wrong = await adjudicateRun(runId, {"issueKey":"PROJ-1","body":"other"}, dependencies);
+		expect(wrong.outcome.cause).toBe("input-invalid");
+		const absent = await adjudicateRun(runId, COMMENT, dependencies);
+		expect([absent.outcome.cause, absent.outcome.detail?.endsWith("evidence-insufficient")]).toEqual(["refused-evidence", true]);
 		expect(readJsonDir(receiptsDir()).map((entry) => entry.status)).toEqual(["unknown"]);
 		// Read-back now finds the comment: the receipt completes with the found effect.
 		const found = fakeTransport({ [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", fields: { comment: { comments: [{ id: "10001", body: { content: [{ type: "text", text: COMMENT.body }] } }] } } } } });
-		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(COMMENT)], deps({ transport: found.transport }));
-		expect([resolved.result.outcome, resolved.result.effectClass, resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["success", "repository-local", "completed", ["jira-comment:10001"]]);
+		const resolved = await adjudicateRun(runId, COMMENT, deps({ transport: found.transport }));
+		expect([resolved.outcome.transactionState, effectIds(resolved)]).toEqual(["completed", ["jira-comment:10001"]]);
 		expect(readJsonDir(receiptsDir()).map((entry) => entry.status)).toEqual(["completed"]);
 	});
 
@@ -589,26 +592,26 @@ describe("journaled writes", () => {
 			});
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_add_comment`]: commentReply });
 		const dependencies = deps({ transport, journal });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.comment", COMMENT, dependencies));
 		armed = true;
-		const envelope = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
+		const dispatched = await applyOp("issue.comment", COMMENT, preview.previewId, dependencies);
 		armed = false;
 		expect(tampered).toHaveLength(1);
 		// Disk oracle, read without the journal: one open receipt, never marked sent, and the preview consumed.
 		const receipts = readJsonDir(receiptsDir());
 		expect(receipts.map((entry) => [entry.previewId, entry.status, entry.send, entry.effects])).toEqual([[preview.previewId, "intent", "unsent", []]]);
 		expect(readJsonDir(previewsDir()).map((entry) => [entry.previewId, entry.status])).toEqual([[preview.previewId, "consumed"]]);
-		// The envelope acknowledges that recorded receipt as an unchanged failure, never an external or uncertain effect.
-		const data = envelope.result.data as { runId: string; previewId: string; status: string; send: string };
+		// The outcome acknowledges that recorded receipt as an unchanged failure, never an external or uncertain effect.
+		const data = dispatched.outcome.data as { runId: string; previewId: string; status: string; send: string };
 		expect([data.runId, data.previewId, data.status, data.send]).toEqual([receipts[0]?.runId as string, preview.previewId, "intent", "unsent"]);
-		expect([envelope.result.outcome, envelope.result.transactionState, envelope.result.retryable]).toEqual(["refused", "unchanged", false]);
-		expect(envelope.result.causeCode).toBe("refused-state");
-		expect(envelope.result.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true });
-		expect(envelope.result.repairAction).toEqual(expect.stringContaining("unlock"));
+		expect([dispatched.outcome.transactionState]).toEqual(["unchanged"]);
+		expect(dispatched.outcome.cause).toBe("refused-state");
+		expect(effectIds(dispatched)).toEqual([]);
+		expect(dispatched.outcome.detail).toEqual(expect.stringContaining("unlock"));
 		// The Provider write tool was never called, and a second apply of the same preview cannot send either.
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toEqual([]);
-		const again = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
-		expect(again.result.outcome).toBe("refused");
+		const again = await applyOp("issue.comment", COMMENT, preview.previewId, dependencies);
+		expect(again.outcome.cause).toBe("refused-write-blocked");
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toEqual([]);
 		expect(readJsonDir(receiptsDir())).toHaveLength(1);
 	});
@@ -617,12 +620,12 @@ describe("journaled writes", () => {
 		const historical = { ok: true as const, data: { key: "PROJ-1", fields: { comment: { comments: [{ id: "777", body: COMMENT.body }] } } } };
 		const { transport } = fakeTransport({ [`${CJ}.jira_add_comment`]: failure("failed-transport"), [`${CJ}.jira_get_issue`]: historical });
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
-		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
-		expect([applied.result.causeCode, applied.result.transactionState]).toEqual(["outcome-unknown", "unknown"]);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(COMMENT)], dependencies);
-		expect(adjudicated.result.causeCode).toBe("refused-evidence");
+		const preview = previewData(await previewOp("issue.comment", COMMENT, dependencies));
+		const applied = await applyOp("issue.comment", COMMENT, preview.previewId, dependencies);
+		expect([applied.outcome.cause, applied.outcome.transactionState]).toEqual(["outcome-unknown", "unknown"]);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const adjudicated = await adjudicateRun(runId, COMMENT, dependencies);
+		expect(adjudicated.outcome.cause).toBe("refused-evidence");
 		expect(readJsonDir(receiptsDir()).map((entry) => entry.status)).toEqual(["unknown"]);
 	});
 
@@ -633,11 +636,11 @@ describe("journaled writes", () => {
 			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", fields: { comment: { comments: reads++ >= 3 ? [{ id: "778", body: COMMENT.body }] : [] } } } }),
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
-		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(COMMENT)], dependencies);
-		expect([applied.result.transactionState, resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["unknown", "completed", ["jira-comment:778"]]);
+		const preview = previewData(await previewOp("issue.comment", COMMENT, dependencies));
+		const applied = await applyOp("issue.comment", COMMENT, preview.previewId, dependencies);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const resolved = await adjudicateRun(runId, COMMENT, dependencies);
+		expect([applied.outcome.transactionState, resolved.outcome.transactionState, effectIds(resolved)]).toEqual(["unknown", "completed", ["jira-comment:778"]]);
 	});
 
 	test("a Jira mention comment adjudicates from a new id when read-back renders the account as User:id", async () => {
@@ -649,13 +652,13 @@ describe("journaled writes", () => {
 			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", comments: reads++ >= 3 ? [{ id: "778", body: `Mention test. User:${accountId} No action needed.` }] : [] } }),
 		});
 		const dependencies = deps({ transport });
-		const previewEnvelope = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies);
-		expect(previewEnvelope.result.causeCode).toBe("success");
-		const preview = previewData(previewEnvelope);
-		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
-		expect([applied.result.transactionState, resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["unknown", "completed", ["jira-comment:778"]]);
+		const previewed = await previewOp("issue.comment", input, dependencies);
+		expect(previewed.outcome.cause).toBe("success");
+		const preview = previewData(previewed);
+		const applied = await applyOp("issue.comment", input, preview.previewId, dependencies);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const resolved = await adjudicateRun(runId, input, dependencies);
+		expect([applied.outcome.transactionState, resolved.outcome.transactionState, effectIds(resolved)]).toEqual(["unknown", "completed", ["jira-comment:778"]]);
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
 	});
 
@@ -668,11 +671,11 @@ describe("journaled writes", () => {
 			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", comments: reads++ >= 3 ? [{ id: "779", body: `**Bold** for User:${accountId}. See [PROJ-1](https://example.atlassian.net/browse/PROJ-1).` }] : [] } }),
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
-		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
-		expect([adjudicated.result.transactionState, adjudicated.result.effects.completed]).toEqual(["completed", ["jira-comment:779"]]);
+		const preview = previewData(await previewOp("issue.comment", input, dependencies));
+		const applied = await applyOp("issue.comment", input, preview.previewId, dependencies);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const adjudicated = await adjudicateRun(runId, input, dependencies);
+		expect([adjudicated.outcome.transactionState, effectIds(adjudicated)]).toEqual(["completed", ["jira-comment:779"]]);
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
 	});
 
@@ -681,7 +684,7 @@ describe("journaled writes", () => {
 		const { transport } = fakeTransport({
 			[`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", browse_url: "https://other.atlassian.net/browse/PROJ-1", comments: [{ id: "781", body: "See [PROJ-1](https://example.atlassian.net/browse/PROJ-1)." }] } },
 		});
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], deps({ transport })));
+		const preview = previewData(await previewOp("issue.comment", input, deps({ transport })));
 		expect(preview.baseline.commentIds).toEqual(["781"]);
 	});
 
@@ -698,12 +701,12 @@ describe("journaled writes", () => {
 			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", browse_url: browseUrl, comments: reads++ >= 3 ? [{ id: "780", body: `See [PROJ-1](${link}).` }] : [] } }),
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
-		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
-		expect([adjudicated.result.causeCode, adjudicated.result.effects.completed]).toEqual(["refused-evidence", []]);
-		expect((await dispatch(["receipt", "--run", runId], dependencies)).result.data).toMatchObject({ status: "unknown" });
+		const preview = previewData(await previewOp("issue.comment", input, dependencies));
+		const applied = await applyOp("issue.comment", input, preview.previewId, dependencies);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const adjudicated = await adjudicateRun(runId, input, dependencies);
+		expect([adjudicated.outcome.cause, effectIds(adjudicated)]).toEqual(["refused-evidence", []]);
+		expect((await showReceipt(runId, dependencies)).outcome.data).toMatchObject({ status: "unknown" });
 	});
 
 	test.each([
@@ -720,13 +723,13 @@ describe("journaled writes", () => {
 			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", comments: historical || reads++ >= 3 ? [{ id: "778", body: observedBody }] : [] } }),
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
-		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
-		expect([adjudicated.result.causeCode, adjudicated.result.transactionState, adjudicated.result.effects.completed]).toEqual(["refused-evidence", "unchanged", []]);
-		const receipt = await dispatch(["receipt", "--run", runId], dependencies);
-		expect((receipt.result.data as { status: string }).status).toBe("unknown");
+		const preview = previewData(await previewOp("issue.comment", input, dependencies));
+		const applied = await applyOp("issue.comment", input, preview.previewId, dependencies);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const adjudicated = await adjudicateRun(runId, input, dependencies);
+		expect([adjudicated.outcome.cause, adjudicated.outcome.transactionState, effectIds(adjudicated)]).toEqual(["refused-evidence", "unchanged", []]);
+		const receipt = await showReceipt(runId, dependencies);
+		expect((receipt.outcome.data as { status: string }).status).toBe("unknown");
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
 	});
 
@@ -735,22 +738,22 @@ describe("journaled writes", () => {
 		const historical = { ok: true as const, data: { issues: [{ key: "PROJ-9", fields: { summary: input.summary, issuetype: { name: input.issueType } } }] } };
 		const old = fakeTransport({ [`${CJ}.jira_create_issue`]: failure("failed-transport"), [`${CJ}.jira_search`]: historical });
 		const oldDeps = deps({ transport: old.transport });
-		const oldPreview = previewData(await dispatch(["issue.create", "--input", JSON.stringify(input), "--preview"], oldDeps));
+		const oldPreview = previewData(await previewOp("issue.create", input, oldDeps));
 		expect([oldPreview.tool, oldPreview.arguments]).toEqual(["jira_create_issue", { project_key: "PROJ", issue_type: "Bug", summary: input.summary }]);
 		expect(old.calls[0]).toEqual({ server: CJ, tool: "jira_search", args: { jql: 'project = "PROJ" AND summary ~ "Baseline-safe create" ORDER BY created DESC', limit: 20, fields: "summary,issuetype,created" } });
-		const oldApply = await dispatch(["issue.create", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], oldDeps);
-		const oldRun = (oldApply.result.data as { runId: string }).runId;
-		expect((await dispatch(["adjudicate", "--run", oldRun, "--input", JSON.stringify(input)], oldDeps)).result.causeCode).toBe("refused-evidence");
+		const oldApply = await applyOp("issue.create", input, oldPreview.previewId, oldDeps);
+		const oldRun = (oldApply.outcome.data as { runId: string }).runId;
+		expect((await adjudicateRun(oldRun, input, oldDeps)).outcome.cause).toBe("refused-evidence");
 
 		const freshInput = { ...input, summary: "Baseline-safe create two" };
 		let reads = 0;
 		const fresh = fakeTransport({ [`${CJ}.jira_create_issue`]: failure("failed-transport"), [`${CJ}.jira_search`]: () => ({ ok: true, data: { issues: reads++ >= 3 ? [{ key: "PROJ-10", fields: { summary: freshInput.summary, issuetype: { name: freshInput.issueType } } }] : [] } }) });
 		const freshDeps = deps({ transport: fresh.transport });
-		const freshPreview = previewData(await dispatch(["issue.create", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
-		const freshApply = await dispatch(["issue.create", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
-		const freshRun = (freshApply.result.data as { runId: string }).runId;
-		const freshResolved = await dispatch(["adjudicate", "--run", freshRun, "--input", JSON.stringify(freshInput)], freshDeps);
-		expect([freshApply.result.transactionState, freshResolved.result.transactionState, freshResolved.result.effects.completed]).toEqual(["unknown", "completed", ["jira-issue:PROJ-10"]]);
+		const freshPreview = previewData(await previewOp("issue.create", freshInput, freshDeps));
+		const freshApply = await applyOp("issue.create", freshInput, freshPreview.previewId, freshDeps);
+		const freshRun = (freshApply.outcome.data as { runId: string }).runId;
+		const freshResolved = await adjudicateRun(freshRun, freshInput, freshDeps);
+		expect([freshApply.outcome.transactionState, freshResolved.outcome.transactionState, effectIds(freshResolved)]).toEqual(["unknown", "completed", ["jira-issue:PROJ-10"]]);
 	});
 
 	test("Confluence comment adjudication rejects a historical body and accepts only a new comment id", async () => {
@@ -758,52 +761,52 @@ describe("journaled writes", () => {
 		const page = { ok: true as const, data: { id: "123", metadata: { version: 7, hasSpaceInstructions: false } } };
 		const historical = fakeTransport({ [`${CC}.confluence_get_page`]: page, [`${CC}.confluence_add_comment`]: failure("failed-transport"), [`${CC}.confluence_get_comments`]: { ok: true, data: [{ id: "42", body: input.body }] } });
 		const historicalDeps = deps({ transport: historical.transport });
-		const oldPreview = previewData(await dispatch(["page.comment", "--input", JSON.stringify(input), "--preview"], historicalDeps));
-		const oldApply = await dispatch(["page.comment", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], historicalDeps);
-		const oldRun = (oldApply.result.data as { runId: string }).runId;
-		expect((await dispatch(["adjudicate", "--run", oldRun, "--input", JSON.stringify(input)], historicalDeps)).result.causeCode).toBe("refused-evidence");
+		const oldPreview = previewData(await previewOp("page.comment", input, historicalDeps));
+		const oldApply = await applyOp("page.comment", input, oldPreview.previewId, historicalDeps);
+		const oldRun = (oldApply.outcome.data as { runId: string }).runId;
+		expect((await adjudicateRun(oldRun, input, historicalDeps)).outcome.cause).toBe("refused-evidence");
 
 		const freshInput = { pageId: "124", body: "baseline-safe comment two" };
 		const freshPage = { ok: true as const, data: { id: "124", metadata: { version: 7, hasSpaceInstructions: false } } };
 		let reads = 0;
 		const fresh = fakeTransport({ [`${CC}.confluence_get_page`]: freshPage, [`${CC}.confluence_add_comment`]: failure("failed-transport"), [`${CC}.confluence_get_comments`]: () => ({ ok: true, data: reads++ >= 3 ? [{ id: "43", body: freshInput.body }] : [] }) });
 		const freshDeps = deps({ transport: fresh.transport });
-		const freshPreview = previewData(await dispatch(["page.comment", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
-		const freshApply = await dispatch(["page.comment", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
-		const freshRun = (freshApply.result.data as { runId: string }).runId;
-		const freshResolved = await dispatch(["adjudicate", "--run", freshRun, "--input", JSON.stringify(freshInput)], freshDeps);
-		expect([freshApply.result.transactionState, freshResolved.result.transactionState, freshResolved.result.effects.completed]).toEqual(["unknown", "completed", ["confluence-comment:43"]]);
+		const freshPreview = previewData(await previewOp("page.comment", freshInput, freshDeps));
+		const freshApply = await applyOp("page.comment", freshInput, freshPreview.previewId, freshDeps);
+		const freshRun = (freshApply.outcome.data as { runId: string }).runId;
+		const freshResolved = await adjudicateRun(freshRun, freshInput, freshDeps);
+		expect([freshApply.outcome.transactionState, freshResolved.outcome.transactionState, effectIds(freshResolved)]).toEqual(["unknown", "completed", ["confluence-comment:43"]]);
 	});
 
 	test("Confluence create adjudication rejects a historical title and accepts only a new content id", async () => {
 		const input = { spaceKey: "ENG", title: "Baseline-safe page", body: "body" };
 		const historical = fakeTransport({ [`${CC}.confluence_search`]: { ok: true, data: { results: [{ id: "556", title: input.title, space: { key: "ENG", name: "Engineering" } }] } }, [`${CC}.confluence_create_page`]: failure("failed-transport") });
 		const historicalDeps = deps({ transport: historical.transport });
-		const oldPreview = previewData(await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], historicalDeps));
+		const oldPreview = previewData(await previewOp("page.create", input, historicalDeps));
 		expect(oldPreview.objectIdentity).toMatch(/^space:ENG:create:root:[0-9a-f]{16}$/);
 		expect(historical.calls).toEqual([{ server: CC, tool: "confluence_search", args: { query: 'type = page AND space = "ENG" AND title = "Baseline-safe page"', limit: 20 } }]);
-		const oldApply = await dispatch(["page.create", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], historicalDeps);
-		const oldRun = (oldApply.result.data as { runId: string }).runId;
-		expect((await dispatch(["adjudicate", "--run", oldRun, "--input", JSON.stringify(input)], historicalDeps)).result.causeCode).toBe("refused-evidence");
+		const oldApply = await applyOp("page.create", input, oldPreview.previewId, historicalDeps);
+		const oldRun = (oldApply.outcome.data as { runId: string }).runId;
+		expect((await adjudicateRun(oldRun, input, historicalDeps)).outcome.cause).toBe("refused-evidence");
 
 		const freshInput = { spaceKey: "ENG", title: "Baseline-safe page two", body: "body" };
 		const fresh = fakeTransport({ [`${CC}.confluence_search`]: { ok: true, data: { results: [] } }, [`${CC}.confluence_create_page`]: failure("failed-transport") });
 		const freshDeps = deps({ transport: fresh.transport });
-		const freshPreview = previewData(await dispatch(["page.create", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
+		const freshPreview = previewData(await previewOp("page.create", freshInput, freshDeps));
 		expect(freshPreview.arguments).toEqual({ space_key: "ENG", title: freshInput.title, content: "body", content_format: "markdown" });
-		const freshApply = await dispatch(["page.create", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
-		const freshRun = (freshApply.result.data as { runId: string }).runId;
+		const freshApply = await applyOp("page.create", freshInput, freshPreview.previewId, freshDeps);
+		const freshRun = (freshApply.outcome.data as { runId: string }).runId;
 		// A new, stable content id appears only during operator read-back.
 		const resolvedTransport = fakeTransport({ [`${CC}.confluence_search`]: { ok: true, data: { results: [{ id: "557", title: freshInput.title, space: { key: "ENG" } }] } } });
-		const freshResolved = await dispatch(["adjudicate", "--run", freshRun, "--input", JSON.stringify(freshInput)], deps({ transport: resolvedTransport.transport }));
-		expect([freshApply.result.transactionState, freshResolved.result.transactionState, freshResolved.result.effects.completed]).toEqual(["unknown", "completed", ["confluence-content:557"]]);
+		const freshResolved = await adjudicateRun(freshRun, freshInput, deps({ transport: resolvedTransport.transport }));
+		expect([freshApply.outcome.transactionState, freshResolved.outcome.transactionState, effectIds(freshResolved)]).toEqual(["unknown", "completed", ["confluence-content:557"]]);
 	});
 
 	test("a schema mismatch before the send mark makes no call and records no preview", async () => {
 		const { transport, calls } = fakeTransport({}, { [CJ]: [tool("jira_get_issue", ["issue_key"], ["fields", "comment_limit"]), tool("jira_add_comment", ["issue_key", "body", "visibility"])] });
 		const dependencies = deps({ transport });
-		const preview = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies);
-		expect([preview.result.outcome, preview.result.causeCode]).toEqual(["failed", "capability-unavailable"]);
+		const preview = await previewOp("issue.comment", COMMENT, dependencies);
+		expect([preview.outcome.cause]).toEqual(["capability-unavailable"]);
 		expect(calls).toEqual([]);
 		expect(readJsonDir(previewsDir())).toEqual([]);
 	});
@@ -822,23 +825,23 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { pageId: "123", body: "# New body", versionMessage: "connectors update" };
-		const preview = previewData(await dispatch(["page.update", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("page.update", input, dependencies));
 		expect([preview.tool, preview.revision, preview.objectIdentity]).toEqual(["confluence_update_page", "7", "page:123"]);
 		expect(preview.arguments).toEqual({ page_id: "123", title: "Roadmap", content: "# New body", version_comment: "connectors update", content_format: "markdown" });
 		expect(calls.find((call) => call.tool === "confluence_get_page")?.args).toEqual({ page_id: "123", include_metadata: true });
 		version = 8;
-		const moved = await dispatch(["page.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([moved.result.causeCode, moved.result.repairAction?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
+		const moved = await applyOp("page.update", input, preview.previewId, dependencies);
+		expect([moved.outcome.cause, moved.outcome.detail?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
 		expect(calls.filter((call) => call.tool === "confluence_update_page")).toEqual([]);
 		version = 7;
-		const applied = await dispatch(["page.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["confluence-content:123"]]);
+		const applied = await applyOp("page.update", input, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["confluence-content:123"]]);
 		expect(calls.find((call) => call.tool === "confluence_update_page")?.args).toEqual(preview.arguments);
 	});
 
 	test("issue.update binds the issue's updated timestamp and refuses a preparatory or baseline reply for another issue before any write", async () => {
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", fields: { updated: "2026-09-23 14:07:13 AEST", summary: "old" } } } });
-		const preview = previewData(await dispatch(["issue.update", "--input", '{"issueKey":"PROJ-1","fields":{"summary":"new"}}', "--preview"], deps({ transport })));
+		const preview = previewData(await previewOp("issue.update", {"issueKey":"PROJ-1","fields":{"summary":"new"}}, deps({ transport })));
 		expect([preview.tool, preview.revision, preview.objectIdentity, preview.arguments]).toEqual(["jira_update_issue", "2026-09-23 14:07:13 AEST", "issue:PROJ-1", { issue_key: "PROJ-1", fields: '{"summary":"new"}' }]);
 		expect(calls.map((call) => call.args)).toEqual([{ issue_key: "PROJ-1", fields: "summary,updated" }, { issue_key: "PROJ-1", fields: "summary,updated" }]);
 		for (const wrongRead of [1, 2]) {
@@ -846,8 +849,8 @@ describe("journaled writes", () => {
 			const wrong = fakeTransport({
 				[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: ++reads === wrongRead ? "PROJ-2" : "PROJ-1", fields: { version: 7, summary: "old" } } }),
 			});
-			const envelope = await dispatch(["issue.update", "--input", '{"issueKey":"PROJ-1","fields":{"summary":"new"}}', "--preview"], deps({ transport: wrong.transport }));
-			expect([wrongRead, envelope.result.causeCode, envelope.result.repairAction?.includes("different issue")]).toEqual([wrongRead, "capability-unavailable", true]);
+			const dispatched = await previewOp("issue.update", {"issueKey":"PROJ-1","fields":{"summary":"new"}}, deps({ transport: wrong.transport }));
+			expect([wrongRead, dispatched.outcome.cause, dispatched.outcome.detail?.includes("different issue")]).toEqual([wrongRead, "capability-unavailable", true]);
 			expect(wrong.calls.map((call) => call.tool)).not.toContain("jira_update_issue");
 		}
 	});
@@ -858,8 +861,8 @@ describe("journaled writes", () => {
 			const { transport, calls } = fakeTransport({
 				[`${CC}.confluence_get_page`]: () => ({ ok: true, data: { id: ++reads === wrongRead ? "999" : "123", title: "Roadmap", metadata: { version: 7, hasSpaceInstructions: false }, body: { value: "old" } } }),
 			});
-			const envelope = await dispatch(["page.update", "--input", '{"pageId":"123","body":"new"}', "--preview"], deps({ transport }));
-			expect([wrongRead, envelope.result.causeCode, envelope.result.repairAction?.includes("different page")]).toEqual([wrongRead, "capability-unavailable", true]);
+			const dispatched = await previewOp("page.update", {"pageId":"123","body":"new"}, deps({ transport }));
+			expect([wrongRead, dispatched.outcome.cause, dispatched.outcome.detail?.includes("different page")]).toEqual([wrongRead, "capability-unavailable", true]);
 			expect(calls.map((call) => call.tool)).not.toContain("confluence_update_page");
 		}
 	});
@@ -877,13 +880,13 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { pageId: "123", body: "new" };
-		const preview = previewData(await dispatch(["page.update", "--input", JSON.stringify(input), "--preview"], dependencies));
-		const applied = await dispatch(["page.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
-		expect([applied.result.causeCode, applied.result.transactionState]).toEqual(["outcome-unknown", "unknown"]);
-		expect([adjudicated.result.causeCode, adjudicated.result.repairAction?.includes("different page")]).toEqual(["refused-evidence", true]);
-		expect((await dispatch(["receipt", "--run", runId], dependencies)).result.data).toMatchObject({ status: "unknown", effects: [] });
+		const preview = previewData(await previewOp("page.update", input, dependencies));
+		const applied = await applyOp("page.update", input, preview.previewId, dependencies);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const adjudicated = await adjudicateRun(runId, input, dependencies);
+		expect([applied.outcome.cause, applied.outcome.transactionState]).toEqual(["outcome-unknown", "unknown"]);
+		expect([adjudicated.outcome.cause, adjudicated.outcome.detail?.includes("different page")]).toEqual(["refused-evidence", true]);
+		expect((await showReceipt(runId, dependencies)).outcome.data).toMatchObject({ status: "unknown", effects: [] });
 		expect(calls.filter((call) => call.tool === "confluence_update_page")).toHaveLength(1);
 	});
 
@@ -891,24 +894,24 @@ describe("journaled writes", () => {
 		const { transport, calls } = fakeTransport({ [`${CC}.confluence_search`]: { ok: true, data: { results: [{ id: "555", title: "Home", space: { key: "ENG" } }] } }, [`${CC}.confluence_create_page`]: { ok: true, data: { message: "Page created successfully", page: { id: "556", title: "Roadmap draft" } } } });
 		const dependencies = deps({ transport });
 		const input = { spaceKey: "ENG", title: "Roadmap draft", body: "x" };
-		const preview = previewData(await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("page.create", input, dependencies));
 		expect(preview.objectIdentity).toMatch(/^space:ENG:create:root:[0-9a-f]{16}$/);
 		expect(preview.arguments).toEqual({ space_key: "ENG", title: "Roadmap draft", content: "x", content_format: "markdown" });
 		expect(calls.map((call) => [call.tool, call.args])).toEqual([["confluence_search", { query: 'type = page AND space = "ENG" AND title = "Roadmap draft"', limit: 20 }]]);
-		const applied = await dispatch(["page.create", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-content:556"]]);
-		const legacy = await dispatch(["page.create", "--input", '{"space":{"key":"ENG"},"title":"Roadmap draft","body":"x"}', "--preview"], dependencies);
-		expect([legacy.result.causeCode, legacy.result.repairAction]).toEqual(["input-invalid", "unknown input key space"]);
+		const applied = await applyOp("page.create", input, preview.previewId, dependencies);
+		expect([effectIds(applied)]).toEqual([["confluence-content:556"]]);
+		const legacy = { space: { key: "ENG" }, title: "Roadmap draft", body: "x" };
+		expect([refusal({ tenant: TENANT, kind: "preview", spec: OPERATION_SPECS["page.create"], input: legacy }), writeInput("page.create", legacy)]).toEqual(["input-invalid", { ok: false, reason: "unknown input key space" }]);
 	});
 
 	test("issue.update refuses a no-op before any write, and a reply without updated or a version fails closed", async () => {
 		const held = fakeTransport({ [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", fields: { updated: "t1", summary: "new" } } }, [`${CJ}.jira_update_issue`]: failure("failed-transport") });
-		const noop = await dispatch(["issue.update", "--input", '{"issueKey":"PROJ-1","fields":{"summary":"new"}}', "--preview"], deps({ transport: held.transport }));
-		expect([noop.result.outcome, noop.result.causeCode, noop.result.exitCode, noop.result.repairAction]).toEqual(["refused", "input-invalid", 4, "the issue already holds every requested value; nothing to change"]);
+		const noop = await previewOp("issue.update", {"issueKey":"PROJ-1","fields":{"summary":"new"}}, deps({ transport: held.transport }));
+		expect([noop.outcome.cause, noop.outcome.detail]).toEqual(["input-invalid", "the issue already holds every requested value; nothing to change"]);
 		expect(held.calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_issue"]);
 		const bare = fakeTransport({ [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", fields: { summary: "old" } } } });
-		const closed = await dispatch(["issue.update", "--input", '{"issueKey":"PROJ-1","fields":{"summary":"new"}}', "--preview"], deps({ transport: bare.transport }));
-		expect([closed.result.outcome, closed.result.causeCode, closed.result.repairAction?.includes("no revision")]).toEqual(["failed", "capability-unavailable", true]);
+		const closed = await previewOp("issue.update", {"issueKey":"PROJ-1","fields":{"summary":"new"}}, deps({ transport: bare.transport }));
+		expect([closed.outcome.cause, closed.outcome.detail?.includes("no revision")]).toEqual(["capability-unavailable", true]);
 		expect(bare.calls.map((call) => call.tool)).toEqual(["jira_get_issue"]);
 		expect(readJsonDir(previewsDir())).toEqual([]);
 	});
@@ -926,19 +929,19 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { issueKey: "PROJ-1", fields: { assignee: PRINCIPAL } };
-		const preview = previewData(await dispatch(["issue.update", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.update", input, dependencies));
 		expect([preview.revision, preview.arguments]).toEqual(["t1", { issue_key: "PROJ-1", fields: JSON.stringify({ assignee: PRINCIPAL }) }]);
-		const applied = await dispatch(["issue.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-issue:PROJ-1"]]);
+		const applied = await applyOp("issue.update", input, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-issue:PROJ-1"]]);
 		// Preview and apply each read twice (revision, then baseline); the update is always read back.
 		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_update_issue", "jira_get_issue"]);
 		// A moved timestamp between preview and apply refuses.
 		updated = "t3";
 		const secondInput = { issueKey: "PROJ-1", fields: { summary: "renamed" } };
-		const secondPreview = previewData(await dispatch(["issue.update", "--input", JSON.stringify(secondInput), "--preview"], dependencies));
+		const secondPreview = previewData(await previewOp("issue.update", secondInput, dependencies));
 		updated = "t4";
-		const moved = await dispatch(["issue.update", "--input", JSON.stringify(secondInput), "--apply", secondPreview.previewId], dependencies);
-		expect([moved.result.causeCode, moved.result.repairAction?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
+		const moved = await applyOp("issue.update", secondInput, secondPreview.previewId, dependencies);
+		expect([moved.outcome.cause, moved.outcome.detail?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
 		expect(calls.filter((call) => call.tool === "jira_update_issue")).toHaveLength(1);
 	});
 
@@ -953,17 +956,17 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { issueKey: "PROJ-1", commentId: "454166", body: "edited body" };
-		const preview = previewData(await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.comment.update", input, dependencies));
 		expect([preview.tool, preview.revision, preview.objectIdentity, preview.arguments]).toEqual(["jira_edit_comment", "u1", "issue:PROJ-1", { issue_key: "PROJ-1", comment_id: "454166", body: "edited body" }]);
 		expect(calls.map((call) => call.args)).toEqual([{ issue_key: "PROJ-1", fields: "comment,updated", comment_limit: 100 }, { issue_key: "PROJ-1", fields: "comment,updated", comment_limit: 100 }]);
-		const applied = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-comment:454166"]]);
+		const applied = await applyOp("issue.comment.update", input, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-comment:454166"]]);
 		// The edit is proven by read-back, never by the reply alone.
 		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_edit_comment", "jira_get_issue"]);
-		const noop = await dispatch(["issue.comment.update", "--input", JSON.stringify({ ...input, commentId: "454167", body: "Second body" }), "--preview"], dependencies);
-		expect([noop.result.causeCode, noop.result.repairAction]).toEqual(["input-invalid", "the comment already holds the requested body; nothing to change"]);
-		const missing = await dispatch(["issue.comment.update", "--input", JSON.stringify({ ...input, commentId: "1" }), "--preview"], dependencies);
-		expect([missing.result.outcome, missing.result.causeCode, missing.result.repairAction]).toEqual(["failed", "not-found", "the issue has no comment with that id among its first 100 comments"]);
+		const noop = await previewOp("issue.comment.update", { ...input, commentId: "454167", body: "Second body" }, dependencies);
+		expect([noop.outcome.cause, noop.outcome.detail]).toEqual(["input-invalid", "the comment already holds the requested body; nothing to change"]);
+		const missing = await previewOp("issue.comment.update", { ...input, commentId: "1" }, dependencies);
+		expect([missing.outcome.cause, missing.outcome.detail]).toEqual(["not-found", "the issue has no comment with that id among its first 100 comments"]);
 		expect(calls.filter((call) => call.tool === "jira_edit_comment")).toHaveLength(1);
 	});
 
@@ -981,11 +984,11 @@ describe("journaled writes", () => {
 			},
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies));
-		const applied = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.transactionState, applied.result.effects.completed]).toEqual(["completed", ["jira-comment:454166"]]);
-		const noop = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies);
-		expect(noop.result.causeCode).toBe("input-invalid");
+		const preview = previewData(await previewOp("issue.comment.update", input, dependencies));
+		const applied = await applyOp("issue.comment.update", input, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-comment:454166"]]);
+		const noop = await previewOp("issue.comment.update", input, dependencies);
+		expect(noop.outcome.cause).toBe("input-invalid");
 		expect(calls.filter((call) => call.tool === "jira_edit_comment")).toHaveLength(1);
 	});
 
@@ -996,13 +999,13 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { issueKey: "PROJ-1", commentId: "454166", body: "edited" };
-		const missingAtPreview = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies);
-		expect([missingAtPreview.result.causeCode, missingAtPreview.result.repairAction]).toEqual(["capability-unavailable", "the comment read exposes no updated timestamp to bind the revision"]);
+		const missingAtPreview = await previewOp("issue.comment.update", input, dependencies);
+		expect([missingAtPreview.outcome.cause, missingAtPreview.outcome.detail]).toEqual(["capability-unavailable", "the comment read exposes no updated timestamp to bind the revision"]);
 		updated = "u1";
-		const preview = previewData(await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.comment.update", input, dependencies));
 		updated = undefined;
-		const missingAtApply = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([missingAtApply.result.causeCode, missingAtApply.result.repairAction]).toEqual(["capability-unavailable", "the comment read exposes no updated timestamp to bind the revision"]);
+		const missingAtApply = await applyOp("issue.comment.update", input, preview.previewId, dependencies);
+		expect([missingAtApply.outcome.cause, missingAtApply.outcome.detail]).toEqual(["capability-unavailable", "the comment read exposes no updated timestamp to bind the revision"]);
 		expect(calls.some((call) => call.tool === "jira_edit_comment")).toBe(false);
 	});
 
@@ -1021,24 +1024,24 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { issueKey: "PROJ-1", file: "/tmp/evidence/report.pdf" };
-		const preview = previewData(await dispatch(["issue.attach", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.attach", input, dependencies));
 		// The Provider reads uploads only from the tenant outbox, so the bound argument is the staged relative path.
 		expect([preview.tool, preview.objectIdentity, preview.revision, preview.baseline, preview.arguments]).toEqual(["jira_update_issue", "issue:PROJ-1", "t1", { effectIds: ["10499"], commentIds: [], revision: null }, { issue_key: "PROJ-1", fields: "{}", attachments: "staged/report.pdf" }]);
 		expect(calls.map((call) => call.args)).toEqual([{ issue_key: "PROJ-1", fields: "summary,updated" }, { issue_key: "PROJ-1", fields: "attachment,updated" }]);
-		const applied = await dispatch(["issue.attach", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-attachment:10500"]]);
+		const applied = await applyOp("issue.attach", input, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-attachment:10500"]]);
 		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_update_issue", "jira_get_issue"]);
 		// A failed upload reported inside a successful reply leaves the issue's timestamp unmoved: proven unchanged, object freed, cause named.
 		uploadWorks = false;
 		const secondInput = { issueKey: "PROJ-1", file: "/tmp/evidence/second.pdf" };
-		const secondPreview = previewData(await dispatch(["issue.attach", "--input", JSON.stringify(secondInput), "--preview"], dependencies));
-		const refusedUpload = await dispatch(["issue.attach", "--input", JSON.stringify(secondInput), "--apply", secondPreview.previewId], dependencies);
-		expect([refusedUpload.result.outcome, refusedUpload.result.causeCode, refusedUpload.result.transactionState, refusedUpload.result.repairAction]).toEqual(["failed", "failed-unknown", "unchanged", `${REPAIR["failed-unknown"]}; the Provider reported the upload failed: check the file path and the Create Attachments permission`]);
+		const secondPreview = previewData(await previewOp("issue.attach", secondInput, dependencies));
+		const refusedUpload = await applyOp("issue.attach", secondInput, secondPreview.previewId, dependencies);
+		expect([refusedUpload.outcome.cause, refusedUpload.outcome.transactionState, refusedUpload.outcome.detail]).toEqual(["failed-unknown", "unchanged", `${REPAIR["failed-unknown"]}; the Provider reported the upload failed: check the file path and the Create Attachments permission`]);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.status, entry.basis]).sort()).toEqual([["completed", undefined], ["unchanged", "revision-unchanged"]]);
-		const relative = await dispatch(["issue.attach", "--input", '{"issueKey":"PROJ-1","file":"evidence/report.pdf"}', "--preview"], dependencies);
-		expect([relative.result.causeCode, relative.result.repairAction]).toEqual(["input-invalid", "input key file is invalid"]);
-		const unreadable = await dispatch(["issue.attach", "--input", JSON.stringify(input), "--preview"], deps({ transport, stage: () => ({ ok: false, reason: "file-unreadable" }) }));
-		expect([unreadable.result.causeCode, unreadable.result.repairAction]).toEqual(["input-invalid", "input key file names no readable regular file"]);
+		const relative = { issueKey: "PROJ-1", file: "evidence/report.pdf" };
+		expect([refusal({ tenant: TENANT, kind: "preview", spec: OPERATION_SPECS["issue.attach"], input: relative }), writeInput("issue.attach", relative)]).toEqual(["input-invalid", { ok: false, reason: "input key file is invalid" }]);
+		const unreadable = await previewOp("issue.attach", input, deps({ transport, stage: () => ({ ok: false, reason: "file-unreadable" }) }));
+		expect([unreadable.outcome.cause, unreadable.outcome.detail]).toEqual(["input-invalid", "input key file names no readable regular file"]);
 		expect(calls.filter((call) => call.tool === "jira_update_issue")).toHaveLength(2);
 	});
 
@@ -1054,10 +1057,10 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { pageId: "123", file: "/tmp/evidence/report.pdf" };
-		const preview = previewData(await dispatch(["page.attach", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("page.attach", input, dependencies));
 		expect([preview.tool, preview.objectIdentity, preview.revision, preview.arguments]).toEqual(["confluence_upload_attachment", "page:123", "7", { content_id: "123", file_path: "staged/report.pdf" }]);
-		const applied = await dispatch(["page.attach", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-attachment:att900"]]);
+		const applied = await applyOp("page.attach", input, preview.previewId, dependencies);
+		expect([effectIds(applied)]).toEqual([["confluence-attachment:att900"]]);
 		expect(calls.map((call) => call.tool)).toEqual(["confluence_get_page", "confluence_get_attachments", "confluence_get_page", "confluence_get_attachments", "confluence_upload_attachment"]);
 		expect(calls.at(-1)?.args).toEqual({ content_id: "123", file_path: "staged/report.pdf" });
 	});
@@ -1076,16 +1079,16 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { issueKey: "PROJ-1", toStatus: "In Progress" };
-		const preview = previewData(await dispatch(["issue.transition", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.transition", input, dependencies));
 		expect([preview.tool, preview.revision, preview.objectIdentity, preview.arguments]).toEqual(["jira_transition_issue", "t1", "issue:PROJ-1", { issue_key: "PROJ-1", transition_id: "11" }]);
 		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_transitions", "jira_get_issue"]);
-		const applied = await dispatch(["issue.transition", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-issue:PROJ-1"]]);
+		const applied = await applyOp("issue.transition", input, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-issue:PROJ-1"]]);
 		expect(calls.map((call) => call.tool).slice(3)).toEqual(["jira_get_issue", "jira_get_transitions", "jira_get_issue", "jira_transition_issue", "jira_get_issue"]);
-		const noop = await dispatch(["issue.transition", "--input", JSON.stringify(input), "--preview"], dependencies);
-		expect([noop.result.causeCode, noop.result.repairAction]).toEqual(["input-invalid", "the issue already has the requested status; nothing to change"]);
-		const unavailable = await dispatch(["issue.transition", "--input", '{"issueKey":"PROJ-1","toStatus":"Cancelled"}', "--preview"], dependencies);
-		expect([unavailable.result.outcome, unavailable.result.causeCode, unavailable.result.repairAction]).toEqual(["failed", "not-found", "no transition available to this principal leads to that status"]);
+		const noop = await previewOp("issue.transition", input, dependencies);
+		expect([noop.outcome.cause, noop.outcome.detail]).toEqual(["input-invalid", "the issue already has the requested status; nothing to change"]);
+		const unavailable = await previewOp("issue.transition", {"issueKey":"PROJ-1","toStatus":"Cancelled"}, dependencies);
+		expect([unavailable.outcome.cause, unavailable.outcome.detail]).toEqual(["not-found", "no transition available to this principal leads to that status"]);
 		expect(calls.filter((call) => call.tool === "jira_transition_issue")).toHaveLength(1);
 	});
 
@@ -1102,16 +1105,16 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const assign = { issueKey: "PROJ-1", assignee: PRINCIPAL };
-		const preview = previewData(await dispatch(["issue.assign", "--input", JSON.stringify(assign), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.assign", assign, dependencies));
 		expect([preview.tool, preview.revision, preview.arguments]).toEqual(["jira_assign_issue", "t1", { issue_key: "PROJ-1", assignee: PRINCIPAL }]);
-		const applied = await dispatch(["issue.assign", "--input", JSON.stringify(assign), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["jira-issue:PROJ-1"]]);
-		const unassignPreview = previewData(await dispatch(["issue.assign", "--input", '{"issueKey":"PROJ-1"}', "--preview"], dependencies));
+		const applied = await applyOp("issue.assign", assign, preview.previewId, dependencies);
+		expect([effectIds(applied)]).toEqual([["jira-issue:PROJ-1"]]);
+		const unassignPreview = previewData(await previewOp("issue.assign", {"issueKey":"PROJ-1"}, dependencies));
 		expect(unassignPreview.arguments).toEqual({ issue_key: "PROJ-1", assignee: "" });
-		const unassigned = await dispatch(["issue.assign", "--input", '{"issueKey":"PROJ-1"}', "--apply", unassignPreview.previewId], dependencies);
-		expect([unassigned.result.outcome, unassigned.result.effects.completed]).toEqual(["success", ["jira-issue:PROJ-1"]]);
-		const noop = await dispatch(["issue.assign", "--input", '{"issueKey":"PROJ-1"}', "--preview"], dependencies);
-		expect([noop.result.causeCode, noop.result.repairAction]).toEqual(["input-invalid", "the issue already has the requested assignee; nothing to change"]);
+		const unassigned = await applyOp("issue.assign", {"issueKey":"PROJ-1"}, unassignPreview.previewId, dependencies);
+		expect([effectIds(unassigned)]).toEqual([["jira-issue:PROJ-1"]]);
+		const noop = await previewOp("issue.assign", {"issueKey":"PROJ-1"}, dependencies);
+		expect([noop.outcome.cause, noop.outcome.detail]).toEqual(["input-invalid", "the issue already has the requested assignee; nothing to change"]);
 		expect(calls.filter((call) => call.tool === "jira_assign_issue").map((call) => call.args.assignee)).toEqual([PRINCIPAL, ""]);
 	});
 
@@ -1127,13 +1130,13 @@ describe("journaled writes", () => {
 		});
 		const dependencies = deps({ transport });
 		const input = { pageId: "123", attachmentId: "att900" };
-		const preview = previewData(await dispatch(["page.attachment.delete", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("page.attachment.delete", input, dependencies));
 		expect([preview.tool, preview.revision, preview.objectIdentity, preview.baseline.effectIds, preview.arguments]).toEqual(["confluence_delete_attachment", "7", "page:123", ["att900"], { attachment_id: "att900" }]);
-		const applied = await dispatch(["page.attachment.delete", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["confluence-attachment:att900"]]);
+		const applied = await applyOp("page.attachment.delete", input, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["confluence-attachment:att900"]]);
 		expect(calls.map((call) => call.tool)).toEqual(["confluence_get_page", "confluence_get_attachments", "confluence_get_page", "confluence_get_attachments", "confluence_delete_attachment", "confluence_get_attachments"]);
-		const missing = await dispatch(["page.attachment.delete", "--input", JSON.stringify(input), "--preview"], dependencies);
-		expect([missing.result.causeCode, missing.result.repairAction]).toEqual(["input-invalid", "the page has no attachment with that id"]);
+		const missing = await previewOp("page.attachment.delete", input, dependencies);
+		expect([missing.outcome.cause, missing.outcome.detail]).toEqual(["input-invalid", "the page has no attachment with that id"]);
 	});
 
 	test("deletes bind the target's revision and complete only when the Provider's read-back refuses with not-found", async () => {
@@ -1147,10 +1150,10 @@ describe("journaled writes", () => {
 			},
 		});
 		const jiraDeps = deps({ transport: jira.transport });
-		const issuePreview = previewData(await dispatch(["issue.delete", "--input", '{"issueKey":"PROJ-1"}', "--preview"], jiraDeps));
+		const issuePreview = previewData(await previewOp("issue.delete", {"issueKey":"PROJ-1"}, jiraDeps));
 		expect([issuePreview.tool, issuePreview.revision, issuePreview.objectIdentity, issuePreview.arguments]).toEqual(["jira_delete_issue", "t1", "issue:PROJ-1", { issue_key: "PROJ-1" }]);
-		const issueDeleted = await dispatch(["issue.delete", "--input", '{"issueKey":"PROJ-1"}', "--apply", issuePreview.previewId], jiraDeps);
-		expect([issueDeleted.result.outcome, issueDeleted.result.transactionState, issueDeleted.result.effects.completed]).toEqual(["success", "completed", ["jira-issue:PROJ-1"]]);
+		const issueDeleted = await applyOp("issue.delete", {"issueKey":"PROJ-1"}, issuePreview.previewId, jiraDeps);
+		expect([issueDeleted.outcome.transactionState, effectIds(issueDeleted)]).toEqual(["completed", ["jira-issue:PROJ-1"]]);
 		expect(jira.calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_get_issue", "jira_delete_issue", "jira_get_issue"]);
 		// Confluence: a delete that leaves the page in place at the same version settles unchanged and frees the object.
 		const confluence = fakeTransport({
@@ -1158,13 +1161,13 @@ describe("journaled writes", () => {
 			[`${CC}.confluence_delete_page`]: { ok: true, data: { result: JSON.stringify({ success: false, message: "Unable to delete page 123. API request completed but deletion unsuccessful." }) } },
 		});
 		const confluenceDeps = deps({ transport: confluence.transport });
-		const pagePreview = previewData(await dispatch(["page.delete", "--input", '{"pageId":"123"}', "--preview"], confluenceDeps));
+		const pagePreview = previewData(await previewOp("page.delete", {"pageId":"123"}, confluenceDeps));
 		expect([pagePreview.tool, pagePreview.revision, pagePreview.objectIdentity]).toEqual(["confluence_delete_page", "7", "page:123"]);
-		const pageKept = await dispatch(["page.delete", "--input", '{"pageId":"123"}', "--apply", pagePreview.previewId], confluenceDeps);
-		expect([pageKept.result.outcome, pageKept.result.causeCode, pageKept.result.transactionState]).toEqual(["failed", "failed-unknown", "unchanged"]);
+		const pageKept = await applyOp("page.delete", {"pageId":"123"}, pagePreview.previewId, confluenceDeps);
+		expect([pageKept.outcome.cause, pageKept.outcome.transactionState]).toEqual(["failed-unknown", "unchanged"]);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.operation, entry.status, entry.basis]).sort()).toEqual([["issue.delete", "completed", undefined], ["page.delete", "unchanged", "revision-unchanged"]]);
 		// A second attempt on the freed page can proceed.
-		const again = previewData(await dispatch(["page.delete", "--input", '{"pageId":"123"}', "--preview"], confluenceDeps));
+		const again = previewData(await previewOp("page.delete", {"pageId":"123"}, confluenceDeps));
 		expect(again.objectIdentity).toBe("page:123");
 	});
 
@@ -1172,11 +1175,11 @@ describe("journaled writes", () => {
 		const { transport, calls } = fakeTransport({ [`${CC}.confluence_get_page`]: { ok: true, data: { id: "123", metadata: { version: 7, hasSpaceInstructions: false } } }, [`${CC}.confluence_add_comment`]: { ok: true, data: { success: true, comment: { id: "42", body: "hello" } } } });
 		const input = { pageId: "123", body: "hello" };
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["page.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const preview = previewData(await previewOp("page.comment", input, dependencies));
 		expect([preview.server, preview.tool, preview.revision, preview.objectIdentity, preview.arguments]).toEqual([CC, "confluence_add_comment", "7", "page:123", { page_id: "123", body: "hello" }]);
 		expect(calls.map((call) => call.tool)).toEqual(["confluence_get_page", "confluence_get_comments"]);
-		const applied = await dispatch(["page.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-comment:42"]]);
+		const applied = await applyOp("page.comment", input, preview.previewId, dependencies);
+		expect([effectIds(applied)]).toEqual([["confluence-comment:42"]]);
 	});
 
 	test("unlock clears a dead holder's lock through the receipt or its preview and refuses an unknown reference", async () => {
@@ -1186,17 +1189,17 @@ describe("journaled writes", () => {
 		const receipt = await journal.apply({ previewId: preview.previewId, provider: PROVIDER, canonicalInput: COMMENT, providerArgs: COMMENT, revision: null }, async () => ({ proof: "unknown" }));
 		const lock = path.join(stateDir("locks"), "issue_PROJ-1.lock");
 		writeFileSync(lock, JSON.stringify({ pid: 2_147_483_000, lockId: "dead", at: NOW }), { mode: 0o600 });
-		const unlocked = await dispatch(["unlock", "--run", receipt.runId], dependencies);
-		expect([unlocked.result.outcome, unlocked.result.effectClass, unlocked.result.data]).toEqual(["success", "repository-local", { runId: receipt.runId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
+		const unlocked = await unlockRun(receipt.runId, dependencies);
+		expect([unlocked.outcome.data]).toEqual([{ runId: receipt.runId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
 		expect(readdirSync(stateDir("locks"))).toEqual([]);
 		const preIntentPreview = journal.recordPreview({ operation: "issue.comment", provider: PROVIDER, canonicalInput: COMMENT, providerArgs: COMMENT, revision: null });
 		writeFileSync(lock, JSON.stringify({ pid: 2_147_483_000, lockId: "dead", at: NOW }), { mode: 0o600 });
-		const recovered = await dispatch(["unlock", "--run", preIntentPreview.previewId], dependencies);
-		expect([recovered.result.outcome, recovered.result.effectClass, recovered.result.data]).toEqual(["success", "repository-local", { previewId: preIntentPreview.previewId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
-		const missing = await dispatch(["unlock", "--run", "nope"], dependencies);
-		expect([missing.result.causeCode, missing.result.repairAction?.endsWith("preview-unknown")]).toEqual(["refused-preview", true]);
-		const shown = await dispatch(["receipt", "--run", receipt.runId], dependencies);
-		expect((shown.result.data as { status: string }).status).toBe("unknown");
+		const recovered = await unlockRun(preIntentPreview.previewId, dependencies);
+		expect([recovered.outcome.data]).toEqual([{ previewId: preIntentPreview.previewId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
+		const missing = await unlockRun("nope", dependencies);
+		expect([missing.outcome.cause, missing.outcome.detail?.endsWith("preview-unknown")]).toEqual(["refused-preview", true]);
+		const shown = await showReceipt(receipt.runId, dependencies);
+		expect((shown.outcome.data as { status: string }).status).toBe("unknown");
 	});
 });
 
@@ -1224,9 +1227,9 @@ describe("wiki media comments through the owned REST route", () => {
 			[`${RJ}.jira_rest_comment_add`]: { ok: true, data: { id: "10077", author: { accountId: ME }, body: MEDIA.body, renderedBody: BOTH, updated: "u1" } },
 		});
 		const dependencies = deps({ transport });
-		const envelope = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], dependencies);
-		expect([envelope.result.outcome, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", "repository-local", "atlassian.issue.comment.media.preview"]);
-		const preview = previewData(envelope);
+		const dispatched = await previewOp("issue.comment.media", MEDIA, dependencies);
+		expect(dispatched.outcome.cause).toBe("success");
+		const preview = previewData(dispatched);
 		expect([preview.provider, preview.server, preview.tool, preview.objectIdentity, preview.revision]).toEqual(["rest", RJ, "jira_rest_comment_add", "issue:PROJ-1", null]);
 		expect(preview.arguments).toEqual({ issue_key: "PROJ-1", body: MEDIA.body });
 		// The baseline binds the attachment ids and a digest of their verified image types.
@@ -1236,16 +1239,16 @@ describe("wiki media comments through the owned REST route", () => {
 		expect(readJsonDir(previewsDir()).map((entry) => [entry.provider, entry.status, entry.baseline])).toEqual([["rest", "open", preview.baseline]]);
 		// before.png was deleted and re-attached under a new id: the bound identifiers moved, so nothing is sent.
 		beforeId = "202499";
-		const moved = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--apply", preview.previewId], dependencies);
-		expect([moved.result.causeCode, moved.result.repairAction?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
+		const moved = await applyOp("issue.comment.media", MEDIA, preview.previewId, dependencies);
+		expect([moved.outcome.cause, moved.outcome.detail?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
 		expect(calls.filter((call) => call.tool === "jira_rest_comment_add")).toEqual([]);
 		beforeId = "202456";
-		const applied = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.effectClass, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "external", "completed", ["jira-comment:10077"]]);
+		const applied = await applyOp("issue.comment.media", MEDIA, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-comment:10077"]]);
 		const sent = calls.filter((call) => call.tool === "jira_rest_comment_add");
 		expect(sent).toEqual([{ server: RJ, tool: "jira_rest_comment_add", args: { issue_key: "PROJ-1", body: MEDIA.body } }]);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.provider, entry.status, entry.effects])).toEqual([["rest", "completed", [{ kind: "jira-comment", id: "10077" }]]]);
-		expect(applied.result.provenance.every((entry) => entry.provider === RJ)).toBe(true);
+		expect(applied.provenance.every((entry) => entry.provider === RJ)).toBe(true);
 	});
 
 	test("a lost reply blocks the issue until adjudication finds a new comment rendering every bound image; a historical rendering comment never counts", async () => {
@@ -1259,30 +1262,30 @@ describe("wiki media comments through the owned REST route", () => {
 			[`${RJ}.jira_rest_comments_list`]: () => (reads++ >= 3 ? comments(historical, decoy, { id: "10078", body: MEDIA.body, renderedBody: BOTH, updated: "u1" }, { id: "10079", body: MEDIA.body, renderedBody: img("202456", "before.png"), updated: "u1" }) : comments(historical, decoy)),
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.comment.media", MEDIA, dependencies));
 		expect(preview.baseline).toMatchObject({ effectIds: ["202456", "202457"], commentIds: ["900"] });
-		const applied = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--apply", preview.previewId], dependencies);
-		expect([applied.result.causeCode, applied.result.transactionState, applied.result.effects.uncertain]).toEqual(["outcome-unknown", "unknown", ["issue:PROJ-1"]]);
-		const runId = (applied.result.data as { runId: string }).runId;
-		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(MEDIA)], dependencies);
-		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-comment:10078"]]);
+		const applied = await applyOp("issue.comment.media", MEDIA, preview.previewId, dependencies);
+		expect([applied.outcome.cause, applied.outcome.transactionState, blockedObject(applied)]).toEqual(["outcome-unknown", "unknown", "issue:PROJ-1"]);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		const resolved = await adjudicateRun(runId, MEDIA, dependencies);
+		expect([resolved.outcome.transactionState, effectIds(resolved)]).toEqual(["completed", ["jira-comment:10078"]]);
 		expect(calls.filter((call) => call.tool === "jira_rest_comment_add")).toHaveLength(1);
 	});
 
 	test("an image the issue does not carry, or carries twice, refuses the preview before any write; a body reference outside images is an input refusal before any read", async () => {
 		const { transport, calls } = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: attachmentsReply() });
 		const dependencies = deps({ transport });
-		const undeclared = await dispatch(["issue.comment.media", "--input", JSON.stringify({ ...MEDIA, images: ["before.png"] }), "--preview"], dependencies);
-		expect([undeclared.result.causeCode, undeclared.result.exitCode, undeclared.result.repairAction]).toEqual(["input-invalid", 4, "the body references an image that images does not name"]);
+		const undeclared = { ...MEDIA, images: ["before.png"] };
+		expect([refusal({ tenant: TENANT, kind: "preview", spec: OPERATION_SPECS["issue.comment.media"], input: undeclared }), writeInput("issue.comment.media", undeclared)]).toEqual(["input-invalid", { ok: false, reason: "the body references an image that images does not name" }]);
 		expect(calls).toEqual([]);
-		const missing = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "!states.png!", images: ["states.png"] }), "--preview"], dependencies);
-		expect([missing.result.causeCode, missing.result.repairAction]).toEqual(["not-found", "an image named in images is not attached to the issue"]);
+		const missing = await previewOp("issue.comment.media", { issueKey: "PROJ-1", body: "!states.png!", images: ["states.png"] }, dependencies);
+		expect([missing.outcome.cause, missing.outcome.detail]).toEqual(["not-found", "an image named in images is not attached to the issue"]);
 		// An attached file that is not an image cannot render inline; the preview refuses it before any write.
-		const pdf = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "See !notes.pdf!", images: ["notes.pdf"] }), "--preview"], dependencies);
-		expect([pdf.result.causeCode, pdf.result.exitCode, pdf.result.repairAction]).toEqual(["input-invalid", 4, "an image named in images is not an image attachment; only image content renders inline"]);
+		const pdf = await previewOp("issue.comment.media", { issueKey: "PROJ-1", body: "See !notes.pdf!", images: ["notes.pdf"] }, dependencies);
+		expect([pdf.outcome.cause, pdf.outcome.detail]).toEqual(["input-invalid", "an image named in images is not an image attachment; only image content renders inline"]);
 		const duplicated = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: { ok: true, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202499", filename: "before.png" }, { id: "202457", filename: "after.png" }] } } } });
-		const duplicate = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: duplicated.transport }));
-		expect([duplicate.result.causeCode, duplicate.result.repairAction]).toEqual(["input-invalid", "an image named in images matches more than one attachment on the issue; remove the duplicate first"]);
+		const duplicate = await previewOp("issue.comment.media", MEDIA, deps({ transport: duplicated.transport }));
+		expect([duplicate.outcome.cause, duplicate.outcome.detail]).toEqual(["input-invalid", "an image named in images matches more than one attachment on the issue; remove the duplicate first"]);
 		expect(readJsonDir(previewsDir())).toEqual([]);
 	});
 
@@ -1293,28 +1296,28 @@ describe("wiki media comments through the owned REST route", () => {
 		const PDF = { ok: true as const, data: { bytes: "224a564245526930784c6a514b4a513d3d" } };
 		const HEAD_READ = { server: RJ, tool: "jira_rest_attachment_head", args: { attachment_id: "202456" } };
 		const accepted = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: PNG, [`${RJ}.jira_rest_comments_list`]: comments() });
-		const envelope = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: accepted.transport }));
-		expect(envelope.result.causeCode).toBe("success");
-		const preview = previewData(envelope);
+		const dispatched = await previewOp("issue.comment.media", MEDIA, deps({ transport: accepted.transport }));
+		expect(dispatched.outcome.cause).toBe("success");
+		const preview = previewData(dispatched);
 		expect(preview.baseline.effectIds).toEqual(["202456", "202457"]);
 		expect(preview.baseline.revision).toMatch(/^[0-9a-f]{64}$/);
-		expect((envelope.result.data as { imageTypes: Record<string, string> }).imageTypes).toEqual({ "202456": "image/png", "202457": "image/png" });
+		expect((dispatched.outcome.data as { imageTypes: Record<string, string> }).imageTypes).toEqual({ "202456": "image/png", "202457": "image/png" });
 		expect(accepted.calls).toEqual([ATTACH_READ, HEAD_READ, LIST_READ]);
 		const refusedPdf = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: PDF });
-		const pdf = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: refusedPdf.transport }));
-		expect([pdf.result.causeCode, pdf.result.exitCode, pdf.result.repairAction]).toEqual(["input-invalid", 4, "an image named in images is not an image attachment; only image content renders inline"]);
+		const pdf = await previewOp("issue.comment.media", MEDIA, deps({ transport: refusedPdf.transport }));
+		expect([pdf.outcome.cause, pdf.outcome.detail]).toEqual(["input-invalid", "an image named in images is not an image attachment; only image content renders inline"]);
 		expect(refusedPdf.calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachments", "jira_rest_attachment_head"]);
 		const unreadable = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: failure("not-found") });
-		const failedRead = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: unreadable.transport }));
-		expect([failedRead.result.outcome, failedRead.result.causeCode]).toEqual(["failed", "not-found"]);
+		const failedRead = await previewOp("issue.comment.media", MEDIA, deps({ transport: unreadable.transport }));
+		expect([failedRead.outcome.cause]).toEqual(["not-found"]);
 		expect(unreadable.calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachments", "jira_rest_attachment_head"]);
 		// A 303 to the media host: the Provider refuses to follow it, so the transport reports an unclassified failure; a redirect page served as content is not an image either.
 		const redirected = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: failure("failed-unknown") });
-		const redirect = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: redirected.transport }));
-		expect([redirect.result.outcome, redirect.result.causeCode]).toEqual(["failed", "failed-unknown"]);
+		const redirect = await previewOp("issue.comment.media", MEDIA, deps({ transport: redirected.transport }));
+		expect([redirect.outcome.cause]).toEqual(["failed-unknown"]);
 		const page = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: { ok: true, data: { bytes: "3c21444f43545950452068746d6c3e3c68746d6c3e3c686561643e3c7469746c653e33303320536565204f746865723c2f7469746c653e" } } });
-		const served = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: page.transport }));
-		expect([served.result.causeCode, served.result.repairAction]).toEqual(["input-invalid", "an image named in images is not an image attachment; only image content renders inline"]);
+		const served = await previewOp("issue.comment.media", MEDIA, deps({ transport: page.transport }));
+		expect([served.outcome.cause, served.outcome.detail]).toEqual(["input-invalid", "an image named in images is not an image attachment; only image content renders inline"]);
 		expect(readJsonDir(previewsDir()).map((entry) => entry.previewId)).toEqual([preview.previewId]);
 	});
 
@@ -1336,16 +1339,16 @@ describe("wiki media comments through the owned REST route", () => {
 			},
 		});
 		const dependencies = deps({ transport });
-		const guarded = await dispatch(["issue.comment.media.update", "--input", JSON.stringify(EDIT), "--preview"], dependencies);
-		expect([guarded.result.causeCode, guarded.result.exitCode, guarded.result.repairAction]).toEqual(["input-invalid", 4, "commentId names a comment another account authored; the media update edits only the principal's own comments"]);
+		const guarded = await previewOp("issue.comment.media.update", EDIT, dependencies);
+		expect([guarded.outcome.cause, guarded.outcome.detail]).toEqual(["input-invalid", "commentId names a comment another account authored; the media update edits only the principal's own comments"]);
 		expect(calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachments", "jira_rest_myself", "jira_rest_comment_get"]);
 		expect(readJsonDir(previewsDir())).toEqual([]);
 		author = ME;
-		const preview = previewData(await dispatch(["issue.comment.media.update", "--input", JSON.stringify(EDIT), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.comment.media.update", EDIT, dependencies));
 		expect([preview.provider, preview.tool, preview.revision, preview.arguments]).toEqual(["rest", "jira_rest_comment_edit", "u1", { issue_key: "PROJ-1", comment_id: "454771", body: MEDIA.body }]);
 		expect(preview.baseline).toMatchObject({ effectIds: ["202456", "202457"], commentIds: ["454771"] });
-		const applied = await dispatch(["issue.comment.media.update", "--input", JSON.stringify(EDIT), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-comment:454771"]]);
+		const applied = await applyOp("issue.comment.media.update", EDIT, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-comment:454771"]]);
 		// The edit reply alone never settles an update; the read-back after it did.
 		expect(calls.map((call) => call.tool).slice(-2)).toEqual(["jira_rest_comment_edit", "jira_rest_comment_get"]);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.provider, entry.status])).toEqual([["rest", "completed"]]);
@@ -1360,10 +1363,10 @@ describe("wiki media comments through the owned REST route", () => {
 			[`${RJ}.jira_rest_comment_get`]: () => ({ ok: true, data: { id: "454771", author: { accountId: ME }, updated, renderedBody: "<p>old</p>" } }),
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.comment.media.update", "--input", JSON.stringify(EDIT), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.comment.media.update", EDIT, dependencies));
 		updated = "u1b";
-		const moved = await dispatch(["issue.comment.media.update", "--input", JSON.stringify(EDIT), "--apply", preview.previewId], dependencies);
-		expect([moved.result.causeCode, moved.result.repairAction?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
+		const moved = await applyOp("issue.comment.media.update", EDIT, preview.previewId, dependencies);
+		expect([moved.outcome.cause, moved.outcome.detail?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
 		expect(calls.filter((call) => call.tool === "jira_rest_comment_edit")).toEqual([]);
 		expect(readJsonDir(receiptsDir())).toEqual([]);
 	});
@@ -1409,35 +1412,35 @@ describe("attachment delete through the owned REST route", () => {
 			},
 		});
 		const dependencies = deps({ transport });
-		const envelope = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies);
-		expect([envelope.result.outcome, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", "repository-local", "atlassian.issue.attachment.delete.preview"]);
-		const preview = previewData(envelope);
+		const dispatched = await previewOp("issue.attachment.delete", DELETE, dependencies);
+		expect(dispatched.outcome.cause).toBe("success");
+		const preview = previewData(dispatched);
 		expect([preview.provider, preview.server, preview.tool, preview.objectIdentity, preview.revision, preview.arguments]).toEqual(["rest", RJ, "jira_rest_attachment_delete", "issue:PROJ-1", "t1", { issue_key: "PROJ-1", attachment_id: "202456" }]);
 		expect(preview.baseline).toMatchObject({ effectIds: ["202456"], commentIds: [] });
 		expect(preview.baseline.revision).toMatch(/^[0-9a-f]{64}$/);
-		const data = envelope.result.data as { attachment: unknown; referenceCheck: unknown };
+		const data = dispatched.outcome.data as { attachment: unknown; referenceCheck: unknown };
 		expect(data.attachment).toEqual({ id: "202456", filename: "before.png", size: 48123, authorAccountId: ME, created: "2026-09-28T01:02:03.000+1000" });
 		expect(data.referenceCheck).toEqual({ description: true, commentsRead: 1, commentsTotal: 1, references: [] });
 		expect(calls).toEqual([CONTEXT_READ, ME_READ, LIST_READ, ATTACH_READ]);
 		expect(readJsonDir(previewsDir()).map((entry) => [entry.provider, entry.status, entry.baseline])).toEqual([["rest", "open", preview.baseline]]);
 		// The attachment was replaced under the same id with other bytes: a bound fact moved, so nothing is sent.
 		live = issue({ attachments: [record({ size: 99 }), other] });
-		const resized = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
-		expect([resized.result.causeCode, resized.result.repairAction?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
+		const resized = await applyOp("issue.attachment.delete", DELETE, preview.previewId, dependencies);
+		expect([resized.outcome.cause, resized.outcome.detail?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
 		// The issue moved (another edit): the bound updated moved, so nothing is sent.
 		live = issue({ updated: "t1b" });
-		const movedIssue = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
-		expect([movedIssue.result.causeCode, movedIssue.result.repairAction?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
+		const movedIssue = await applyOp("issue.attachment.delete", DELETE, preview.previewId, dependencies);
+		expect([movedIssue.outcome.cause, movedIssue.outcome.detail?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
 		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toEqual([]);
 		expect(readJsonDir(receiptsDir())).toEqual([]);
 		live = issue();
-		const applied = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.effectClass, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "external", "completed", ["jira-attachment:202456"]]);
+		const applied = await applyOp("issue.attachment.delete", DELETE, preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-attachment:202456"]]);
 		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toEqual([SEND]);
 		// The delete reply never settles the write; the read-back after it did.
 		expect(calls.slice(-2)).toEqual([SEND, ATTACH_READ]);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.provider, entry.status, entry.effects])).toEqual([["rest", "completed", [{ kind: "jira-attachment", id: "202456" }]]]);
-		expect(applied.result.provenance.every((entry) => entry.provider === RJ)).toBe(true);
+		expect(applied.provenance.every((entry) => entry.provider === RJ)).toBe(true);
 	});
 
 	test("an attachment another account uploaded is refused before any comment is read, at preview and at apply, and no preview or receipt is recorded", async () => {
@@ -1449,29 +1452,29 @@ describe("attachment delete through the owned REST route", () => {
 			[`${RJ}.jira_rest_comments_list`]: comments(),
 		});
 		const dependencies = deps({ transport });
-		const guarded = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies);
-		expect([guarded.result.causeCode, guarded.result.exitCode, guarded.result.repairAction]).toEqual(["input-invalid", 4, "attachmentId names an attachment another account uploaded; the attachment delete removes only the principal's own uploads"]);
+		const guarded = await previewOp("issue.attachment.delete", DELETE, dependencies);
+		expect([guarded.outcome.cause, guarded.outcome.detail]).toEqual(["input-invalid", "attachmentId names an attachment another account uploaded; the attachment delete removes only the principal's own uploads"]);
 		expect(calls).toEqual([CONTEXT_READ, ME_READ]);
 		expect(readJsonDir(previewsDir())).toEqual([]);
 		// The upload is the principal's at preview, then Jira reports another author at apply: refused again, before any send.
 		author = ME;
-		const preview = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
+		const preview = previewData(await previewOp("issue.attachment.delete", DELETE, dependencies));
 		author = OTHER;
-		const applied = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
-		expect(applied.result.causeCode).toBe("input-invalid");
+		const applied = await applyOp("issue.attachment.delete", DELETE, preview.previewId, dependencies);
+		expect(applied.outcome.cause).toBe("input-invalid");
 		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toEqual([]);
 		expect(readJsonDir(receiptsDir())).toEqual([]);
 		// A principal read without an account id cannot decide; nothing is sent.
 		const unverifiable = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue(), [`${RJ}.jira_rest_myself`]: { ok: true, data: { emailAddress: PRINCIPAL } } });
-		const undecided = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], deps({ transport: unverifiable.transport }));
-		expect([undecided.result.causeCode, undecided.result.repairAction]).toEqual(["capability-unavailable", "the principal read exposes no account id for the author guard"]);
+		const undecided = await previewOp("issue.attachment.delete", DELETE, deps({ transport: unverifiable.transport }));
+		expect([undecided.outcome.cause, undecided.outcome.detail]).toEqual(["capability-unavailable", "the principal read exposes no account id for the author guard"]);
 	});
 
 	test("an attachment still referenced by the description or a comment, by file name or by id, refuses before any send; an incomplete comment list refuses rather than clears", async () => {
 		const attempt = async (shape: IssueShape, ...listed: Record<string, unknown>[]) => {
 			const { transport, calls } = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue(shape), [`${RJ}.jira_rest_issue_attachments`]: attachmentsOf(issue(shape)), [`${RJ}.jira_rest_myself`]: myself, [`${RJ}.jira_rest_comments_list`]: comments(...listed) });
-			const envelope = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], deps({ transport }));
-			return [envelope.result.causeCode, envelope.result.repairAction, calls.map((call) => call.tool)];
+			const dispatched = await previewOp("issue.attachment.delete", DELETE, deps({ transport }));
+			return [dispatched.outcome.cause, dispatched.outcome.detail, calls.map((call) => call.tool)];
 		};
 		const clean = { id: "900", body: "Looks fine.", renderedBody: "<p>Looks fine.</p>" };
 		const reads = ["jira_rest_issue_attachment_context", "jira_rest_myself", "jira_rest_comments_list"];
@@ -1496,22 +1499,21 @@ describe("attachment delete through the owned REST route", () => {
 		expect((await attempt({ description: null, renderedDescription: undefined }, clean, { id: "908", body: "" }))[0]).toBe("success");
 		// More comments than the guard read: it cannot clear the attachment.
 		const truncated = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue(), [`${RJ}.jira_rest_myself`]: myself, [`${RJ}.jira_rest_comments_list`]: { ok: true, data: { startAt: 0, maxResults: 100, total: 101, comments: Array.from({ length: 100 }, (_entry, index) => ({ id: String(1000 + index), body: "x", renderedBody: "<p>x</p>" })) } } });
-		const incomplete = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], deps({ transport: truncated.transport }));
-		expect([incomplete.result.causeCode, incomplete.result.repairAction]).toEqual(["capability-unavailable", "the issue has 101 comments and the reference guard read 100; it cannot clear the attachment"]);
+		const incomplete = await previewOp("issue.attachment.delete", DELETE, deps({ transport: truncated.transport }));
+		expect([incomplete.outcome.cause, incomplete.outcome.detail]).toEqual(["capability-unavailable", "the issue has 101 comments and the reference guard read 100; it cannot clear the attachment"]);
 		expect(readJsonDir(previewsDir()).map((entry) => entry.objectIdentity)).toEqual(["issue:PROJ-1", "issue:PROJ-1", "issue:PROJ-1"]);
 	});
 
 	test("an attachment the issue does not carry refuses as not-found; a record missing a bound fact refuses before any guard read; a filename or bulk form is an input refusal before any read", async () => {
 		const { transport, calls } = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue({ attachments: [other, { id: "202456", filename: "before.png" }] }), [`${RJ}.jira_rest_myself`]: myself });
 		const dependencies = deps({ transport });
-		const missing = await dispatch(["issue.attachment.delete", "--input", JSON.stringify({ issueKey: "PROJ-1", attachmentId: "999" }), "--preview"], dependencies);
-		expect([missing.result.outcome, missing.result.causeCode, missing.result.repairAction]).toEqual(["failed", "not-found", "the issue has no attachment with that id"]);
-		const unbound = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies);
-		expect([unbound.result.causeCode, unbound.result.repairAction]).toEqual(["capability-unavailable", "the attachment record exposes no filename, size, author account id, or created time to bind"]);
+		const missing = await previewOp("issue.attachment.delete", { issueKey: "PROJ-1", attachmentId: "999" }, dependencies);
+		expect([missing.outcome.cause, missing.outcome.detail]).toEqual(["not-found", "the issue has no attachment with that id"]);
+		const unbound = await previewOp("issue.attachment.delete", DELETE, dependencies);
+		expect([unbound.outcome.cause, unbound.outcome.detail]).toEqual(["capability-unavailable", "the attachment record exposes no filename, size, author account id, or created time to bind"]);
 		expect(calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachment_context", "jira_rest_issue_attachment_context"]);
 		for (const input of [{ issueKey: "PROJ-1", filename: "before.png" }, { issueKey: "PROJ-1", attachmentId: ["202456", "202457"] }, { issueKey: "PROJ-1", attachmentId: "*" }, { issueKey: "PROJ-1" }, { attachmentId: "202456" }]) {
-			const refused = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(input), "--preview"], dependencies);
-			expect([input, refused.result.causeCode, refused.result.exitCode]).toEqual([input, "input-invalid", 4]);
+			expect([input, refusal({ tenant: TENANT, kind: "preview", spec: OPERATION_SPECS["issue.attachment.delete"], input })]).toEqual([input, "input-invalid"]);
 		}
 		expect(calls).toHaveLength(2);
 		expect(readJsonDir(previewsDir())).toEqual([]);
@@ -1533,14 +1535,14 @@ describe("attachment delete through the owned REST route", () => {
 		});
 		const dependencies = deps({ transport });
 		// Still listed at the bound updated: nothing landed, and the receipt closes.
-		const first = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
-		const unchanged = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", first.previewId], dependencies);
-		expect([unchanged.result.causeCode, unchanged.result.transactionState, unchanged.result.effects.uncertain]).toEqual(["failed-transport", "unchanged", []]);
-		const closed = await dispatch(["receipt", "--run", (unchanged.result.data as { runId: string }).runId], dependencies);
-		expect([(closed.result.data as { status: string; basis: string; send: string }).status, (closed.result.data as { basis: string }).basis, (closed.result.data as { send: string }).send]).toEqual(["unchanged", "revision-unchanged", "possible"]);
-		expect((await dispatch(["receipts"], dependencies)).result.data).toEqual({ open: [] });
+		const first = previewData(await previewOp("issue.attachment.delete", DELETE, dependencies));
+		const unchanged = await applyOp("issue.attachment.delete", DELETE, first.previewId, dependencies);
+		expect([unchanged.outcome.cause, unchanged.outcome.transactionState, effectIds(unchanged)]).toEqual(["failed-transport", "unchanged", []]);
+		const closed = await showReceipt((unchanged.outcome.data as { runId: string }).runId, dependencies);
+		expect([(closed.outcome.data as { status: string; basis: string; send: string }).status, (closed.outcome.data as { basis: string }).basis, (closed.outcome.data as { send: string }).send]).toEqual(["unchanged", "revision-unchanged", "possible"]);
+		expect((await listReceipts(dependencies)).outcome.data).toEqual({ open: [] });
 		// Still listed but the issue moved during the send: presence alone is not proof, so the receipt stays open and blocks the issue.
-		const second = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
+		const second = previewData(await previewOp("issue.attachment.delete", DELETE, dependencies));
 		const { transport: moving } = fakeTransport({
 			[`${RJ}.jira_rest_issue_attachment_context`]: () => issue({ updated }),
 			[`${RJ}.jira_rest_issue_attachments`]: () => attachmentsOf(issue({ updated, attachments: listed ? [record(), other] : [other] })),
@@ -1551,16 +1553,16 @@ describe("attachment delete through the owned REST route", () => {
 				return failure("failed-transport");
 			},
 		});
-		const moved = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", second.previewId], deps({ transport: moving }));
-		expect([moved.result.causeCode, moved.result.transactionState, moved.result.effects.uncertain]).toEqual(["outcome-unknown", "unknown", ["issue:PROJ-1"]]);
-		const runId = (moved.result.data as { runId: string }).runId;
-		const stillMoved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(DELETE)], dependencies);
-		expect([stillMoved.result.causeCode, stillMoved.result.repairAction?.endsWith("evidence-insufficient")]).toEqual(["refused-evidence", true]);
-		expect((await dispatch(["receipts"], dependencies)).result.data).toEqual({ open: [expect.objectContaining({ runId, status: "unknown" })] });
+		const moved = await applyOp("issue.attachment.delete", DELETE, second.previewId, deps({ transport: moving }));
+		expect([moved.outcome.cause, moved.outcome.transactionState, blockedObject(moved)]).toEqual(["outcome-unknown", "unknown", "issue:PROJ-1"]);
+		const runId = (moved.outcome.data as { runId: string }).runId;
+		const stillMoved = await adjudicateRun(runId, DELETE, dependencies);
+		expect([stillMoved.outcome.cause, stillMoved.outcome.detail?.endsWith("evidence-insufficient")]).toEqual(["refused-evidence", true]);
+		expect((await listReceipts(dependencies)).outcome.data).toEqual({ open: [expect.objectContaining({ runId, status: "unknown" })] });
 		// The attachment is gone on a later read: the effect is found and the receipt completes.
 		listed = false;
-		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(DELETE)], dependencies);
-		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-attachment:202456"]]);
+		const resolved = await adjudicateRun(runId, DELETE, dependencies);
+		expect([resolved.outcome.transactionState, effectIds(resolved)]).toEqual(["completed", ["jira-attachment:202456"]]);
 		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toHaveLength(1);
 	});
 
@@ -1579,27 +1581,27 @@ describe("attachment delete through the owned REST route", () => {
 			},
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
-		const applied = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
-		expect([applied.result.causeCode, applied.result.transactionState, applied.result.effects.uncertain]).toEqual(["outcome-unknown", "unknown", ["issue:PROJ-1"]]);
-		const runId = (applied.result.data as { runId: string }).runId;
+		const preview = previewData(await previewOp("issue.attachment.delete", DELETE, dependencies));
+		const applied = await applyOp("issue.attachment.delete", DELETE, preview.previewId, dependencies);
+		expect([applied.outcome.cause, applied.outcome.transactionState, blockedObject(applied)]).toEqual(["outcome-unknown", "unknown", "issue:PROJ-1"]);
+		const runId = (applied.outcome.data as { runId: string }).runId;
 		// Every write on the issue is blocked while the receipt is open.
-		const blocked = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "!after.png!", images: ["after.png"] }), "--preview"], dependencies);
-		expect(blocked.result.causeCode).not.toBe("outcome-unknown");
-		const stillOpen = await dispatch(["receipts"], dependencies);
-		expect((stillOpen.result.data as { open: { runId: string }[] }).open.map((entry) => entry.runId)).toEqual([runId]);
+		const blocked = await previewOp("issue.comment.media", { issueKey: "PROJ-1", body: "!after.png!", images: ["after.png"] }, dependencies);
+		expect(blocked.outcome.cause).not.toBe("outcome-unknown");
+		const stillOpen = await listReceipts(dependencies);
+		expect((stillOpen.outcome.data as { open: { runId: string }[] }).open.map((entry) => entry.runId)).toEqual([runId]);
 		// The list still carries the id: the delete did not land, and the receipt settles unchanged.
 		dropped = false;
-		const unchanged = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(DELETE)], dependencies);
-		expect([unchanged.result.transactionState, unchanged.result.effects.completed, (unchanged.result.data as { basis: string }).basis]).toEqual(["unchanged", [], "revision-unchanged"]);
+		const unchanged = await adjudicateRun(runId, DELETE, dependencies);
+		expect([unchanged.outcome.transactionState, effectIds(unchanged), (unchanged.outcome.data as { basis: string }).basis]).toEqual(["unchanged", [], "revision-unchanged"]);
 		// A second lost delete, then the list no longer carries the id: adjudication completes it.
-		const again = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
-		const lost = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", again.previewId], dependencies);
-		expect(lost.result.causeCode).toBe("outcome-unknown");
+		const again = previewData(await previewOp("issue.attachment.delete", DELETE, dependencies));
+		const lost = await applyOp("issue.attachment.delete", DELETE, again.previewId, dependencies);
+		expect(lost.outcome.cause).toBe("outcome-unknown");
 		dropped = false;
 		listed = false;
-		const resolved = await dispatch(["adjudicate", "--run", (lost.result.data as { runId: string }).runId, "--input", JSON.stringify(DELETE)], dependencies);
-		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-attachment:202456"]]);
+		const resolved = await adjudicateRun((lost.outcome.data as { runId: string }).runId, DELETE, dependencies);
+		expect([resolved.outcome.transactionState, effectIds(resolved)]).toEqual(["completed", ["jira-attachment:202456"]]);
 		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toHaveLength(2);
 		expect(readJsonDir(receiptsDir()).map((entry) => entry.status).sort()).toEqual(["completed", "unchanged"]);
 	});
@@ -1624,18 +1626,19 @@ describe("issue.create under a parent", () => {
 		if (reply === undefined) return failure("not-found");
 		return typeof reply === "function" ? reply() : reply;
 	};
-	const create = (argv: string[], dependencies: Dependencies, input: unknown = CHILD) => dispatch(["issue.create", "--input", JSON.stringify(input), ...argv], dependencies);
+	const createPreview = (dependencies: Dependencies, input: unknown = CHILD) => previewOp("issue.create", input, dependencies);
+	const createApply = (previewId: string, dependencies: Dependencies, input: unknown = CHILD) => applyOp("issue.create", input, previewId, dependencies);
 
 	test("preview reads and binds the parent, runs the parent-scoped duplicate search, keeps the unchanged create identity, and sends nothing", async () => {
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: search([]) });
-		const envelope = await create(["--preview"], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["success", "success"]);
-		const data = previewData(envelope) as ReturnType<typeof previewData> & { parent: unknown };
+		const dispatched = await createPreview(deps({ transport }));
+		expect([dispatched.outcome.cause]).toEqual(["success"]);
+		const data = previewData(dispatched) as ReturnType<typeof previewData> & { parent: unknown };
 		expect([data.tool, data.arguments, data.parent, data.baseline]).toEqual(["jira_create_issue", CREATE_ARGS, BOUND, { effectIds: [], commentIds: [], revision: BOUND_DIGEST }]);
 		// The Object Identity is the pre-parent create identity: parent is not part of it.
 		const { parentKey: _omitted, ...plain } = CHILD;
 		expect(data.objectIdentity).toBe(`project:PROJ:create:story:${new Bun.CryptoHasher("sha256").update("path design system components/errorbanner").digest("hex").slice(0, 16)}`);
-		expect(data.objectIdentity).toBe(previewData(await create(["--preview"], deps({ transport: fakeTransport({ [`${CJ}.jira_search`]: { ok: true, data: { issues: [] } } }).transport }), plain)).objectIdentity);
+		expect(data.objectIdentity).toBe(previewData(await createPreview(deps({ transport: fakeTransport({ [`${CJ}.jira_search`]: { ok: true, data: { issues: [] } } }).transport }), plain)).objectIdentity);
 		expect(calls).toEqual([{ server: CJ, tool: "jira_get_issue", args: PARENT_READ }, { server: CJ, tool: "jira_search", args: SCOPED_SEARCH }]);
 		expect(readJsonDir(receiptsDir())).toEqual([]);
 	});
@@ -1643,9 +1646,9 @@ describe("issue.create under a parent", () => {
 	test("apply sends the parent once and completes only from the created issue's own read showing its summary, type, and parent", async () => {
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic(), "PROJ-9": created({ id: "10546", key: "PROJ-546" }) }), [`${CJ}.jira_search`]: search([]), [`${CJ}.jira_create_issue`]: CREATE_REPLY });
 		const dependencies = deps({ transport });
-		const preview = previewData(await create(["--preview"], dependencies));
-		const applied = await create(["--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-issue:PROJ-9"]]);
+		const preview = previewData(await createPreview(dependencies));
+		const applied = await createApply(preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-issue:PROJ-9"]]);
 		const tools = calls.map((call) => call.tool);
 		expect(calls.filter((call) => call.tool === "jira_create_issue")).toEqual([{ server: CJ, tool: "jira_create_issue", args: CREATE_ARGS }]);
 		expect(calls.slice(tools.indexOf("jira_create_issue") + 1)).toEqual([{ server: CJ, tool: "jira_get_issue", args: CREATED_READ }]);
@@ -1656,9 +1659,9 @@ describe("issue.create under a parent", () => {
 		let searches = 0;
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: () => (searches++ >= 2 ? search([listed({ key: "PROJ-546" })]) : search([])), [`${CJ}.jira_create_issue`]: { ok: true, data: { message: "Issue created successfully" } } });
 		const dependencies = deps({ transport });
-		const preview = previewData(await create(["--preview"], dependencies));
-		const applied = await create(["--apply", preview.previewId], dependencies);
-		expect([applied.result.transactionState, applied.result.effects.completed]).toEqual(["completed", ["jira-issue:PROJ-9"]]);
+		const preview = previewData(await createPreview(dependencies));
+		const applied = await createApply(preview.previewId, dependencies);
+		expect([applied.outcome.transactionState, effectIds(applied)]).toEqual(["completed", ["jira-issue:PROJ-9"]]);
 		const tools = calls.map((call) => call.tool);
 		expect(calls.slice(tools.indexOf("jira_create_issue") + 1)).toEqual([{ server: CJ, tool: "jira_search", args: SCOPED_SEARCH }]);
 	});
@@ -1674,28 +1677,28 @@ describe("issue.create under a parent", () => {
 			[`${CJ}.jira_create_issue`]: CREATE_REPLY,
 		});
 		const dependencies = deps({ transport });
-		const preview = previewData(await create(["--preview"], dependencies));
-		const applied = await create(["--apply", preview.previewId], dependencies);
-		expect([applied.result.causeCode, applied.result.transactionState, applied.result.effects.completed]).toEqual(["outcome-unknown", "unknown", []]);
-		const runId = (applied.result.data as { runId: string }).runId;
-		expect((await dispatch(["receipt", "--run", runId], dependencies)).result.data).toMatchObject({ status: "unknown", send: "possible" });
+		const preview = previewData(await createPreview(dependencies));
+		const applied = await createApply(preview.previewId, dependencies);
+		expect([applied.outcome.cause, applied.outcome.transactionState, effectIds(applied)]).toEqual(["outcome-unknown", "unknown", []]);
+		const runId = (applied.outcome.data as { runId: string }).runId;
+		expect((await showReceipt(runId, dependencies)).outcome.data).toMatchObject({ status: "unknown", send: "possible" });
 		// A retry of the same create is refused before any second send.
-		const retry = previewData(await create(["--preview"], dependencies));
-		const blocked = await create(["--apply", retry.previewId], dependencies);
-		expect([blocked.result.causeCode, blocked.result.repairAction?.endsWith("write-blocked-open-receipt")]).toEqual(["refused-write-blocked", true]);
+		const retry = previewData(await createPreview(dependencies));
+		const blocked = await createApply(retry.previewId, dependencies);
+		expect([blocked.outcome.cause, blocked.outcome.detail?.endsWith("write-blocked-open-receipt")]).toEqual(["refused-write-blocked", true]);
 		expect(calls.filter((call) => call.tool === "jira_create_issue")).toHaveLength(1);
 		// Adjudication without the parent in the scoped search leaves the object blocked.
-		const unresolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(CHILD)], dependencies);
-		expect(unresolved.result.causeCode).toBe("refused-evidence");
+		const unresolved = await adjudicateRun(runId, CHILD, dependencies);
+		expect(unresolved.outcome.cause).toBe("refused-evidence");
 		adjudicating = true;
-		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(CHILD)], dependencies);
-		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-issue:PROJ-9"]]);
+		const resolved = await adjudicateRun(runId, CHILD, dependencies);
+		expect([resolved.outcome.transactionState, effectIds(resolved)]).toEqual(["completed", ["jira-issue:PROJ-9"]]);
 	});
 
 	test("a missing parent refuses as not-found before any search, preview, or send", async () => {
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({}) });
-		const refused = await create(["--preview"], deps({ transport }));
-		expect([refused.result.outcome, refused.result.causeCode, refused.result.repairAction]).toEqual(["failed", "not-found", REPAIR["not-found"]]);
+		const refused = await createPreview(deps({ transport }));
+		expect([refused.outcome.cause, refused.outcome.detail]).toEqual(["not-found", REPAIR["not-found"]]);
 		expect(calls).toEqual([{ server: CJ, tool: "jira_get_issue", args: PARENT_READ }]);
 		expect([readJsonDir(previewsDir()), readJsonDir(receiptsDir())]).toEqual([[], []]);
 	});
@@ -1704,38 +1707,38 @@ describe("issue.create under a parent", () => {
 		let parent: TransportResult = epic();
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": () => parent }), [`${CJ}.jira_search`]: search([]), [`${CJ}.jira_create_issue`]: CREATE_REPLY });
 		const dependencies = deps({ transport });
-		const preview = previewData(await create(["--preview"], dependencies));
+		const preview = previewData(await createPreview(dependencies));
 		parent = epic("Feature");
-		const retyped = await create(["--apply", preview.previewId], dependencies);
-		expect([retyped.result.causeCode, retyped.result.repairAction?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
+		const retyped = await createApply(preview.previewId, dependencies);
+		expect([retyped.outcome.cause, retyped.outcome.detail?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
 		parent = failure("not-found");
-		const deleted = await create(["--apply", preview.previewId], dependencies);
-		expect(deleted.result.causeCode).toBe("not-found");
+		const deleted = await createApply(preview.previewId, dependencies);
+		expect(deleted.outcome.cause).toBe("not-found");
 		expect(calls.filter((call) => call.tool === "jira_create_issue")).toEqual([]);
 		expect(readJsonDir(receiptsDir())).toEqual([]);
 	});
 
 	test("the duplicate check refuses a same-parent match by key and a truncated search; a match elsewhere in the project does not refuse", async () => {
 		const duplicate = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: search([{ ...listed({ key: "PROJ-546" }), key: "PROJ-12" }]) });
-		const refused = await create(["--preview"], deps({ transport: duplicate.transport }));
-		expect([refused.result.causeCode, refused.result.repairAction]).toEqual(["input-invalid", "the parent already has a Story with this summary: PROJ-12; reuse it instead of creating a duplicate"]);
+		const refused = await createPreview(deps({ transport: duplicate.transport }));
+		expect([refused.outcome.cause, refused.outcome.detail]).toEqual(["input-invalid", "the parent already has a Story with this summary: PROJ-12; reuse it instead of creating a duplicate"]);
 		const truncated = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: search([], { next_page_token: "next" }) });
-		const partial = await create(["--preview"], deps({ transport: truncated.transport }));
-		expect([partial.result.causeCode, partial.result.repairAction?.startsWith("the parent's issue search returned only part of its matches")]).toEqual(["capability-unavailable", true]);
+		const partial = await createPreview(deps({ transport: truncated.transport }));
+		expect([partial.outcome.cause, partial.outcome.detail?.startsWith("the parent's issue search returned only part of its matches")]).toEqual(["capability-unavailable", true]);
 		expect([...duplicate.calls, ...truncated.calls].filter((call) => call.tool === "jira_create_issue")).toEqual([]);
 		expect(readJsonDir(previewsDir())).toEqual([]);
 		// Control: the scoped search is the Provider's filter; without a parent the same project match is only a baseline id.
 		const { parentKey: _omitted, ...plain } = CHILD;
 		const project = fakeTransport({ [`${CJ}.jira_search`]: search([{ ...listed(null), key: "PROJ-12" }]) });
-		const planned = previewData(await create(["--preview"], deps({ transport: project.transport }), plain));
+		const planned = previewData(await createPreview(deps({ transport: project.transport }), plain));
 		expect(planned.baseline.effectIds).toEqual(["PROJ-12"]);
 	});
 
 	test("a live schema without additional_fields refuses a parent create before any call", async () => {
 		const withoutParent = SCHEMAS[CJ]!.map((entry) => (entry.name === "jira_create_issue" ? tool("jira_create_issue", ["project_key", "summary", "issue_type"], ["description", "assignee"]) : entry));
 		const { transport, calls } = fakeTransport({}, { [CJ]: withoutParent });
-		const refused = await create(["--preview"], deps({ transport }));
-		expect([refused.result.causeCode, refused.result.repairAction]).toEqual(["capability-unavailable", REPAIR["capability-unavailable"]]);
+		const refused = await createPreview(deps({ transport }));
+		expect([refused.outcome.cause, refused.outcome.detail]).toEqual(["capability-unavailable", REPAIR["capability-unavailable"]]);
 		expect(calls).toEqual([]);
 	});
 });
@@ -1766,24 +1769,24 @@ describe("historical records from the retired Official route", () => {
 		const dependencies = deps({ transport });
 		const { receipt } = await historical(dependencies);
 		const before = { receipts: fileBytes(receiptsDir()), previews: fileBytes(previewsDir()) };
-		const listed = await dispatch(["receipts"], dependencies);
-		expect((listed.result.data as { open: { runId: string; provider: string; status: string; send: string }[] }).open.map((entry) => [entry.runId, entry.provider, entry.status, entry.send])).toEqual([[receipt.runId, RETIRED, "unknown", "possible"]]);
-		const shown = await dispatch(["receipt", "--run", receipt.runId], dependencies);
-		expect([shown.result.outcome, (shown.result.data as { provider: string; status: string }).provider, (shown.result.data as { status: string }).status]).toEqual(["success", RETIRED, "unknown"]);
+		const listed = await listReceipts(dependencies);
+		expect((listed.outcome.data as { open: { runId: string; provider: string; status: string; send: string }[] }).open.map((entry) => [entry.runId, entry.provider, entry.status, entry.send])).toEqual([[receipt.runId, RETIRED, "unknown", "possible"]]);
+		const shown = await showReceipt(receipt.runId, dependencies);
+		expect([(shown.outcome.data as { provider: string; status: string }).provider, (shown.outcome.data as { status: string }).status]).toEqual([RETIRED, "unknown"]);
 		// Adjudication would read back through the active route with the
 		// active tool vocabulary; the receipt names a route that no longer
 		// exists, so it is refused before any binding or call.
-		const adjudicated = await dispatch(["adjudicate", "--run", receipt.runId, "--input", JSON.stringify(COMMENT)], dependencies);
-		expect([adjudicated.result.outcome, adjudicated.result.causeCode, adjudicated.result.exitCode, adjudicated.result.repairAction]).toEqual(["refused", "refused-state", 3, `${REPAIR["refused-state"]}; receipt-provider-retired`]);
-		const unlocked = await dispatch(["unlock", "--run", receipt.runId], dependencies);
-		expect([unlocked.result.outcome, unlocked.result.causeCode, unlocked.result.repairAction]).toEqual(["refused", "refused-state", `${REPAIR["refused-state"]}; receipt-provider-retired`]);
+		const adjudicated = await adjudicateRun(receipt.runId, COMMENT, dependencies);
+		expect([adjudicated.outcome.cause, adjudicated.outcome.detail]).toEqual(["refused-state", `${REPAIR["refused-state"]}; receipt-provider-retired`]);
+		const unlocked = await unlockRun(receipt.runId, dependencies);
+		expect([unlocked.outcome.cause, unlocked.outcome.detail]).toEqual(["refused-state", `${REPAIR["refused-state"]}; receipt-provider-retired`]);
 		expect(calls).toEqual([]);
 		expect(seen).toEqual([]);
 		// A new Community write on the same object is blocked by the open receipt.
-		const blockedPreview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "a new community comment" }), "--preview"], dependencies));
+		const blockedPreview = previewData(await previewOp("issue.comment", { issueKey: "PROJ-1", body: "a new community comment" }, dependencies));
 		expect(blockedPreview.provider).toBe("community");
-		const blocked = await dispatch(["issue.comment", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "a new community comment" }), "--apply", blockedPreview.previewId], dependencies);
-		expect([blocked.result.causeCode, blocked.result.repairAction?.endsWith("write-blocked-open-receipt")]).toEqual(["refused-write-blocked", true]);
+		const blocked = await applyOp("issue.comment", { issueKey: "PROJ-1", body: "a new community comment" }, blockedPreview.previewId, dependencies);
+		expect([blocked.outcome.cause, blocked.outcome.detail?.endsWith("write-blocked-open-receipt")]).toEqual(["refused-write-blocked", true]);
 		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_issue"]);
 		// The historical records are byte-for-byte untouched.
 		expect(fileBytes(receiptsDir())).toEqual(before.receipts);
@@ -1797,13 +1800,13 @@ describe("historical records from the retired Official route", () => {
 		const { openPreview } = await historical(dependencies);
 		const before = fileBytes(previewsDir());
 		const secondInput = { ...COMMENT, body: "a second retired preview" };
-		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(secondInput), "--apply", openPreview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.causeCode, applied.result.exitCode, applied.result.repairAction]).toEqual(["refused", "refused-preview", 3, `${REPAIR["refused-preview"]}; preview-provider-retired`]);
+		const applied = await applyOp("issue.comment", secondInput, openPreview.previewId, dependencies);
+		expect([applied.outcome.cause, applied.outcome.detail]).toEqual(["refused-preview", `${REPAIR["refused-preview"]}; preview-provider-retired`]);
 		// Refused before any binding or provider call: the retired provider is read
 		// from the preview itself, ahead of the preparatory jira_get_issue read.
 		expect(calls).toEqual([]);
-		const unlocked = await dispatch(["unlock", "--run", openPreview.previewId], dependencies);
-		expect([unlocked.result.outcome, unlocked.result.causeCode, unlocked.result.repairAction]).toEqual(["refused", "refused-preview", `${REPAIR["refused-preview"]}; preview-provider-retired`]);
+		const unlocked = await unlockRun(openPreview.previewId, dependencies);
+		expect([unlocked.outcome.cause, unlocked.outcome.detail]).toEqual(["refused-preview", `${REPAIR["refused-preview"]}; preview-provider-retired`]);
 		expect(fileBytes(previewsDir())).toEqual(before);
 		expect(readJsonDir(previewsDir()).map((entry) => [entry.provider, entry.status]).sort()).toEqual([[RETIRED, "consumed"], [RETIRED, "open"]]);
 		expect(readJsonDir(receiptsDir()).filter((entry) => entry.provider === "community")).toEqual([]);
