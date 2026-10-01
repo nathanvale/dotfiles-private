@@ -1,13 +1,13 @@
 // Dispatch flows: one Route per product with live schema confirmation in
 // front of every call; the read flow; the journaled write flow (preview,
 // apply); and the operator flows (receipts, receipt, adjudicate, unlock). Each
-// flow returns an Outcome that the CLI renders into one envelope. Provider
+// flow returns an Outcome that the adapter maps onto the front door's result. Provider
 // text never crosses the transport seam; the outcomes carry fixed text and
 // identifiers only.
 import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, type Provenance, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
-import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
+import { canonicalDigest, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
 import { ATTACHMENT_AUTHOR_GUARD_REASON, AUTHOR_GUARD_REASON, accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, bindParent, commentSources, createdIssueEvidence, createdIssueKey, createdIssuePlan, descriptionSource, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, parentDigest, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
@@ -15,8 +15,6 @@ export interface Outcome {
 	data: unknown;
 	detail: string | null;
 	transactionState: TransactionState;
-	effects: string[];
-	uncertain: string[];
 }
 
 interface Attempt {
@@ -25,10 +23,9 @@ interface Attempt {
 	detail: string | null;
 }
 
-const refusal = (cause: CauseCode, detail: string | null = REPAIR_TEXT[cause as Exclude<CauseCode, "success">] ?? null): Outcome => ({ cause, data: null, detail, transactionState: "unchanged", effects: [], uncertain: [] });
-const success = (data: unknown): Outcome => ({ cause: "success", data, detail: null, transactionState: "unchanged", effects: [], uncertain: [] });
-const failed = (attempt: Attempt): Outcome => ({ cause: attempt.cause, data: null, detail: attempt.detail, transactionState: "unchanged", effects: [], uncertain: [] });
-const effectId = (effect: Effect) => `${effect.kind}:${effect.id}`;
+const refusal = (cause: CauseCode, detail: string | null = REPAIR_TEXT[cause as Exclude<CauseCode, "success">] ?? null): Outcome => ({ cause, data: null, detail, transactionState: "unchanged" });
+const success = (data: unknown): Outcome => ({ cause: "success", data, detail: null, transactionState: "unchanged" });
+const failed = (attempt: Attempt): Outcome => ({ cause: attempt.cause, data: null, detail: attempt.detail, transactionState: "unchanged" });
 // The Provider an operation's records must name: a persisted record naming
 // any other Provider is retired, never reinterpreted.
 const providerOf = (operation: WriteOperation) => OPERATION_SPECS[operation].provider;
@@ -504,17 +501,17 @@ const RECORDED_UNSENT =
 
 function receiptOutcome(receipt: Receipt, attempt: Attempt | null): Outcome {
 	const base = { runId: receipt.runId, previewId: receipt.previewId, operation: receipt.operation, provider: receipt.provider, objectIdentity: receipt.objectIdentity, status: receipt.status, send: receipt.send, effects: receipt.effects };
-	if (receipt.status === "intent" && receipt.send === "unsent") return { cause: "refused-state", data: base, detail: RECORDED_UNSENT, transactionState: "unchanged", effects: [], uncertain: [] };
+	if (receipt.status === "intent" && receipt.send === "unsent") return { cause: "refused-state", data: base, detail: RECORDED_UNSENT, transactionState: "unchanged" };
 	switch (receipt.status) {
 		case "completed":
-			return { cause: "success", data: { ...base, reply: attempt?.data ?? null }, detail: null, transactionState: "completed", effects: receipt.effects.map(effectId), uncertain: [] };
+			return { cause: "success", data: { ...base, reply: attempt?.data ?? null }, detail: null, transactionState: "completed" };
 		case "unchanged": {
 			const cause: Exclude<CauseCode, "success"> = attempt && attempt.cause !== "success" ? attempt.cause : "failed-unknown";
 			const detail = attempt?.cause === "success" && uploadFailed(attempt.data) ? `${REPAIR_TEXT[cause]}; the Provider reported the upload failed: check the file path and the Create Attachments permission` : (attempt?.detail ?? REPAIR_TEXT[cause]);
-			return { cause, data: base, detail, transactionState: "unchanged", effects: [], uncertain: [] };
+			return { cause, data: base, detail, transactionState: "unchanged" };
 		}
 		default:
-			return { cause: "outcome-unknown", data: base, detail: REPAIR_TEXT["outcome-unknown"], transactionState: "unknown", effects: [], uncertain: [receipt.objectIdentity] };
+			return { cause: "outcome-unknown", data: base, detail: REPAIR_TEXT["outcome-unknown"], transactionState: "unknown" };
 	}
 }
 
@@ -635,7 +632,7 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 	try {
 		const settled = journal.resolve(runId, evidence);
 		const state: TransactionState = settled.status === "completed" ? "completed" : "unchanged";
-		return { cause: "success", data: settled, detail: null, transactionState: state, effects: settled.effects.map(effectId), uncertain: [] };
+		return { cause: "success", data: settled, detail: null, transactionState: state };
 	} catch (error) {
 		return journalRefusal(error);
 	}

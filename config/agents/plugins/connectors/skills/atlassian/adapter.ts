@@ -1,12 +1,12 @@
 // Atlassian's packaged adapter for the generic `connectors auth configure`,
 // `auth status`, `auth check`, `run`, and `recover` commands (Ticket #92 under
-// Spec #87). Every prepare step validates the request with the dispatcher's
-// own pure parser and input contracts, so a bad request refuses before any
-// dependency, credential, or Provider capability. Every command that can read
+// Spec #87). Every prepare step validates the request into the dispatcher's
+// typed Invocation, so a bad request refuses before any dependency,
+// credential, or Provider capability. Every command that can read
 // custody (run, auth check, and recover --adjudicate) then passes the tenant
 // registration gate (D2a): an absent or invalid registration refuses before
 // any Keychain, 1Password, MCPorter, or Provider start, and a valid one's item
-// IDs are the only ones the invocation binds. execute runs the unchanged dispatcher in this process
+// IDs are the only ones the invocation binds. execute dispatches the validated invocation in this process
 // with the front door's MCPorter selection and its own internal-role command,
 // so credential custody happens only in the internal custody and Provider
 // roles below. Writes go through the dispatcher's durable preview and apply
@@ -14,12 +14,12 @@
 import type { Adapter, AdapterRefusal, AdapterRequest, CustodyResolution, Executed, ExecutionCapabilities, InternalRole, Prepared, RecordedEffect, Recovery, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
 import { runProvider } from "./scripts/atlassian-community-provider.ts";
 import { runRestProvider } from "./scripts/atlassian-rest-provider.ts";
-import { parseArgv, run } from "./scripts/atlassian-dispatch.ts";
+import { type Dispatched, dispatch, type Invalid, type Invocation, invocationFor, type Request, type Validated } from "./scripts/atlassian-dispatch.ts";
 import { ATLASSIAN_ADAPTER_ID, type AtlassianInternalRole, bindCredential, CONFIGURE_INPUT_REPAIR, configureInput, configureTenant, CREDENTIAL_VAULT, ITEM_ID_REPAIR, PRODUCTS, type RegisteredItems, registeredTenant, runCustodyChild } from "./scripts/custody/index.ts";
-import { type CauseCode, COMMANDS, type Envelope, OPERATIONS, type WriteOperation } from "./scripts/dispatch/contract.ts";
-import { readInput, specFor } from "./scripts/dispatch/engine.ts";
+import { type CauseCode, COMMANDS, OPERATIONS } from "./scripts/dispatch/contract.ts";
+import { specFor } from "./scripts/dispatch/engine.ts";
+import type { Outcome } from "./scripts/dispatch/flows.ts";
 import { productionDependencies } from "./scripts/dispatch/runtime.ts";
-import { writeInput } from "./scripts/dispatch/writes.ts";
 
 type RefusalKind = Extract<AdapterRefusal["kind"], "usage" | "schema" | "verb-unsupported" | "operation-unknown">;
 
@@ -61,18 +61,14 @@ function adapterDefect(what: string): never {
 }
 
 // A refusal or failure that changed nothing. Its fixed repair text is the
-// dispatcher's, never caller input; usage and schema refusals use this
-// adapter's own text because the dispatcher's reason may name caller keys.
-function unchanged(result: Envelope["result"], station: Station): Executed {
-	const { causeCode, repairAction } = result;
-	if (result.transactionState !== "unchanged") adapterDefect("refusal reported a state change");
-	if (repairAction === null) adapterDefect("refusal carried no repair");
-	if (causeCode === "usage-invalid" || causeCode === "input-invalid") {
-		const kind = causeCode === "usage-invalid" ? "usage" : "schema";
-		return { kind: "refused", refusal: { kind, connectorCause: causeCode, repair: REPAIR[kind] } };
-	}
-	if (DOMAIN_REFUSALS.has(causeCode) || (station !== "read" && JOURNAL_REFUSALS.has(causeCode))) return { kind: "refused", refusal: { kind: "domain", connectorCause: causeCode, repair: repairAction } };
-	if (READ_FAILURES.has(causeCode)) return { kind: "failed", connectorCause: causeCode, repair: repairAction };
+// dispatcher's, never caller input; a schema refusal uses this adapter's own
+// text because the dispatcher's reason may name caller keys.
+function unchanged({ cause, detail, transactionState }: Outcome, station: Station): Executed {
+	if (transactionState !== "unchanged") adapterDefect("refusal reported a state change");
+	if (detail === null) adapterDefect("refusal carried no repair");
+	if (cause === "input-invalid") return { kind: "refused", refusal: { kind: "schema", connectorCause: cause, repair: REPAIR.schema } };
+	if (DOMAIN_REFUSALS.has(cause) || (station !== "read" && JOURNAL_REFUSALS.has(cause))) return { kind: "refused", refusal: { kind: "domain", connectorCause: cause, repair: detail } };
+	if (READ_FAILURES.has(cause)) return { kind: "failed", connectorCause: cause, repair: detail };
 	return adapterDefect(`${station} ended with an unmapped cause`);
 }
 
@@ -84,59 +80,65 @@ const receiptRunId = (data: unknown): string | null => {
 // An apply either never reached its receipt (a refusal or read failure that
 // changed nothing), or recorded one: completed, unknown, or unchanged after
 // the receipt. The receipt's runId is what recover needs.
-function applied(result: Envelope["result"], data: Record<string, unknown>): Executed {
-	const runId = receiptRunId(result.data);
-	if (result.causeCode === "success" && result.transactionState === "completed" && runId) return { kind: "applied", data };
-	if (result.causeCode === "outcome-unknown" && result.transactionState === "unknown" && runId) {
+function applied(outcome: Outcome, data: Record<string, unknown>): Executed {
+	const runId = receiptRunId(outcome.data);
+	if (outcome.cause === "success" && outcome.transactionState === "completed" && runId) return { kind: "applied", data };
+	if (outcome.cause === "outcome-unknown" && outcome.transactionState === "unknown" && runId) {
 		return { kind: "effect-unknown", data, repair: `Do not retry the write. Run connectors recover atlassian --select tenant=<value> --run ${runId} to inspect it, then settle it with --adjudicate --input and the identical input` };
 	}
-	if (result.transactionState === "unchanged" && runId && result.repairAction !== null) return { kind: "failed-after-record", connectorCause: result.causeCode, data, repair: result.repairAction };
-	return unchanged(result, "apply");
+	if (outcome.transactionState === "unchanged" && runId && outcome.detail !== null) return { kind: "failed-after-record", connectorCause: outcome.cause, data, repair: outcome.detail };
+	return unchanged(outcome, "apply");
 }
 
 // An unlock that found no lock removed nothing, so it records no write.
 const removedLock = (data: unknown): boolean => typeof data === "object" && data !== null && (data as { unlocked?: unknown }).unlocked === true;
 
-// The dispatcher's envelope is never forwarded: its result and provenance
-// become adapter data, and its closed cause and fixed repair text map to one
-// executed outcome for the station. Anything outside this table is a defect.
-function translate(envelope: Envelope, station: Station, label: Record<string, string>): Executed {
-	const { result } = envelope;
-	const data = { ...label, result: result.data ?? null, provenance: result.provenance };
-	if (station === "apply") return applied(result, data);
-	if (result.causeCode !== "success") return unchanged(result, station);
-	const effect = station === "unlock" && !removedLock(result.data) ? undefined : RECORDED[station];
+// The dispatcher's outcome becomes adapter data with its provenance, and its
+// closed cause and fixed repair text map to one executed outcome for the
+// station. Anything outside this table is a defect.
+function translate({ outcome, provenance }: Dispatched, station: Station, label: Record<string, string>): Executed {
+	const data = { ...label, result: outcome.data ?? null, provenance };
+	if (station === "apply") return applied(outcome, data);
+	if (outcome.cause !== "success") return unchanged(outcome, station);
+	const effect = station === "unlock" && !removedLock(outcome.data) ? undefined : RECORDED[station];
 	if (effect) return { kind: "recorded", effect, data };
-	if (result.transactionState !== "unchanged") adapterDefect(`${station} reported a state change`);
+	if (outcome.transactionState !== "unchanged") adapterDefect(`${station} reported a state change`);
 	return { kind: "success", data };
 }
 
 // items: the gated registration's item IDs, or null for a journal-only
 // command that never binds a credential.
-function executePlan(request: SchemaRequest, argv: string[], station: Station, label: Record<string, string>, items: RegisteredItems | null): Prepared {
+function executePlan(request: SchemaRequest, invocation: Invocation, station: Station, label: Record<string, string>, items: RegisteredItems | null): Prepared {
 	return {
 		kind: "execute",
 		async execute(capabilities: ExecutionCapabilities): Promise<Executed> {
-			const envelope = await run(argv, (slug) => productionDependencies(slug, request.env, items === null ? null : { items }, { skillsRoot: request.skillsRoot, capabilities }));
-			return translate(envelope, station, label);
+			const dependencies = productionDependencies(invocation.tenant, request.env, items === null ? null : { items }, { skillsRoot: request.skillsRoot, capabilities });
+			return translate(await dispatch(invocation, dependencies), station, label);
 		},
 	};
 }
 
-const inputArgs = (input: Readonly<Record<string, unknown>> | null): string[] => (input === null ? [] : ["--input", JSON.stringify(input)]);
+// Validation refuses before any capability: a malformed tenant or identifier
+// is a usage refusal, an input the operation's contract rejects a schema one.
+const invalid = (cause: Invalid): Prepared => (cause === "usage-invalid" ? refused("usage", cause) : refused("schema", cause));
+
+// Absent input is the empty object, which each operation's contract judges.
+const inputOf = (input: Readonly<Record<string, unknown>> | null): Readonly<Record<string, unknown>> => input ?? {};
+
+// A credentialed invocation: validated, then past the registration gate, and
+// only then planned, so each refusal precedes every capability.
+function planGated(request: SchemaRequest, validated: Validated, station: Station, label: Record<string, string>): Prepared {
+	if (!validated.ok) return invalid(validated.cause);
+	const registered = gate(request, validated.invocation.tenant);
+	return registered.ok ? executePlan(request, validated.invocation, station, label, registered.items) : registered.prepared;
+}
 
 function prepareRun(request: AdapterRequest, tenant: string, operation: string, input: Readonly<Record<string, unknown>> | null): Prepared {
 	if ((COMMANDS as readonly string[]).includes(operation)) return refused("usage", "recover-command", RECOVER_REPAIR);
 	const spec = specFor(operation);
 	if (!spec) return refused("operation-unknown", "operation-unknown");
 	if (spec.kind === "write") return refused("usage", "write-phase-required", WRITE_PHASE_REPAIR);
-	const argv = ["--tenant", tenant, operation, ...inputArgs(input)];
-	const parsed = parseArgv(argv);
-	if (!parsed.ok) return refused(parsed.cause === "usage-invalid" ? "usage" : "schema", parsed.cause);
-	if (!readInput(spec.id, parsed.value.input).ok) return refused("schema", "input-invalid");
-	const registered = gate(request, tenant);
-	if (!registered.ok) return registered.prepared;
-	return executePlan(request, argv, "read", { operation }, registered.items);
+	return planGated(request, invocationFor({ tenant, kind: "read", spec, input: inputOf(input) }), "read", { operation });
 }
 
 function prepareWrite(request: WriteRequest): Prepared {
@@ -145,26 +147,22 @@ function prepareWrite(request: WriteRequest): Prepared {
 	const spec = specFor(request.operation);
 	if (!spec) return refused("operation-unknown", "operation-unknown");
 	if (spec.kind !== "write") return refused("usage", "read-takes-no-phase", READ_PHASE_REPAIR);
-	const phase = request.phase.kind === "preview" ? ["--preview"] : ["--apply", request.phase.previewId];
-	const argv = ["--tenant", tenant, request.operation, ...inputArgs(request.input), ...phase];
-	const parsed = parseArgv(argv);
-	if (!parsed.ok) return refused(parsed.cause === "usage-invalid" ? "usage" : "schema", parsed.cause);
-	if (!writeInput(spec.id as WriteOperation, parsed.value.input).ok) return refused("schema", "input-invalid");
-	const registered = gate(request, tenant);
-	if (!registered.ok) return registered.prepared;
-	return executePlan(request, argv, request.phase.kind, { operation: request.operation }, registered.items);
+	const { phase } = request;
+	const input = inputOf(request.input);
+	const validated = invocationFor(phase.kind === "preview" ? { tenant, kind: "preview", spec, input } : { tenant, kind: "apply", spec, input, previewId: phase.previewId });
+	return planGated(request, validated, phase.kind, { operation: request.operation });
 }
 
 const RECOVERY_STATION: Readonly<Record<Recovery["kind"], Station>> = { inspect: "journal", adjudicate: "adjudicate", unlock: "unlock" };
 
-function recoveryCommand(runId: string, recovery: Recovery): string[] {
+function recoveryRequest(tenant: string, runId: string, recovery: Recovery): Request {
 	switch (recovery.kind) {
 		case "inspect":
-			return ["receipt", "--run", runId];
+			return { tenant, kind: "receipt", runId };
 		case "adjudicate":
-			return ["adjudicate", "--run", runId, ...inputArgs(recovery.input)];
+			return { tenant, kind: "adjudicate", runId, input: inputOf(recovery.input) };
 		case "unlock":
-			return ["unlock", "--run", runId];
+			return { tenant, kind: "unlock", runId };
 	}
 }
 
@@ -176,14 +174,11 @@ function prepareRecover(request: RecoverRequest): Prepared {
 	if (tenant === undefined) return refused("usage", "tenant-required");
 	const { runId, recovery } = request;
 	if (runId === null && recovery.kind !== "inspect") return refused("usage", "run-required");
-	const command = runId === null ? ["receipts"] : recoveryCommand(runId, recovery);
-	const argv = ["--tenant", tenant, ...command];
-	const parsed = parseArgv(argv);
-	if (!parsed.ok) return refused(parsed.cause === "usage-invalid" ? "usage" : "schema", parsed.cause);
-	if (recovery.kind !== "adjudicate") return executePlan(request, argv, RECOVERY_STATION[recovery.kind], { command: command[0] ?? "receipts" }, null);
-	const registered = gate(request, tenant);
-	if (!registered.ok) return registered.prepared;
-	return executePlan(request, argv, "adjudicate", { command: "adjudicate" }, registered.items);
+	const validated = invocationFor(runId === null ? { tenant, kind: "receipts" } : recoveryRequest(tenant, runId, recovery));
+	if (!validated.ok) return invalid(validated.cause);
+	const label = { command: validated.invocation.kind };
+	if (recovery.kind !== "adjudicate") return executePlan(request, validated.invocation, RECOVERY_STATION[recovery.kind], label, null);
+	return planGated(request, validated, "adjudicate", label);
 }
 
 // The core accepts any role name; this narrows the adapter's own calls to
