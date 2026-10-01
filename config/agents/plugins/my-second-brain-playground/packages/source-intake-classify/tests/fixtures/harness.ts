@@ -225,7 +225,12 @@ export function execObservations(fixture: Fixture): ExecObservation[] {
 }
 
 export function clearObservations(fixture: Fixture): void {
-	for (const name of readdirSync(fixture.fakeRoot).filter((entry) => /^exec-\d+\.json$/.test(entry))) rmSync(join(fixture.fakeRoot, name))
+	for (const name of readdirSync(fixture.fakeRoot).filter((entry) => /^exec-\d+\.json$/.test(entry) || entry === "exec-started")) rmSync(join(fixture.fakeRoot, name))
+}
+
+/** True when any fake `codex exec` began, even one killed before it recorded an observation. */
+export function execStarted(fixture: Fixture): boolean {
+	return existsSync(join(fixture.fakeRoot, "exec-started"))
 }
 
 /** A valid lane input: the dispatch projection, public owner notes and redacted Bead state. */

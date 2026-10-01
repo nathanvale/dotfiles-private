@@ -2,7 +2,7 @@
 // this run cannot prove the lane denies both receipt roots. The weakened double is a fake codex whose sandbox runs
 // every probe unsandboxed, and, at module level, a profile with the explicit denies removed and read on the root.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { type Lane, laneConfigArgs, prepareLane } from "../src/lane.ts"
 import { runPreflight } from "../src/preflight.ts"
@@ -11,6 +11,7 @@ import {
 	COMMAND,
 	createFixture,
 	execObservations,
+	execStarted,
 	type Fixture,
 	invoke,
 	LANE_REFUSAL_JSON,
@@ -90,16 +91,23 @@ proofs.test("a rendered permission entry in an unrecognised format is refused", 
 const OPAQUE_ITEM_REF_SHAPE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 /** Starts classify with the slow-probe fake and resolves once the pre-flight is paused at a sandboxed receipt read. */
-async function classifyPausedInPreflight(): Promise<Bun.Subprocess<"pipe", "pipe", "pipe">> {
+async function classifyPausedInPreflight(): Promise<{ child: Bun.Subprocess<"pipe", "pipe", "pipe">; temporary: string }> {
 	setFake(fixture, "slow-probe")
 	const marker = join(fixture.fakeRoot, "probe-waiting")
 	rmSync(marker, { force: true })
-	const child = Bun.spawn({ cmd: [COMMAND, "classify", "--json"], cwd: fixture.root, env: { ...fixture.env, PATH: `${fixture.env.PATH}:${dirname(process.execPath)}` }, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+	// A fresh fixture-owned TMPDIR per run makes this run's workspace visible, so a test can see whether it was removed.
+	const temporary = mkdtempSync(join(fixture.root, "run-tmp-"))
+	const env = { ...fixture.env, TMPDIR: temporary, PATH: `${fixture.env.PATH}:${dirname(process.execPath)}` }
+	const child = Bun.spawn({ cmd: [COMMAND, "classify", "--json"], cwd: fixture.root, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
 	child.stdin.write(input)
 	await child.stdin.end()
 	for (let attempt = 0; attempt < 600 && !existsSync(marker); attempt += 1) await Bun.sleep(50)
 	expect(existsSync(marker)).toBe(true)
-	return child
+	return { child, temporary }
+}
+
+function workspacesLeft(temporary: string): string[] {
+	return readdirSync(temporary).filter((name) => name.startsWith("source-intake-classify-"))
 }
 
 function itemsBesideFixture(): string[] {
@@ -108,7 +116,7 @@ function itemsBesideFixture(): string[] {
 
 // Wrong behavior caught: a killed pre-flight leaving a sentinel that dispatch would accept as a real item directory.
 proofs.test("a pre-flight killed mid-probe leaves nothing shaped like a receipt item", async () => {
-	const child = await classifyPausedInPreflight()
+	const { child } = await classifyPausedInPreflight()
 	child.kill("SIGKILL")
 	await child.exited
 	const leftovers = itemsBesideFixture()
@@ -120,14 +128,22 @@ proofs.test("a pre-flight killed mid-probe leaves nothing shaped like a receipt 
 	}
 }, 60_000)
 
-// Wrong behavior caught: a SIGTERM during the synchronous pre-flight handled only after the model process started.
-proofs.test("SIGTERM mid pre-flight exits 143, starts no model and leaves no sentinel", async () => {
-	const child = await classifyPausedInPreflight()
-	child.kill("SIGTERM")
-	expect(await child.exited).toBe(143)
-	expect(execObservations(fixture)).toEqual([])
-	expect(itemsBesideFixture()).toEqual([])
-}, 60_000)
+// Wrong behavior caught: a signal during the synchronous pre-flight handled only once the model process has started, or
+// an exit that skips the workspace cleanup and leaves an empty directory in TMPDIR on every interrupted run.
+for (const [signal, exitCode] of [
+	["SIGTERM", 143],
+	["SIGINT", 130],
+] as const) {
+	proofs.test(`${signal} mid pre-flight exits ${exitCode}, starts no model and leaves no sentinel or workspace`, async () => {
+		const { child, temporary } = await classifyPausedInPreflight()
+		child.kill(signal)
+		expect(await child.exited).toBe(exitCode)
+		expect(execStarted(fixture)).toBe(false)
+		expect(execObservations(fixture)).toEqual([])
+		expect(itemsBesideFixture()).toEqual([])
+		expect(workspacesLeft(temporary)).toEqual([])
+	}, 60_000)
+}
 
 test("the refusal names no path, sentinel or probe output", () => {
 	for (const text of [LANE_REFUSAL_JSON, LANE_REFUSAL_HUMAN]) {
@@ -201,4 +217,4 @@ describe("module-level pre-flight", () => {
 	}, 60_000)
 })
 
-proofs.pin(13)
+proofs.pin(14)

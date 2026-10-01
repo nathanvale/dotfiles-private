@@ -125,9 +125,23 @@ function refusalOutput(key: keyof typeof MESSAGES): Output {
 	return { envelope: stationResult("source-intake-classify.classify", key, MESSAGES[key]), human: "" }
 }
 
+// The run's workspace, held so a signal can remove it: process.exit in a signal handler skips the finally below.
+let activeWorkspace: string | null = null
+
+/** The workspace is read-only to the lane, so it is still empty; a non-empty one is left for inspection. */
+function removeWorkspace(): void {
+	const workspace = activeWorkspace
+	activeWorkspace = null
+	if (workspace === null) return
+	try {
+		rmdirSync(workspace)
+	} catch {}
+}
+
 /** The pre-flight gates the model: only a passing proof on this run's workspace starts it. */
 async function classifyInLane(lane: Lane, input: LaneInput): Promise<Output> {
 	const workspace = createWorkspace()
+	activeWorkspace = workspace
 	try {
 		const version = codexVersion(lane)
 		if (version === null || !runPreflight(lane, workspace)) return refusalOutput("laneUnproven")
@@ -146,10 +160,7 @@ async function classifyInLane(lane: Lane, input: LaneInput): Promise<Output> {
 		].join("\n")
 		return { envelope: classifySuccess(data), human }
 	} finally {
-		// The workspace is read-only to the lane, so it is still empty; a non-empty one is left for inspection.
-		try {
-			rmdirSync(workspace)
-		} catch {}
+		removeWorkspace()
 	}
 }
 
@@ -256,13 +267,16 @@ async function main(argv: readonly string[]): Promise<number> {
 	return emit(output, json)
 }
 
-// Contract Core bounded stop. A running lane is killed first so no model process outlives the command; nothing is written.
+// Contract Core bounded stop. A running lane is killed first so no model process outlives the command, then the run's
+// empty workspace is removed; nothing is written.
 process.on("SIGINT", () => {
 	stopLane()
+	removeWorkspace()
 	process.exit(130)
 })
 process.on("SIGTERM", () => {
 	stopLane()
+	removeWorkspace()
 	process.exit(143)
 })
 

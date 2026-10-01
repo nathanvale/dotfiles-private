@@ -887,8 +887,19 @@ async function readInput() {
 function refusalOutput(key) {
   return { envelope: stationResult("source-intake-classify.classify", key, MESSAGES[key]), human: "" };
 }
+var activeWorkspace = null;
+function removeWorkspace() {
+  const workspace = activeWorkspace;
+  activeWorkspace = null;
+  if (workspace === null)
+    return;
+  try {
+    rmdirSync2(workspace);
+  } catch {}
+}
 async function classifyInLane(lane, input) {
   const workspace = createWorkspace();
+  activeWorkspace = workspace;
   try {
     const version = codexVersion(lane);
     if (version === null || !runPreflight(lane, workspace))
@@ -910,9 +921,7 @@ async function classifyInLane(lane, input) {
 `);
     return { envelope: classifySuccess(data), human };
   } finally {
-    try {
-      rmdirSync2(workspace);
-    } catch {}
+    removeWorkspace();
   }
 }
 async function classifyOutput() {
@@ -1021,10 +1030,12 @@ async function main(argv) {
 }
 process.on("SIGINT", () => {
   stopLane();
+  removeWorkspace();
   process.exit(130);
 });
 process.on("SIGTERM", () => {
   stopLane();
+  removeWorkspace();
   process.exit(143);
 });
 var exitCode = await main(process.argv.slice(2));
