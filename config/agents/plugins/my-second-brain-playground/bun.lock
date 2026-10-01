@@ -47,6 +47,13 @@
       "name": "source-intake-dispatch",
       "version": "0.0.0",
     },
+    "packages/vault-notes": {
+      "name": "vault-notes",
+      "version": "0.0.0",
+      "bin": {
+        "vault-notes": "src/main.ts",
+      },
+    },
     "packages/vault-steward": {
       "name": "vault-steward",
       "version": "0.0.0",
@@ -90,6 +97,8 @@
     "source-intake-classify": ["source-intake-classify@workspace:packages/source-intake-classify"],
 
     "source-intake-dispatch": ["source-intake-dispatch@workspace:packages/source-intake-dispatch"],
+
+    "vault-notes": ["vault-notes@workspace:packages/vault-notes"],
 
     "vault-steward": ["vault-steward@workspace:packages/vault-steward"],
 
