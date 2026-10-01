@@ -132,7 +132,7 @@
   exists.
 
 - Use `ghh` for GitHub CLI work.
-- Codex Desktop or Claude Desktop work, coordinator requests, or Herdr work: read
+- Managed project coordination or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
 - Prior shell activity: when recent terminal state may explain a task, use
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.

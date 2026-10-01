@@ -20,7 +20,11 @@ the control routes are `inspect`. Human mode prints one concise block;
 
 `classify` reads its input only from standard input, to end of input, and takes
 no operands. It never prompts: a terminal on standard input is a usage refusal.
-SIGINT exits 130 and SIGTERM exits 143 after killing a running lane.
+SIGINT exits 130 and SIGTERM exits 143 after killing a running lane and
+removing the run's empty workspace. A signal that arrives during the pre-flight
+is handled before the lane is spawned: the command yields one event-loop turn
+between the pre-flight and the lane, because Bun runs signal handlers only on
+the event loop.
 
 ## Lane input
 

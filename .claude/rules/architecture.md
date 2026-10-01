@@ -13,7 +13,7 @@ paths:
 - Each component (brew, symlinks, preferences) has dedicated `install`/`uninstall`/`manage` scripts
 - Critical hotspots: `execute_scripts` (orchestration), `get_config` (configuration), `log_error` (error handling)
 - Domain organization: `bin/dotfiles/`, `bin/system/`, `bin/tmux/`, `bin/utils/`
-- Major applications: `apps/taskdock/`, `apps/hyperflow/`, `apps/vault/`
+- Major applications: `apps/hyperflow/`, `apps/vault/`
 - **All scripts use `set -e` (fail-fast) and are idempotent (safe to run multiple times)**
 
 ## Symlink Strategy
@@ -56,7 +56,7 @@ a set of values into the environment.
 
 ```
 bin/          → Installation system, utilities, CLI shims (→ apps/)
-apps/         → Major applications (taskdock, hyperflow, vault)
+apps/         → Major applications (hyperflow, vault)
 config/       → All configuration files (tmux, git, karabiner, etc.)
 .claude/      → Claude Code configuration (commands, agents, skills)
 misc/         → Fonts, themes, assets

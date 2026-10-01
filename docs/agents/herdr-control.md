@@ -7,17 +7,37 @@ only that skill's explicit-mention trigger and `HERDR_ENV` refusal on those
 routes. Keep its remaining guidance and reviewed payload intact; use installed
 CLI help for current syntax.
 
-## Portal and workflow
+## Choose the route
+
+- Handle one-off questions, research, code exploration and read-only reviews
+  directly in the current chat, including Codex Desktop and Claude Desktop.
+  Complete them from inspected evidence; a repository or project name supplies
+  scope, not a request to coordinate another agent.
+- Finish a direct read-only request without creating Tasks, startup receipts
+  or worker threads solely to provide the answer. Stage Manager startup and
+  model-guide checks apply when taking that role or casting a worker; they
+  are not prerequisites for inspecting files and reporting findings.
+- Use the portal route for managed project implementation or when Nathan asks
+  to talk to, ask, check or coordinate a project's Stage Manager. Keep the
+  selected coordinator as the owner of that managed work.
+
+## Portal workflow
 
 - Follow the global vault entry. In that vault, read `CONTEXT.md` for vocabulary,
   `docs/agents/workflow-governance.md` for scope and completion, and
   `projects/engineering-workflow/cast.md` for coordination and execution owners.
-- Treat Codex Desktop and Claude Desktop as lightweight communication
-  portals to the selected Stage Manager. Relay requests and fresh replies;
-  keep coordination with that owner. The Stage Manager coordinates visible,
-  bounded Cast Members in Herdr for exploration and execution. A missing
-  destination requires discovery or one target question; Desktop does not
-  silently become the coordinator.
+- On the portal route, relay requests and fresh replies to the selected
+  Stage Manager. It coordinates visible, bounded Cast Members in Herdr for
+  exploration and execution. Resolve a missing destination through discovery
+  or one target question before dispatch.
+- Preserve the request's scope when relaying it. A read-only review constrains
+  the subject being reviewed; let the Stage Manager answer directly under its
+  [request-handling rules](../../config/agents/plugins/my-second-brain-playground/skills/stage-manager/SKILL.md#handle-the-request).
+  Avoid adding a blanket project-state restriction that blocks its ordinary
+  operational records when a cast is needed.
+- Return the result and any decision Nathan actually needs to make. Keep
+  unknown model metadata and skipped optional guides in operational evidence
+  unless they materially affect capability, cost or confidence in the result.
 - Prefer low reasoning for portal communication when the selected Harness
   supports it. Verify actual session settings before reporting them; do not
   change models or infer the Stage Manager's model from the portal's setting.

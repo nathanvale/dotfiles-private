@@ -1,6 +1,6 @@
 // Atlassian dispatch contract: the nineteen semantic operations, their exact
 // Community provider tools, the allow-lists the registry must mirror, the
-// operator commands, and the closed cause and exit vocabulary. Tool names are
+// operator commands, and the closed cause vocabulary. Tool names are
 // documented, not live-verified; the engine binds one only after live schema
 // confirmation.
 
@@ -162,7 +162,6 @@ export const OPERATION_SPECS: Record<OperationId, OperationSpec> = Object.freeze
 
 // Operator commands beside the operations; each is a canonical command path.
 export const COMMANDS = ["receipts", "receipt", "adjudicate", "unlock"] as const;
-export type CommandId = (typeof COMMANDS)[number];
 
 // Two static routes: one per product, because the API token, the credential
 // item, and the tool surface are product-specific.
@@ -181,7 +180,6 @@ export function productFor(server: string): Product | null {
 
 export type CauseCode =
 	| "success"
-	| "usage-invalid"
 	| "input-invalid"
 	| "site-unresolved"
 	| "refused-auth"
@@ -197,65 +195,10 @@ export type CauseCode =
 	| "failed-unknown"
 	| "outcome-unknown";
 
-export type OutcomeKind = "success" | "refused" | "failed";
-export type FailureClass = "usage" | "domain" | "schema" | "internal" | null;
 export type TransactionState = "unchanged" | "completed" | "unknown";
-
-export interface CauseRow {
-	outcome: OutcomeKind;
-	failureClass: FailureClass;
-	exitCode: 0 | 2 | 3 | 4;
-}
-
-// Exit meanings follow Contract Core 2.0: 2 usage, 3 domain, 4 schema.
-export const CAUSES: Record<CauseCode, CauseRow> = {
-	success: { outcome: "success", failureClass: null, exitCode: 0 },
-	"usage-invalid": { outcome: "refused", failureClass: "usage", exitCode: 2 },
-	"input-invalid": { outcome: "refused", failureClass: "schema", exitCode: 4 },
-	"site-unresolved": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"refused-auth": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"refused-preview": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"refused-write-blocked": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"refused-state": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"refused-evidence": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"not-found": { outcome: "failed", failureClass: "domain", exitCode: 3 },
-	"refused-precondition": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"refused-credential-unconfigured": { outcome: "refused", failureClass: "domain", exitCode: 3 },
-	"capability-unavailable": { outcome: "failed", failureClass: "domain", exitCode: 3 },
-	"failed-transport": { outcome: "failed", failureClass: "domain", exitCode: 3 },
-	"failed-unknown": { outcome: "failed", failureClass: "domain", exitCode: 3 },
-	// A write whose effect could not be confirmed: failed outcome, unknown
-	// transaction state, nonretryable, blocked until adjudicated.
-	"outcome-unknown": { outcome: "failed", failureClass: "domain", exitCode: 3 },
-};
 
 export interface Provenance {
 	provider: string;
 	tool: string;
 	status: "success" | Exclude<CauseCode, "success">;
-}
-
-export interface Envelope {
-	envelopeVersion: 2;
-	contractVersion: "2.0.0";
-	message: string;
-	availablePaths: string[];
-	result: {
-		runId: string;
-		commandIdentity: string;
-		outcome: OutcomeKind;
-		// inspect reads; repository-local changes only private journal state;
-		// external reaches the provider with a write.
-		effectClass: "inspect" | "repository-local" | "external";
-		transactionState: TransactionState;
-		causeCode: CauseCode;
-		failureClass: FailureClass;
-		exitCode: number;
-		data: unknown;
-		retryable: false;
-		repairAction: string | null;
-		effects: { completed: string[]; remaining: string[]; uncertain: string[]; inventoryComplete: boolean };
-		nextAction: string;
-		provenance: Provenance[];
-	};
 }

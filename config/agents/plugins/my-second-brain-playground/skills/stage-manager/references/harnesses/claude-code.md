@@ -1,6 +1,9 @@
 # Claude Code self-evidence
 
-What a running Claude Code agent can read about itself during startup step 2.
+Optional diagnostics for Stage Manager cast preparation step 2. Use these
+when qualifying model-specific advice or investigating a route problem.
+Unknown values leave that advice unapplied and do not alone block work.
+What a running Claude Code agent can read about itself:
 Each item is Claude Code behavior observed on 2026-09-25 in v2.1.282, not a
 documented contract, so mark a missing value `unknown`.
 
