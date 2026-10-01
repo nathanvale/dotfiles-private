@@ -118,6 +118,10 @@ export const AmbiguityRecordSchema = z.strictObject({
 
 export const ArchiveMarker = z.object({
   archiveVersion: z.literal(1),
+  startDate: z
+    .string()
+    .regex(/^\d{4}-\d\d-\d\d$/)
+    .optional(),
   chatIdentity: z
     .strictObject({ senderIds: z.array(z.string().min(1)).min(1) })
     .optional(),
@@ -183,6 +187,12 @@ export const DecideInput = DecisionRecordSchema.omit({
   (value) => Object.keys(value).length > 1,
   "Pass at least one decision field.",
 );
+
+/** The rows an applied export left out because they precede the start date. */
+export const ReceiptExclusion = z.object({
+  csv: z.object({ sha256: SHA256 }),
+  summary: z.object({ beforeStart: z.number().int().nonnegative() }),
+});
 
 /** An apply receipt bound to its journal run and effect, with read-back proof. */
 export const ReceiptMarker = z.object({

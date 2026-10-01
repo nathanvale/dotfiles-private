@@ -55,8 +55,9 @@ function importExport(
   archive: string,
   csv: string,
   attachments: string,
+  ...extra: string[]
 ) {
-  const source = ["--archive", archive, "--csv", csv, "--attachments", attachments];
+  const source = ["--archive", archive, "--csv", csv, "--attachments", attachments, ...extra];
   const preview = invoke(env, "import", ...source, "--preview", "--json");
   expect(preview.exitCode).toBe(0);
   const digest = preview.json().result.data.planDigest;
@@ -306,7 +307,7 @@ test("status reports invalid records as a deterministic internal failure", async
 
 async function markerArchive(archive: string): Promise<void> {
   await mkdir(archive, { recursive: true });
-  await writeFile(join(archive, "archive.json"), "{}\n");
+  await writeFile(join(archive, "archive.json"), '{"archiveVersion":1}\n');
 }
 
 test("two concurrent applies produce one import and one transient refusal", async () => {
@@ -551,6 +552,94 @@ test("an unchanged import regenerates derived views left stale by a recovered de
   const rows = await csvRows(pending);
   expect(rows).toHaveLength(4);
   expect(rows.map((row) => row.item_key)).not.toContain(image?.item_key);
+});
+
+test.each([
+  ["newline-only tear", (text: string) => text.slice(0, -1)],
+  ["invalid entry", (text: string) => `${text}{not json}\n`],
+] as const)("a journal %s blocks later writes with its bytes kept, and recover hands off", async (_case, damage) => {
+  const { archive, env, root } = await workspace("journal-torn");
+  const newRoot = join(root, "new");
+  importExport(env, archive, await writeNewExport(newRoot), newRoot);
+  const [item] = await csvRows(join(archive, "derived/messages.csv"));
+  const journal = join(archive, "archive.journal.jsonl");
+  await writeFile(journal, damage(await readFile(journal, "utf8")));
+  const before = await readFile(journal, "utf8");
+  const decided = invoke(env, "decide", "--archive", archive, "--item", item?.item_key ?? "", "--album", "selected", "--json");
+  expect(decided.exitCode).toBe(3);
+  expect(decided.stderr).toBe("");
+  expect(decided.json().result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_UNPROVABLE", handoff: { owner: "operator" }, transactionState: "unchanged" });
+  expect(decided.json().result.handoff.reason).toContain("archive.journal.jsonl");
+  expect(await Bun.file(join(archive, "records/decisions.jsonl")).exists()).toBe(false);
+  expect(await readFile(journal, "utf8")).toBe(before);
+  const recovered = invoke(env, "recover", "--archive", archive, "--json");
+  expect(recovered.exitCode).toBe(3);
+  expect(recovered.stderr).toBe("");
+  expect(recovered.json().result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_UNPROVABLE", data: null, handoff: { owner: "operator" } });
+  expect(recovered.json().result.handoff.reason).toContain("archive.journal.jsonl");
+  const status = invoke(env, "status", "--archive", archive, "--json");
+  expect(status.exitCode).toBe(0);
+  expect(status.json().result.data.recovery).toBe("unknown");
+  expect(await readFile(journal, "utf8")).toBe(before);
+});
+
+test("a journal torn after the intent leaves the apply's effects unknown and its bytes kept", async () => {
+  const { archive, env, root } = await workspace("journal-torn-late");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  const source = ["--archive", archive, "--csv", csv, "--attachments", newRoot];
+  const digest = invoke(env, "import", ...source, "--preview", "--json").json().result.data.planDigest;
+  const ready = join(root, "intent-ready");
+  const child = Bun.spawn([process.execPath, "run", "src/cli.ts", "import", ...source, "--plan", digest, "--json"], {
+    cwd: ROOT,
+    env: { ...process.env, ...env, IMAZING_ARCHIVE_TEST_AFTER_INTENT_DELAY_MS: "500", IMAZING_ARCHIVE_TEST_AFTER_INTENT_READY_PATH: ready, NODE_ENV: "test" },
+    stdin: "ignore", stderr: "pipe", stdout: "pipe",
+  });
+  await waitFor(ready);
+  const journal = join(archive, "archive.journal.jsonl");
+  const torn = (await readFile(journal, "utf8")).slice(0, -1);
+  await writeFile(journal, torn);
+  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  expect(exitCode).toBe(1);
+  expect(JSON.parse(stdout).result).toMatchObject({ causeCode: "INTERNAL_RESULT_UNKNOWN", effects: { uncertain: ["effect.import"] }, transactionState: "unknown" });
+  expect(await readFile(journal, "utf8")).toBe(torn);
+  expect(invoke(env, "recover", "--archive", archive, "--json").json().result.causeCode).toBe("DOMAIN_RECOVERY_UNPROVABLE");
+});
+
+test("rows dated before the start date are left out and counted in preview, apply, receipt, and status", async () => {
+  const { archive, env, root } = await workspace("before-start");
+  const newRoot = join(root, "new");
+  const imported = importExport(env, archive, await writeNewExport(newRoot, { beforeStart: true }), newRoot);
+  expect(imported.preview.data.beforeStart).toBe(1);
+  expect(imported.apply.data).toMatchObject({ beforeStart: 1, messageRows: 16, planned: { items: 15 } });
+  const receipt = JSON.parse(await readFile(imported.apply.data.receiptPath, "utf8"));
+  expect(receipt).toMatchObject({ startDate: "2023-10-15", summary: { beforeStart: 1 } });
+  expect(receipt.summary.lists.unreferencedFiles).toEqual(["2024-03-01 00 00 00 - Robin Example - stray.png"]);
+  expect(JSON.parse(await readFile(join(archive, "archive.json"), "utf8")).startDate).toBe("2023-10-15");
+  const messages = await csvRows(join(archive, "derived/messages.csv"));
+  expect(messages.filter((row) => row.attachment_name === "early.png")).toEqual([]);
+  expect(messages).toHaveLength(15);
+  const status = invoke(env, "status", "--archive", archive, "--json").json().result.data;
+  expect(status).toMatchObject({ beforeStart: 1, items: 15, startDate: "2023-10-15" });
+});
+
+test("the start date is fixed at creation: a differing later --start-date refuses and a malformed one is invalid", async () => {
+  const { archive, env, root } = await workspace("start-date");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  const created = importExport(env, archive, csv, newRoot, "--start-date", "2023-10-22");
+  // Three fixture rows fall on 2023-10-21, before the chosen start.
+  expect(created.apply.data).toMatchObject({ beforeStart: 3, planned: { items: 12 } });
+  expect(JSON.parse(await readFile(join(archive, "archive.json"), "utf8")).startDate).toBe("2023-10-22");
+  const source = ["import", "--archive", archive, "--csv", csv, "--attachments", newRoot, "--preview", "--json"];
+  for (const extra of [[], ["--start-date", "2023-10-15"]]) {
+    const refused = invoke(env, ...source, ...extra);
+    expect(refused.exitCode).toBe(3);
+    expect(refused.json()).toMatchObject({ message: "The --start-date 2023-10-15 differs from the archive's start date 2023-10-22.", result: { causeCode: "DOMAIN_PRECONDITION_UNMET" } });
+  }
+  const malformed = invoke(env, ...source, "--start-date", "2023-02-30");
+  expect(malformed.exitCode).toBe(4);
+  expect(malformed.json().result.causeCode).toBe("SCHEMA_INVALID_INPUT");
 });
 
 async function waitFor(path: string): Promise<void> {

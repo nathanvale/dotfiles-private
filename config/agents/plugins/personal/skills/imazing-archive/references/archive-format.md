@@ -11,7 +11,7 @@ when that revision differs from the current records.
 
 ```text
 ARCHIVE/
-  archive.json                  marker plus the chat identity (Sender IDs)
+  archive.json                  marker, chat identity (Sender IDs), and start date
   archive.journal.jsonl         import and decision intent and completion records
   archive.journal.lock          present only while a writer runs, or as crash residue
   originals/<sha256>-<name>.csv byte-identical copy of each imported CSV
@@ -40,6 +40,21 @@ The header must match a variant exactly. A leading BOM is ignored. One CSV
 holds one Chat Session. Session names differ between exports of one chat
 ("Robin" and "Robin Example"), so chat identity is the sorted set of
 non-empty Sender IDs. It must equal the set in `archive.json`.
+
+## Start date
+
+The first apply records `startDate` in `archive.json` from `--start-date
+YYYY-MM-DD` (default `2023-10-15`); the archive begins on that day. Every later
+preview or apply compares its `--start-date`, or the default when omitted, with
+the stored date and refuses a difference with `DOMAIN_PRECONDITION_UNMET`.
+
+Message Date is a local wall-clock string with no time zone. Only its date part
+(`YYYY-MM-DD`) is compared with the start date; no zone conversion happens. A
+row dated before the start creates no item, observation, association, or blob.
+Exported files whose name timestamp falls before the start are left out of
+attachment resolution, so they are not `unreferencedFiles`. The plan, preview,
+apply result, and receipt report the left-out rows as `beforeStart`; `status`
+sums `beforeStart` once per applied export from the receipts in `imports/`.
 
 ## Item identity
 
@@ -106,7 +121,13 @@ appends the line, regenerates derived files, then writes the completion record.
 A failure after the intent returns `INTERNAL_RESULT_UNKNOWN`.
 
 A decision intent is written only after `records/decisions.jsonl` is checked to
-end in a newline.
+end in a newline. The journal follows the same rule: an intent or completion is
+appended only when `archive.journal.jsonl` ends in a newline. A journal whose
+last entry is unterminated, or that holds an invalid entry, proves nothing.
+Writes refuse with `DOMAIN_RECOVERY_UNPROVABLE` and leave its bytes unchanged,
+`recover` hands off to the operator, and `status` reports recovery `unknown`. A
+completion that cannot be appended after durable effects returns
+`INTERNAL_RESULT_UNKNOWN`.
 
 `recover` reports a pending import intent as complete only when a receipt with
 the same run ID, effect ID, and plan digest exists and every file and record

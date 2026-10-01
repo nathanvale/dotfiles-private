@@ -99,6 +99,7 @@ export function lockResidue(commandIdentity: string): OperationResult {
 export function recoveryRequired(
   commandIdentity: string,
   effectId: string,
+  reason = `An interrupted ${effectId} has no verified completion proof; its effects are unproven.`,
 ): OperationResult {
   return {
     causeCode: "DOMAIN_RECOVERY_UNPROVABLE",
@@ -111,7 +112,7 @@ export function recoveryRequired(
     handoff: {
       inspect: ["archive.journal.jsonl", "imports/", "records/"],
       owner: "operator",
-      reason: `An interrupted ${effectId} has no verified completion proof; its effects are unproven.`,
+      reason,
     },
     message: "An earlier archive write was interrupted and cannot be proven complete.",
     outcome: "refused",

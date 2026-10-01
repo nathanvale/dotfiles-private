@@ -157,6 +157,9 @@ test.each([
   expect(parseOptions(args, ["archive"], ["preview"])).toBeNull();
 });
 
+// Independent oracle: the archive start date the original brief names.
+const START = "2023-10-15";
+
 function oldExport(rows: ExportRow[]): ParsedExport {
   return { chatSession: "Robin", rows, variant: "imazing-15" };
 }
@@ -167,6 +170,7 @@ test("a fingerprint repeated within one old-variant export is held, not minted",
     oldExport([row(1, "", "ha"), row(2, "", "ha")]),
     "a".repeat(64),
     [],
+    START,
   );
   expect(planned.plan.items).toEqual([]);
   expect(planned.summary.observations).toMatchObject({
@@ -185,6 +189,7 @@ test("text differing only in line endings, Unicode form, or surrounding whitespa
     oldExport([row(1, "", "caf\u00e9\nok")]),
     "a".repeat(64),
     [],
+    START,
   );
   expect(first.plan.items).toHaveLength(1);
   const state = foldRecords(emptyState(), {
@@ -200,10 +205,27 @@ test("text differing only in line endings, Unicode form, or surrounding whitespa
     oldExport([row(1, "", " \tcafe\u0301 \r\nok\t\n")]),
     "b".repeat(64),
     [],
+    START,
   );
   expect(later.summary.observations).toMatchObject({
     "fingerprint-match": 1,
     "fingerprint-new": 0,
   });
   expect(later.plan.items).toEqual([]);
+});
+
+test("rows and files dated before the start date are left out and counted, never planned", () => {
+  const early = { ...row(1, "early.png"), messageDate: "2023-10-14 23:59:59" };
+  const first = { ...row(2, "", "first day"), messageDate: "2023-10-15 00:00:00" };
+  const earlyFile = {
+    ...file("early.png", "e"),
+    relativePath: "2023-10-14 23 59 59 - Robin - early.png",
+    timestamp: "2023-10-14 23 59 59",
+  };
+  const planned = planImport(emptyState(), oldExport([early, first]), "a".repeat(64), [earlyFile], START);
+  expect(planned.summary.beforeStart).toBe(1);
+  expect(planned.plan.items.map((item) => item.text)).toEqual(["first day"]);
+  expect(planned.plan.observations.map((observation) => observation.row)).toEqual([2]);
+  expect(planned.plan.blobs).toEqual([]);
+  expect(planned.summary.lists.unreferencedFiles).toEqual([]);
 });

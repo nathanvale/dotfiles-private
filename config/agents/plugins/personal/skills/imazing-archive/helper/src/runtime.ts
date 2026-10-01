@@ -19,6 +19,7 @@ import {
   ArchiveMarker,
   AssociationRecordSchema,
   BlobRecordSchema,
+  ReceiptExclusion,
   DecisionRecordSchema,
   ItemRecordSchema,
   ObservationRecordSchema,
@@ -29,6 +30,7 @@ import { DERIVED_REVISION, derivedFiles, pendingImages } from "./derived.ts";
 import {
   acquireJournalLock,
   appendJournal,
+  JournalIntegrityError,
   JournalLockHeld,
   type JournalRecord,
   pendingJournalIntent,
@@ -78,6 +80,8 @@ export class EffectUncertainError extends Error {
 
 export const IMPORT_EFFECT = "effect.import";
 export const DECISION_EFFECT = "effect.decision";
+/** Names the journal itself when it cannot be read as a set of effects. */
+export const JOURNAL_ENTRY = "archive.journal";
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
@@ -250,6 +254,23 @@ async function readMarker(archive: string) {
   return parsed.data;
 }
 
+/** The start date is fixed when the archive is created. */
+function checkStartDate(
+  recorded: string | undefined,
+  startDate: string,
+  state: ArchiveState,
+): void {
+  if (recorded === undefined) {
+    if (state.items.size === 0) return;
+    throw new PreconditionError("The archive records no start date to compare.");
+  }
+  if (recorded !== startDate) {
+    throw new PreconditionError(
+      `The --start-date ${startDate} differs from the archive's start date ${recorded}.`,
+    );
+  }
+}
+
 /**
  * One archive holds one chat. Its identity is the export's set of Sender IDs
  * (Chat Session names differ between exports of the same chat).
@@ -282,6 +303,8 @@ export interface ImportSource {
   archive: string;
   attachments: string;
   csv: string;
+  /** Local calendar date `YYYY-MM-DD`; earlier rows are left out. */
+  startDate: string;
 }
 
 export interface PreparedImport extends PlannedImport {
@@ -311,12 +334,20 @@ export async function prepareImport(
   const exportSha256 = createHash("sha256").update(bytes).digest("hex");
   const parsed = readExport(bytes.toString("utf8"));
   const senderIds = await checkChatIdentity(source.archive, parsed, state);
+  const marker = await readMarker(source.archive);
+  checkStartDate(marker?.startDate, source.startDate, state);
   const scan = await scanAttachments(
     source.attachments,
     parsed.chatSession,
     source.csv,
   );
-  const planned = planImport(state, parsed, exportSha256, scan.files);
+  const planned = planImport(
+    state,
+    parsed,
+    exportSha256,
+    scan.files,
+    source.startDate,
+  );
   return { ...planned, bytes, exportSha256, parsed, scan, senderIds };
 }
 
@@ -353,6 +384,7 @@ export interface Receipt {
   recordedAt: string;
   runId: string;
   archive: string;
+  startDate: string;
   summary: ImportSummary;
 }
 
@@ -378,6 +410,7 @@ export function receiptFor(
     receiptVersion: 1,
     recordedAt: new Date().toISOString(),
     runId: randomUUID(),
+    startDate: source.startDate,
     summary: prepared.summary,
   };
 }
@@ -555,7 +588,7 @@ async function writeEffects(
 
 export type ApplyOutcome =
   | { status: "applied"; prepared: PreparedImport; receiptPath: string }
-  | { status: "blocked"; effectId: string }
+  | Blocked
   | { status: "busy" }
   | { status: "residue" }
   | { status: "stale"; digest: string }
@@ -580,7 +613,8 @@ async function testPauseAfterIntent(): Promise<void> {
   }
 }
 
-type Locked<T> = T | { status: "blocked"; effectId: string } | { status: "busy" } | { status: "residue" };
+export type Blocked = { status: "blocked"; effectId: string; reason?: string | undefined };
+type Locked<T> = T | Blocked | { status: "busy" } | { status: "residue" };
 
 /** Runs one archive writer under the journal lock after recovery checks. */
 async function withWriter<T>(
@@ -603,7 +637,7 @@ async function withWriter<T>(
   try {
     const pending = await inspectRecovery(archive);
     if (pending.state === "unknown") {
-      return { effectId: pending.effectId, status: "blocked" };
+      return { effectId: pending.effectId, reason: pending.reason, status: "blocked" };
     }
     return await work();
   } finally {
@@ -633,8 +667,9 @@ export async function applyImport(
       await checkRecordTail(source.archive, path);
     }
     const record = { effectId: IMPORT_EFFECT, expectedValueHash: prepared.digest, journalVersion: 1 as const, runId };
-    if ((await readMarker(source.archive))?.chatIdentity === undefined) {
-      const marker = { archiveVersion: 1, chatIdentity: { senderIds: prepared.senderIds } };
+    const existing = await readMarker(source.archive);
+    if (existing?.chatIdentity === undefined || existing.startDate === undefined) {
+      const marker = { archiveVersion: 1, chatIdentity: { senderIds: prepared.senderIds }, startDate: source.startDate };
       await writePrivate(join(source.archive, MARKER), `${JSON.stringify(marker)}\n`);
     }
     await appendJournal(journalState(source.archive), { ...record, phase: "intent" });
@@ -644,16 +679,16 @@ export async function applyImport(
       receipt.effects = await writeEffects(source, prepared);
       receipt.effectId = IMPORT_EFFECT;
       receiptPath = await writeReceipt(receipt);
+      await appendJournal(journalState(source.archive), { ...record, phase: "completed" });
     } catch (error) {
       throw new EffectUncertainError(IMPORT_EFFECT, String(error));
     }
-    await appendJournal(journalState(source.archive), { ...record, phase: "completed" });
     return { prepared, receiptPath, status: "applied" };
   });
 }
 
 export type DecideOutcome =
-  | { status: "blocked"; effectId: string }
+  | Blocked
   | { status: "busy" }
   | { status: "recorded" }
   | { status: "residue" }
@@ -679,19 +714,21 @@ export async function recordDecision(
     try {
       await appendRecords(archive, RECORDS.decisions, [decision]);
       await regenerateDerived(archive);
+      await appendJournal(journalState(archive), { ...record, phase: "completed" });
     } catch (error) {
       throw new EffectUncertainError(DECISION_EFFECT, String(error));
     }
-    await appendJournal(journalState(archive), { ...record, phase: "completed" });
     return { status: "recorded" };
   });
 }
 
-type ReceiptProof = z.infer<typeof ReceiptMarker>;
-
-async function archiveReceipts(archive: string): Promise<ReceiptProof[]> {
+/** Archive receipts that match `schema`; unreadable ones prove nothing. */
+async function archiveReceipts<T>(
+  archive: string,
+  schema: z.ZodType<T>,
+): Promise<T[]> {
   const names = await readdir(join(archive, "imports")).catch(() => []);
-  const receipts: ReceiptProof[] = [];
+  const receipts: T[] = [];
   for (const name of names.filter((entry) => entry.endsWith(".json"))) {
     const text = await readFile(join(archive, "imports", name), "utf8");
     let value: unknown;
@@ -700,7 +737,7 @@ async function archiveReceipts(archive: string): Promise<ReceiptProof[]> {
     } catch {
       continue;
     }
-    const parsed = ReceiptMarker.safeParse(value);
+    const parsed = schema.safeParse(value);
     if (parsed.success) receipts.push(parsed.data);
   }
   return receipts;
@@ -741,7 +778,7 @@ async function importProven(
   archive: string,
   pending: JournalRecord,
 ): Promise<boolean> {
-  for (const receipt of await archiveReceipts(archive)) {
+  for (const receipt of await archiveReceipts(archive, ReceiptMarker)) {
     if (
       receipt.runId === pending.runId &&
       receipt.effectId === pending.effectId &&
@@ -776,20 +813,35 @@ async function decisionProven(
 }
 
 export type RecoveryObservation =
-  | { effectId: null; state: "none" }
-  | { effectId: string; state: "completed" | "unknown" };
+  | { effectId: null; reason?: undefined; state: "none" }
+  | { effectId: string; reason?: string; state: "completed" | "unknown" };
 
 /** Read-only: a pending intent is complete only when its effects read back. */
 export async function inspectRecovery(
   archive: string,
 ): Promise<RecoveryObservation> {
-  const pending = await pendingJournalIntent(journalState(archive));
+  let pending: JournalRecord | null;
+  try {
+    pending = await pendingJournalIntent(journalState(archive));
+  } catch (error) {
+    if (!(error instanceof JournalIntegrityError)) throw error;
+    return { effectId: JOURNAL_ENTRY, reason: error.message, state: "unknown" };
+  }
   if (pending === null) return { effectId: null, state: "none" };
   const proven =
     pending.effectId === DECISION_EFFECT
       ? await decisionProven(archive, pending)
       : pending.effectId === IMPORT_EFFECT && (await importProven(archive, pending));
   return { effectId: pending.effectId, state: proven ? "completed" : "unknown" };
+}
+
+/** Rows left out before the start date, counted once per applied export. */
+async function beforeStartCount(archive: string): Promise<number> {
+  const byExport = new Map<string, number>();
+  for (const receipt of await archiveReceipts(archive, ReceiptExclusion)) {
+    byExport.set(receipt.csv.sha256, receipt.summary.beforeStart);
+  }
+  return [...byExport.values()].reduce((total, count) => total + count, 0);
 }
 
 export async function archiveStatus(archive: string) {
@@ -801,11 +853,13 @@ export async function archiveStatus(archive: string) {
   return {
     ambiguousItems: state.ambiguities.size,
     associations,
+    beforeStart: await beforeStartCount(archive),
     blobs: state.blobs.size,
     decisions: state.decisions.size,
     exports: state.originals.size,
     items: state.items.size,
     pendingImages: pendingImages(state).length,
     recovery: (await inspectRecovery(archive)).state,
+    startDate: (await readMarker(archive))?.startDate ?? null,
   };
 }

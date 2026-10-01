@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 
 const JournalRecordSchema = z.strictObject({
@@ -24,6 +24,9 @@ const JournalRecordSchema = z.strictObject({
 });
 
 export type JournalRecord = z.infer<typeof JournalRecordSchema>;
+
+/** The journal is torn or holds an invalid entry; nothing can be proven. */
+export class JournalIntegrityError extends Error {}
 
 export class JournalLockHeld extends Error {
   constructor(readonly ownerAlive: boolean) {
@@ -148,7 +151,31 @@ export async function appendJournal(
   const parsed = JournalRecordSchema.parse(record);
   const path = journalPath(statePath);
   await mkdir(dirname(path), { recursive: true });
+  const file = Bun.file(path);
+  if (
+    (await file.exists()) &&
+    file.size > 0 &&
+    (await file.slice(file.size - 1).text()) !== "\n"
+  ) {
+    throw new JournalIntegrityError(
+      `${basename(path)} does not end in a newline; its last entry is torn.`,
+    );
+  }
   await appendFile(path, `${JSON.stringify(parsed)}\n`, { encoding: "utf8" });
+}
+
+function parseEntry(line: string, index: number, name: string): JournalRecord {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    value = null;
+  }
+  const parsed = JournalRecordSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new JournalIntegrityError(`${name} line ${index + 1} is not a valid entry.`);
+  }
+  return parsed.data;
 }
 
 async function readJournal(statePath: string): Promise<JournalRecord[]> {
@@ -161,10 +188,16 @@ async function readJournal(statePath: string): Promise<JournalRecord[]> {
     }
     throw error;
   }
+  const name = basename(journalPath(statePath));
+  if (text !== "" && !text.endsWith("\n")) {
+    throw new JournalIntegrityError(
+      `${name} does not end in a newline; its last entry is torn.`,
+    );
+  }
   return text
     .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JournalRecordSchema.parse(JSON.parse(line)));
+    .slice(0, -1)
+    .map((line, index) => parseEntry(line, index, name));
 }
 
 export async function pendingJournalIntent(

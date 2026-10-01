@@ -38,6 +38,9 @@ export interface OperationResult {
   transactionState: TransactionState;
 }
 
+/** The archive begins on this local calendar date unless created otherwise. */
+export const DEFAULT_START_DATE = "2023-10-15";
+
 export const IMAGE_TYPES = [
   "photo",
   "screenshot",

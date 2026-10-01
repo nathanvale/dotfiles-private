@@ -44,6 +44,9 @@ const NEW_ONLY: Message[] = [
   { attachment: "dup.png", attachmentType: "Image", date: "2024-02-05 09:00:00", id: "ID-K", type: "Incoming" },
 ];
 
+// One day before the archive start date of 2023-10-15, with its file.
+const BEFORE_START: Message = { attachment: "early.png", attachmentType: "Image", date: "2023-10-14 23:59:59", id: "ID-Z", type: "Incoming" };
+
 const OLD_ONLY: Message[] = [
   { date: "2023-10-25 18:00:00", id: "", text: "only in the old export", type: "Outgoing" },
   { date: "2023-10-26 08:00:00", id: "", text: "ha", type: "Incoming" },
@@ -85,6 +88,7 @@ function exported(chat: string, date: string, name: string): string {
 export const BYTES = {
   dupA: "dup-bytes-one",
   dupB: "dup-bytes-two",
+  early: "early-bytes",
   img: "same-bytes-sent-twice",
   link: "[InternetShortcut]\nURL=https://example.com/x\n",
   lost: "lost-photo-bytes",
@@ -100,9 +104,13 @@ async function put(root: string, path: string, text: string): Promise<void> {
 }
 
 /** New 18-column export: BOM, CRLF, Message IDs, attachments beside it. */
-export async function writeNewExport(root: string): Promise<string> {
+export async function writeNewExport(
+  root: string,
+  options: { beforeStart?: boolean } = {},
+): Promise<string> {
   const chat = "Robin Example";
-  const rows = [...MESSAGES, ...NEW_ONLY].map((message) => newRow(chat, message));
+  const early = options.beforeStart === true ? [BEFORE_START] : [];
+  const rows = [...MESSAGES, ...NEW_ONLY, ...early].map((message) => newRow(chat, message));
   const csv = join(root, "Messages - Robin Example.csv");
   await mkdir(root, { recursive: true });
   await writeFile(csv, `﻿${[NEW_HEADER, ...rows].join("\r\n")}\r\n`);
@@ -117,6 +125,9 @@ export async function writeNewExport(root: string): Promise<string> {
   await put(root, exported(chat, "2024-02-05 09:00:00", "dup 1.png"), BYTES.dupB);
   await put(root, exported(chat, "2024-03-01 00:00:00", "stray.png"), BYTES.stray);
   await put(root, exported("Someone Else", "2024-03-01 00:00:00", "other.png"), BYTES.stray);
+  if (options.beforeStart === true) {
+    await put(root, exported(chat, BEFORE_START.date, "early.png"), BYTES.early);
+  }
   return csv;
 }
 

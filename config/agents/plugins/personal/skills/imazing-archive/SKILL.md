@@ -22,7 +22,11 @@ envelope. `--help` prints the exact usage.
    never the existing meme corpus or a folder inside the attachments root.
    The helper refuses a non-empty folder that lacks `archive.json`. One archive
    holds one chat: the first apply records the export's Sender IDs, and an
-   export with different Sender IDs is refused.
+   export with different Sender IDs is refused. The first apply also fixes the
+   archive start date: `--start-date YYYY-MM-DD`, default `2023-10-15`. Every
+   later import passes the same date (an omitted flag means the default); a
+   different date is refused. Rows dated before it, compared on the date part
+   of the local Message Date, are left out and counted as `beforeStart`.
 2. Name the attachments root with `--attachments DIR`: the folder holding the
    export's exported files (files at depth one or two). For a new-style export
    it is the CSV's own folder; for the 2025 archive export it is
@@ -31,8 +35,8 @@ envelope. `--help` prints the exact usage.
    `import --archive DIR --csv FILE --attachments DIR --preview`.
    Preview writes only a private receipt; the archive stays untouched.
 4. Read the receipt it names. Report its counts to Nathan, including
-   `attachmentRowResolution`, `planned`, and the `ambiguous*`, `missing*`, and
-   `unreferencedFiles` lists.
+   `beforeStart`, `attachmentRowResolution`, `planned`, and the `ambiguous*`,
+   `missing*`, and `unreferencedFiles` lists.
 5. Apply the reviewed plan: rerun the same command with `--plan DIGEST` in place
    of `--preview`. A changed archive or source refuses as stale; preview again.
 

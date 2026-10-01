@@ -704,6 +704,8 @@ export interface PlannedImport {
 
 export interface ImportSummary {
   attachmentRows: number;
+  /** Rows whose Message Date's date part precedes the archive start date. */
+  beforeStart: number;
   attachmentRowResolution: { ambiguous: number; missing: number; resolved: number };
   chatFiles: number;
   lists: {
@@ -745,13 +747,24 @@ function listAttachments(rows: ExportRow[], resolution: AttachmentResolution) {
   return { ambiguous, missing };
 }
 
-/** Pure import plan: identical inputs and archive revision give one digest. */
+/**
+ * Pure import plan: identical inputs and archive revision give one digest.
+ * Rows and files dated before `startDate` (date part of the local Message
+ * Date or file timestamp) are left out and counted, never planned.
+ */
 export function planImport(
   state: ArchiveState,
-  parsed: ParsedExport,
+  exported: ParsedExport,
   exportSha256: string,
-  files: AttachmentFile[],
+  exportedFiles: AttachmentFile[],
+  startDate: string,
 ): PlannedImport {
+  const inRange = (date: string) => date.slice(0, 10) >= startDate;
+  const parsed = {
+    ...exported,
+    rows: exported.rows.filter((row) => inRange(row.messageDate)),
+  };
+  const files = exportedFiles.filter((file) => inRange(file.timestamp));
   const resolution = resolveAttachments(parsed.rows, files);
   const rowSha = new Map<number, string>();
   for (const [row, cell] of resolution.cells) {
@@ -772,7 +785,8 @@ export function planImport(
   const summary: ImportSummary = {
     attachmentRowResolution: countStatuses(resolution.cells.values()),
     attachmentRows: resolution.cells.size,
-    chatFiles: files.length,
+    beforeStart: exported.rows.length - parsed.rows.length,
+    chatFiles: exportedFiles.length,
     lists: {
       ambiguousAttachments: attachmentLists.ambiguous,
       ambiguousMessageLinks: items.ambiguousLinks,
@@ -782,7 +796,7 @@ export function planImport(
       nearMatches: items.nearMatches,
       unreferencedFiles: resolution.unreferenced,
     },
-    messageRows: parsed.rows.length,
+    messageRows: exported.rows.length,
     observations: items.counts,
     planned: {
       associations: countStatuses(plan.associations),
@@ -800,7 +814,7 @@ export function planImport(
     },
   };
   const digest = sha256(
-    JSON.stringify({ exportSha256, plan, revision: state.revision }),
+    JSON.stringify({ exportSha256, plan, revision: state.revision, startDate }),
   );
   return { digest, plan, summary };
 }

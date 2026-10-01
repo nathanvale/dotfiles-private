@@ -15,7 +15,8 @@ import {
   succeeded,
   writerBusy,
 } from "./engine.ts";
-import type { OperationResult } from "./model.ts";
+import { JournalIntegrityError } from "./journal.ts";
+import { DEFAULT_START_DATE, type OperationResult } from "./model.ts";
 import { type PlannedImport, planIsEmpty } from "./planner.ts";
 import { systemProcessLifecycle } from "./process-lifecycle.ts";
 import {
@@ -28,6 +29,7 @@ import {
   DerivedWriteError,
   EffectUncertainError,
   IMPORT_EFFECT,
+  JOURNAL_ENTRY,
   type ImportSource,
   InvalidArchiveError,
   inspectRecovery,
@@ -44,7 +46,7 @@ process.on("SIGINT", () => lifecycle.terminate(130));
 process.on("SIGTERM", () => lifecycle.terminate(143));
 
 const USAGE = [
-  "imazing-archive import --archive DIR --csv FILE --attachments DIR (--preview | --plan DIGEST) [--json]",
+  "imazing-archive import --archive DIR --csv FILE --attachments DIR (--preview | --plan DIGEST) [--start-date YYYY-MM-DD] [--json]",
   "imazing-archive status --archive DIR [--json]",
   "imazing-archive recover --archive DIR [--json]",
   "imazing-archive decide --archive DIR --item KEY [--image-type TYPE] [--contains-meme true|false|unknown] [--reviewed] [--album undecided|selected|rejected] [--json]",
@@ -55,6 +57,7 @@ ${USAGE.map((line) => `  ${line}`).join("\n")}
 
 Commands:
   import   Preview, then apply with the previewed plan digest, one iMazing CSV export.
+           Rows dated before --start-date (default ${DEFAULT_START_DATE}, fixed at creation) are left out.
   status   Count archive records, unresolved links, and pending images.
   recover  Inspect an interrupted import without replaying it.
   decide   Record image type, meme, review, or album decisions for one item.
@@ -182,7 +185,7 @@ async function recover(args: string[]): Promise<OperationResult> {
   await checkArchive(archive, true);
   const observation = await inspectRecovery(archive);
   if (observation.state === "unknown") {
-    return recoveryRequired("imazing-archive.recover", observation.effectId);
+    return recoveryRequired("imazing-archive.recover", observation.effectId, observation.reason);
   }
   return succeeded(
     "imazing-archive.recover",
@@ -205,15 +208,25 @@ function importSource(args: string[]): {
   plan: string | null;
   source: ImportSource;
 } | OperationResult {
-  const options = parseOptions(args, ["archive", "attachments", "csv", "plan"], ["preview"]);
+  const options = parseOptions(args, ["archive", "attachments", "csv", "plan", "start-date"], ["preview"]);
   const { archive, attachments, csv, plan, preview } = options ?? {};
+  const startDate = options?.["start-date"] ?? DEFAULT_START_DATE;
   if (
     typeof archive !== "string" ||
     typeof attachments !== "string" ||
     typeof csv !== "string" ||
-    (preview === undefined) === (plan === undefined)
+    (preview === undefined) === (plan === undefined) ||
+    typeof startDate !== "string"
   ) {
     return usage("imazing-archive.import");
+  }
+  if (!isCalendarDate(startDate)) {
+    return refused(
+      "imazing-archive.import",
+      "SCHEMA_INVALID_INPUT",
+      "The start date is not a YYYY-MM-DD calendar date.",
+      `Pass --start-date YYYY-MM-DD, or omit it for ${DEFAULT_START_DATE}.`,
+    );
   }
   if (typeof plan === "string" && !/^[0-9a-f]{64}$/.test(plan)) {
     return refused(
@@ -227,8 +240,15 @@ function importSource(args: string[]): {
     archive: resolve(archive),
     attachments: resolve(attachments),
     csv: resolve(csv),
+    startDate,
   };
   return { plan: typeof plan === "string" ? plan : null, source };
+}
+
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d\d-\d\d$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
 }
 
 function appliedResult(outcome: ApplyOutcome): OperationResult {
@@ -241,7 +261,7 @@ function appliedResult(outcome: ApplyOutcome): OperationResult {
     case "stale":
       return refused(identity, "DOMAIN_PREVIEW_STALE", "The archive or sources changed since the preview.", "Run --preview again and review the new plan.");
     case "blocked":
-      return recoveryRequired(identity, outcome.effectId);
+      return recoveryRequired(identity, outcome.effectId, outcome.reason);
     case "busy":
       return writerBusy(identity);
     case "residue":
@@ -304,7 +324,7 @@ async function decide(args: string[]): Promise<OperationResult> {
   if (outcome.status === "unknown-item") {
     return refused(identity, "DOMAIN_PRECONDITION_UNMET", "The item key is not in the archive.", "Use an item_key from derived/messages.csv.");
   }
-  if (outcome.status === "blocked") return recoveryRequired(identity, outcome.effectId);
+  if (outcome.status === "blocked") return recoveryRequired(identity, outcome.effectId, outcome.reason);
   return outcome.status === "busy" ? writerBusy(identity) : lockResidue(identity);
 }
 
@@ -330,6 +350,9 @@ async function guarded(
     }
     if (error instanceof ExportFormatError) {
       return refused(commandIdentity, "SCHEMA_INVALID_INPUT", error.message, "Pass an unmodified iMazing CSV export.");
+    }
+    if (error instanceof JournalIntegrityError) {
+      return recoveryRequired(commandIdentity, JOURNAL_ENTRY, error.message);
     }
     if (error instanceof DerivedWriteError) {
       return derivedUnwritable(commandIdentity, error.message);
