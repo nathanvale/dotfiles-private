@@ -27,6 +27,8 @@ my $real = slurp("$root/real-codex");
 my $command = $ARGV[0] // "";
 
 if ($command eq "exec") {
+	# Marks the start before reading standard input, so a run killed mid-input still shows that a model process began.
+	spill("$root/exec-started", "started");
 	my $count = 0;
 	$count++ while -e "$root/exec-$count.json";
 	local $/;

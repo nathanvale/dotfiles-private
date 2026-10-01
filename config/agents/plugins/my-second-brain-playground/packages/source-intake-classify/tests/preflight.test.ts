@@ -2,22 +2,24 @@
 // this run cannot prove the lane denies both receipt roots. The weakened double is a fake codex whose sandbox runs
 // every probe unsandboxed, and, at module level, a profile with the explicit denies removed and read on the root.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { type Lane, laneConfigArgs, prepareLane } from "../src/lane.ts"
 import { runPreflight } from "../src/preflight.ts"
 import {
 	clearObservations,
-	COMMAND,
 	createFixture,
 	execObservations,
+	execStarted,
 	type Fixture,
 	invoke,
 	LANE_REFUSAL_JSON,
 	laneInput,
 	laneLedger,
 	removeFixture,
+	RUNTIME,
 	SENTINEL,
+	SPAWN_RECORDER_PRELOAD,
 	setFake,
 } from "./fixtures/harness.ts"
 
@@ -51,7 +53,11 @@ function expectRefusedWithoutModel(args: string[], options: { env?: Record<strin
 }
 
 proofs.test("positive control: the honest lane passes the pre-flight and starts the model once", () => {
-	expect(invoke(fixture, ["classify", "--json"], { stdin: input }).exitCode).toBe(0)
+	const spawnLog = join(fixture.root, "positive-control.spawns")
+	expect(invoke(fixture, ["classify", "--json"], { stdin: input, preload: SPAWN_RECORDER_PRELOAD, env: { SOURCE_INTAKE_TEST_SPAWN_LOG: spawnLog } }).exitCode).toBe(0)
+	// Both start oracles see this lane, so their absence in the signal tests is evidence, not a blind check.
+	expect(laneSpawns(spawnLog)).toBe(1)
+	expect(execStarted(fixture)).toBe(true)
 	expect(execObservations(fixture)).toHaveLength(1)
 	// The throwaway sentinel item directory is removed after every pre-flight; only the fixture's own item remains.
 	expect(readdirSync(join(fixture.privateRoot, "drive-inbox-filing", "items"))).toEqual(["synthetic-item-001"])
@@ -89,17 +95,43 @@ proofs.test("a rendered permission entry in an unrecognised format is refused", 
 // Independent oracle: the opaque item ref shape restated from the source-intake-dispatch README.
 const OPAQUE_ITEM_REF_SHAPE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
-/** Starts classify with the slow-probe fake and resolves once the pre-flight is paused at a sandboxed receipt read. */
-async function classifyPausedInPreflight(): Promise<Bun.Subprocess<"pipe", "pipe", "pipe">> {
+/** Lane spawns the parent recorded before creating each process; a missing log means none. */
+function laneSpawns(spawnLog: string): number {
+	return existsSync(spawnLog) ? readFileSync(spawnLog, "utf8").split("\n").filter((line) => line === "exec").length : 0
+}
+
+interface PausedRun {
+	child: Bun.Subprocess<"pipe", "pipe", "pipe">
+	runTmpdir: string
+	spawnLog: string
+}
+
+/**
+ * Starts classify under the parent-side spawn recorder with the slow-probe fake, and resolves once the pre-flight is
+ * paused at a sandboxed receipt read.
+ */
+async function classifyPausedInPreflight(): Promise<PausedRun> {
 	setFake(fixture, "slow-probe")
 	const marker = join(fixture.fakeRoot, "probe-waiting")
 	rmSync(marker, { force: true })
-	const child = Bun.spawn({ cmd: [COMMAND, "classify", "--json"], cwd: fixture.root, env: { ...fixture.env, PATH: `${fixture.env.PATH}:${dirname(process.execPath)}` }, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+	// A fresh fixture-owned TMPDIR per run makes this run's workspace visible, so a test can see whether it was removed.
+	const runTmpdir = mkdtempSync(join(fixture.root, "run-tmp-"))
+	const spawnLog = `${runTmpdir}.spawns`
+	const env = { ...fixture.env, TMPDIR: runTmpdir, SOURCE_INTAKE_TEST_SPAWN_LOG: spawnLog }
+	const child = Bun.spawn({ cmd: [process.execPath, "--preload", SPAWN_RECORDER_PRELOAD, RUNTIME, "classify", "--json"], cwd: fixture.root, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
 	child.stdin.write(input)
 	await child.stdin.end()
 	for (let attempt = 0; attempt < 600 && !existsSync(marker); attempt += 1) await Bun.sleep(50)
 	expect(existsSync(marker)).toBe(true)
-	return child
+	return { child, runTmpdir, spawnLog }
+}
+
+// Independent oracle: the workspace name prefix restated from the package README ("a fresh, empty 0700 directory
+// under TMPDIR"), as src/lane.ts createWorkspace names it.
+const WORKSPACE_PREFIX = "source-intake-classify-"
+
+function workspacesLeft(runTmpdir: string): string[] {
+	return readdirSync(runTmpdir).filter((name) => name.startsWith(WORKSPACE_PREFIX))
 }
 
 function itemsBesideFixture(): string[] {
@@ -108,9 +140,11 @@ function itemsBesideFixture(): string[] {
 
 // Wrong behavior caught: a killed pre-flight leaving a sentinel that dispatch would accept as a real item directory.
 proofs.test("a pre-flight killed mid-probe leaves nothing shaped like a receipt item", async () => {
-	const child = await classifyPausedInPreflight()
+	const { child, runTmpdir } = await classifyPausedInPreflight()
 	child.kill("SIGKILL")
 	await child.exited
+	// Positive control for the workspace oracle: SIGKILL cannot run cleanup, so exactly this run's workspace remains.
+	expect(workspacesLeft(runTmpdir)).toHaveLength(1)
 	const leftovers = itemsBesideFixture()
 	try {
 		expect(leftovers.length).toBeGreaterThan(0)
@@ -120,14 +154,24 @@ proofs.test("a pre-flight killed mid-probe leaves nothing shaped like a receipt 
 	}
 }, 60_000)
 
-// Wrong behavior caught: a SIGTERM during the synchronous pre-flight handled only after the model process started.
-proofs.test("SIGTERM mid pre-flight exits 143, starts no model and leaves no sentinel", async () => {
-	const child = await classifyPausedInPreflight()
-	child.kill("SIGTERM")
-	expect(await child.exited).toBe(143)
-	expect(execObservations(fixture)).toEqual([])
-	expect(itemsBesideFixture()).toEqual([])
-}, 60_000)
+// Wrong behavior caught: a signal during the synchronous pre-flight handled only after the lane process was spawned
+// (Bun runs signal handlers on the event loop, after the blocking pre-flight), or an exit that skips the workspace
+// cleanup. The spawn recorder sees a lane even when the handler kills it within a millisecond.
+for (const [signal, exitCode] of [
+	["SIGTERM", 143],
+	["SIGINT", 130],
+] as const) {
+	proofs.test(`${signal} mid pre-flight exits ${exitCode}, starts no model and leaves no sentinel or workspace`, async () => {
+		const { child, runTmpdir, spawnLog } = await classifyPausedInPreflight()
+		child.kill(signal)
+		expect(await child.exited).toBe(exitCode)
+		expect(laneSpawns(spawnLog)).toBe(0)
+		expect(execStarted(fixture)).toBe(false)
+		expect(execObservations(fixture)).toEqual([])
+		expect(itemsBesideFixture()).toEqual([])
+		expect(workspacesLeft(runTmpdir)).toEqual([])
+	}, 60_000)
+}
 
 test("the refusal names no path, sentinel or probe output", () => {
 	for (const text of [LANE_REFUSAL_JSON, LANE_REFUSAL_HUMAN]) {
@@ -201,4 +245,4 @@ describe("module-level pre-flight", () => {
 	}, 60_000)
 })
 
-proofs.pin(13)
+proofs.pin(14)
