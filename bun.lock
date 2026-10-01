@@ -73,6 +73,15 @@
       "name": "diff-toggle",
       "version": "0.3.5",
     },
+    "config/agents/plugins/personal/skills/imazing-archive/helper": {
+      "name": "imazing-archive",
+      "version": "0.1.0",
+      "dependencies": {
+        "@logtape/logtape": "2.3.1",
+        "@logtape/redaction": "2.3.1",
+        "zod": "4.4.3",
+      },
+    },
     "config/agents/plugins/personal/skills/xero-cash-coding/helper": {
       "name": "xero-history",
       "version": "0.1.0",
@@ -232,6 +241,8 @@
 
     "@logtape/logtape": ["@logtape/logtape@2.3.1", "", {}, "sha512-nYLsBWMKk0Llp62U6cDbQxNcEKc0E0s5hWbAxkmUM8ax6VchGkPSjPrVp3ixFQUuvUB9ku7MSgPzFhmVTSh2Jw=="],
 
+    "@logtape/redaction": ["@logtape/redaction@2.3.1", "", { "peerDependencies": { "@logtape/logtape": "^2.3.1" } }, "sha512-djd6+dl7QvwW4miYAX9p63gylz8EUKDANH9dlrkU6OzobELiTq7uqB1u5fINMtVsrJIQnukc1FpGx+fcZdeqVQ=="],
+
     "@side-quest/agent-native-state-machine-generator": ["@side-quest/agent-native-state-machine-generator@workspace:.agents/runtime/agent-native-state-machine-generator"],
 
     "@side-quest/cli-command-facade": ["@side-quest/cli-command-facade@workspace:.agents/runtime/cli-command-facade"],
@@ -389,6 +400,8 @@
     "global-directory": ["global-directory@4.0.1", "", { "dependencies": { "ini": "4.1.1" } }, "sha512-wHTUcDUoZ1H5/0iVqEudYW4/kAlN5cZ3j/bXn0Dpbizl9iaUVeWSHqiOjsgk6OW2bkLclbBjzewBz6weQ1zA2Q=="],
 
     "husky": ["husky@9.1.7", "", { "bin": { "husky": "bin.js" } }, "sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA=="],
+
+    "imazing-archive": ["imazing-archive@workspace:config/agents/plugins/personal/skills/imazing-archive/helper"],
 
     "import-fresh": ["import-fresh@3.3.1", "", { "dependencies": { "parent-module": "1.0.1", "resolve-from": "4.0.0" } }, "sha512-TR3KfrTZTYLPB6jUjfx6MF9WcWrHL9su5TObK4ZkYgBdWKPOFoSoQIdEuTuR82pmtxH2spWG9h6etwfr1pLBqQ=="],
 

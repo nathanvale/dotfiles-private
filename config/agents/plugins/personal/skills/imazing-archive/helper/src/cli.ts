@@ -1,0 +1,390 @@
+import { writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { stationsFor } from "./branch-station-catalog.ts";
+import { COMMANDS, DecideInput, envelope } from "./command-contract.ts";
+import { ExportFormatError } from "./csv.ts";
+import { attemptEmergencyDiagnostic, recordDiagnostic } from "./diagnostics.ts";
+import {
+  effectUnknown,
+  invalidArchive,
+  lockResidue,
+  parseOptions,
+  recoveryRequired,
+  refused,
+  succeeded,
+  writerBusy,
+} from "./engine.ts";
+import type { OperationResult } from "./model.ts";
+import type { PlannedImport } from "./planner.ts";
+import { systemProcessLifecycle } from "./process-lifecycle.ts";
+import {
+  type ApplyOutcome,
+  applyImport,
+  archiveStatus,
+  checkArchive,
+  EffectUncertainError,
+  type ImportSource,
+  InvalidArchiveError,
+  inspectRecovery,
+  loadArchive,
+  PreconditionError,
+  prepareImport,
+  receiptFor,
+  recordDecision,
+  writeReceipt,
+} from "./runtime.ts";
+
+const lifecycle = systemProcessLifecycle(attemptEmergencyDiagnostic);
+process.on("SIGINT", () => lifecycle.terminate(130));
+process.on("SIGTERM", () => lifecycle.terminate(143));
+
+const USAGE = [
+  "imazing-archive import --archive DIR --csv FILE --attachments DIR (--preview | --plan DIGEST) [--json]",
+  "imazing-archive status --archive DIR [--json]",
+  "imazing-archive recover --archive DIR [--json]",
+  "imazing-archive decide --archive DIR --item KEY [--image-type TYPE] [--contains-meme true|false|unknown] [--reviewed] [--album undecided|selected|rejected] [--json]",
+];
+
+const HUMAN_HELP = `Usage:
+${USAGE.map((line) => `  ${line}`).join("\n")}
+
+Commands:
+  import   Preview, then apply with the previewed plan digest, one iMazing CSV export.
+  status   Count archive records, unresolved links, and pending images.
+  recover  Inspect an interrupted import without replaying it.
+  decide   Record image type, meme, review, or album decisions for one item.
+
+Discovery:
+  imazing-archive --discover
+  imazing-archive --discover-command COMMAND_IDENTITY
+`;
+
+const IMPORT_EFFECT = "effect.import";
+const DECISION_EFFECT = "effect.decision";
+
+function hasJson(argv: string[]): boolean {
+  const separator = argv.indexOf("--");
+  return (separator === -1 ? argv : argv.slice(0, separator)).includes(
+    "--json",
+  );
+}
+
+async function waitForLifecycleTest(): Promise<void> {
+  if (process.env.NODE_ENV !== "test") return;
+  const readyPath = process.env.IMAZING_ARCHIVE_TEST_READY_PATH;
+  if (readyPath !== undefined) await writeFile(readyPath, "ready\n");
+  const crash = process.env.IMAZING_ARCHIVE_TEST_CRASH;
+  if (crash === "uncaught" || crash === "unhandled") {
+    await new Promise<void>(() => {
+      queueMicrotask(() => {
+        if (crash === "uncaught") throw new Error("test uncaught exception");
+        void Promise.reject(new Error("test unhandled rejection"));
+      });
+    });
+  }
+  const milliseconds = Number(process.env.IMAZING_ARCHIVE_TEST_DELAY_MS ?? "0");
+  if (Number.isSafeInteger(milliseconds) && milliseconds > 0) {
+    await Bun.sleep(milliseconds);
+  }
+}
+
+function humanLines(result: ReturnType<typeof envelope>): string {
+  const lines = [result.message];
+  const data = result.result.data;
+  if (typeof data === "object" && data !== null) {
+    for (const key of ["planDigest", "receiptPath"] as const) {
+      if (key in data) lines.push(`${key}: ${String(data[key as keyof typeof data])}`);
+    }
+  }
+  if (result.result.outcome === "success" && result.result.nextAction !== undefined) {
+    lines.push(`Next: ${result.result.nextAction}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function writeResult(result: ReturnType<typeof envelope>, json: boolean): void {
+  if (process.env.NODE_ENV === "test") {
+    const paddingBytes = Number(
+      process.env.IMAZING_ARCHIVE_TEST_OUTPUT_BYTES ?? "0",
+    );
+    if (Number.isSafeInteger(paddingBytes) && paddingBytes > 0) {
+      result.result.data = {
+        original: result.result.data,
+        padding: "x".repeat(paddingBytes),
+      };
+    }
+  }
+  if (json) {
+    lifecycle.stdout(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if (result.result.outcome === "success") lifecycle.stdout(humanLines(result));
+  else lifecycle.stderr(`${result.message} ${result.result.repairAction ?? ""}`.trim().concat("\n"));
+}
+
+function discoveryData() {
+  return {
+    commands: COMMANDS,
+    contractVersion: "2.0.0",
+    effectExclusions: [
+      "Source CSVs and attachment folders are read only.",
+      "Preview receipts and diagnostics are not archive effects.",
+    ],
+    exitMeanings: {
+      "0": "success",
+      "1": "internal",
+      "2": "usage",
+      "3": "domain",
+      "4": "schema",
+      "75": "transient",
+    },
+    generationConventionVersion: "2.0.0",
+    profile: "complex",
+    signalExits: { "130": "SIGINT", "143": "SIGTERM" },
+  };
+}
+
+function usage(commandIdentity: string): OperationResult {
+  return refused(
+    commandIdentity,
+    "USAGE_INVALID_INVOCATION",
+    "The invocation is not supported.",
+    `Use: ${USAGE.join(" | ")}`,
+  );
+}
+
+function archiveOption(
+  commandIdentity: string,
+  args: string[],
+): string | OperationResult {
+  const options = parseOptions(args, ["archive"], []);
+  if (typeof options?.archive !== "string") return usage(commandIdentity);
+  return resolve(options.archive);
+}
+
+async function status(args: string[]): Promise<OperationResult> {
+  const archive = archiveOption("imazing-archive.status", args);
+  if (typeof archive !== "string") return archive;
+  await checkArchive(archive, true);
+  await waitForLifecycleTest();
+  return succeeded(
+    "imazing-archive.status",
+    "Archive inspected.",
+    await archiveStatus(archive),
+  );
+}
+
+async function recover(args: string[]): Promise<OperationResult> {
+  const archive = archiveOption("imazing-archive.recover", args);
+  if (typeof archive !== "string") return archive;
+  await checkArchive(archive, true);
+  const observation = await inspectRecovery(archive);
+  if (observation.state === "unknown") {
+    return recoveryRequired("imazing-archive.recover", observation.effectId);
+  }
+  return succeeded(
+    "imazing-archive.recover",
+    observation.state === "completed"
+      ? "The interrupted import has its completion receipt; it was not replayed."
+      : "No interrupted import needs recovery.",
+    { pendingEffect: observation.effectId, state: observation.state },
+  );
+}
+
+function publicSummary(planned: PlannedImport, receiptPath: string) {
+  const { lists, ...counts } = planned.summary;
+  const listSizes = Object.fromEntries(
+    Object.entries(lists).map(([name, values]) => [name, values.length]),
+  );
+  return { ...counts, listSizes, planDigest: planned.digest, receiptPath };
+}
+
+function importSource(args: string[]): {
+  plan: string | null;
+  source: ImportSource;
+} | OperationResult {
+  const options = parseOptions(args, ["archive", "attachments", "csv", "plan"], ["preview"]);
+  const { archive, attachments, csv, plan, preview } = options ?? {};
+  if (
+    typeof archive !== "string" ||
+    typeof attachments !== "string" ||
+    typeof csv !== "string" ||
+    (preview === undefined) === (plan === undefined)
+  ) {
+    return usage("imazing-archive.import");
+  }
+  if (typeof plan === "string" && !/^[0-9a-f]{64}$/.test(plan)) {
+    return refused(
+      "imazing-archive.import",
+      "SCHEMA_INVALID_INPUT",
+      "The plan digest is not a 64-character lowercase hex value.",
+      "Pass the planDigest printed by --preview.",
+    );
+  }
+  const source = {
+    archive: resolve(archive),
+    attachments: resolve(attachments),
+    csv: resolve(csv),
+  };
+  return { plan: typeof plan === "string" ? plan : null, source };
+}
+
+function appliedResult(outcome: ApplyOutcome): OperationResult {
+  const identity = "imazing-archive.import";
+  switch (outcome.status) {
+    case "applied":
+      return succeeded(identity, "Export imported.", publicSummary(outcome.prepared, outcome.receiptPath), IMPORT_EFFECT, "Review the receipt's missing and ambiguous lists.");
+    case "unchanged":
+      return succeeded(identity, "Export already imported; nothing changed.", publicSummary(outcome.prepared, outcome.receiptPath));
+    case "stale":
+      return refused(identity, "DOMAIN_PREVIEW_STALE", "The archive or sources changed since the preview.", "Run --preview again and review the new plan.");
+    case "blocked":
+      return recoveryRequired(identity, outcome.effectId);
+    case "busy":
+      return writerBusy(identity);
+    case "residue":
+      return lockResidue(identity);
+  }
+}
+
+async function importCommand(args: string[]): Promise<OperationResult> {
+  const parsed = importSource(args);
+  if ("commandIdentity" in parsed) return parsed;
+  const { plan, source } = parsed;
+  await checkArchive(source.archive, false);
+  if (plan !== null) return appliedResult(await applyImport(source, plan));
+  const prepared = await prepareImport(source, await loadArchive(source.archive));
+  const receiptPath = await writeReceipt(receiptFor(source, prepared, "preview"));
+  return succeeded(
+    "imazing-archive.import",
+    prepared.plan.observations.length === 0
+      ? "Preview: export already imported; nothing would change."
+      : "Preview: nothing was written to the archive.",
+    publicSummary(prepared, receiptPath),
+    null,
+    `Review the receipt, then rerun with --plan ${prepared.digest} to apply.`,
+  );
+}
+
+function decisionInput(args: string[]) {
+  const options = parseOptions(
+    args,
+    ["album", "archive", "contains-meme", "image-type", "item"],
+    ["reviewed"],
+  );
+  if (typeof options?.archive !== "string") return null;
+  const fields = {
+    albumSelection: options.album,
+    containsMeme: options["contains-meme"],
+    imageType: options["image-type"],
+    itemKey: options.item,
+    visualReview: options.reviewed === true ? "reviewed" : undefined,
+  };
+  const defined = Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined),
+  );
+  return { archive: resolve(options.archive), parsed: DecideInput.safeParse(defined) };
+}
+
+async function decide(args: string[]): Promise<OperationResult> {
+  const identity = "imazing-archive.decide";
+  const input = decisionInput(args);
+  if (input === null) return usage(identity);
+  if (!input.parsed.success) {
+    return refused(identity, "SCHEMA_INVALID_INPUT", "The decision is invalid.", "Pass --item KEY and at least one valid decision field.");
+  }
+  await checkArchive(input.archive, true);
+  const decision = { ...input.parsed.data, recordVersion: 1 as const, recordedAt: new Date().toISOString() };
+  const outcome = await recordDecision(input.archive, decision);
+  if (outcome.status === "recorded") {
+    return succeeded(identity, "Decision recorded.", decision, DECISION_EFFECT);
+  }
+  if (outcome.status === "unknown-item") {
+    return refused(identity, "DOMAIN_PRECONDITION_UNMET", "The item key is not in the archive.", "Use an item_key from derived/messages.csv.");
+  }
+  if (outcome.status === "blocked") return recoveryRequired(identity, outcome.effectId);
+  return outcome.status === "busy" ? writerBusy(identity) : lockResidue(identity);
+}
+
+const HANDLERS: Record<string, (args: string[]) => Promise<OperationResult>> = {
+  decide,
+  import: importCommand,
+  recover,
+  status,
+};
+
+async function guarded(
+  commandIdentity: string,
+  run: () => Promise<OperationResult>,
+): Promise<OperationResult> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof PreconditionError) {
+      return refused(commandIdentity, "DOMAIN_PRECONDITION_UNMET", error.message, "Check the archive, CSV, and attachments paths.");
+    }
+    if (error instanceof ExportFormatError) {
+      return refused(commandIdentity, "SCHEMA_INVALID_INPUT", error.message, "Pass an unmodified iMazing CSV export.");
+    }
+    if (error instanceof InvalidArchiveError) {
+      return invalidArchive(commandIdentity, error.message);
+    }
+    if (error instanceof EffectUncertainError) {
+      return effectUnknown(commandIdentity, IMPORT_EFFECT);
+    }
+    throw error;
+  }
+}
+
+/** Help and discovery; null means human help was already written. */
+function informational(
+  args: string[],
+  json: boolean,
+): OperationResult | null | undefined {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    if (!json) {
+      lifecycle.stdout(HUMAN_HELP);
+      return null;
+    }
+    return succeeded("imazing-archive.help", "Show help.", {
+      commands: COMMANDS,
+      summary: "Append iMazing message exports into a private archive.",
+      usage: USAGE,
+    });
+  }
+  if (args.length === 1 && args[0] === "--discover") {
+    return succeeded("imazing-archive.discovery", "Describe commands.", discoveryData());
+  }
+  const command = COMMANDS.find((candidate) => candidate.commandIdentity === args[1]);
+  if (args[0] === "--discover-command" && args.length === 2 && command !== undefined) {
+    return succeeded("imazing-archive.command-discovery", `Describe ${command.commandIdentity}.`, {
+      command,
+      semantics: "possible-outcomes",
+      stations: stationsFor(command.commandIdentity),
+    });
+  }
+  return undefined;
+}
+
+async function main(argv: string[]): Promise<number> {
+  const json = hasJson(argv);
+  const args = argv.filter((value) => value !== "--json");
+  const info = informational(args, json);
+  if (info === null) return 0;
+  if (info !== undefined) {
+    writeResult(envelope(info), json);
+    return info.exitCode;
+  }
+  const [name = "", ...rest] = args;
+  const handler = Object.hasOwn(HANDLERS, name) ? HANDLERS[name] : undefined;
+  const commandIdentity = handler === undefined ? "imazing-archive.dispatch" : `imazing-archive.${name}`;
+  if (handler !== undefined) await recordDiagnostic(commandIdentity);
+  const result =
+    handler === undefined
+      ? usage(commandIdentity)
+      : await guarded(commandIdentity, () => handler(rest));
+  writeResult(envelope(result), json);
+  return result.exitCode;
+}
+
+await lifecycle.complete(await main(process.argv.slice(2)));
