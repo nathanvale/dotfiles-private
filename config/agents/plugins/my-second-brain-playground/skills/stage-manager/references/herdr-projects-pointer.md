@@ -5,9 +5,10 @@ explicit `/my-second-brain-playground:stage-manager` invocation, sent as its
 first prompt by whoever launches it: the Stage Manager, Nathan or a launcher.
 The line below in the project's `PROJECT.md` `# Instructions` section is a
 recovery hint only, for a coordinator that restarts or loses context. The
-guide check never relies on it. In a live proof on 2026-09-25, a Claude
-Sonnet 5 coordinator ignored the pointer and cast a worker with no guide
-check; with the explicit first prompt, the same model refused the cast.
+role check never relies on it. In a live proof on 2026-09-25, a Claude
+Sonnet 5 coordinator ignored the pointer and cast without loading the skill;
+with the explicit first prompt, it followed the then-required guide refusal.
+Current guide applicability and cast permission are owned by `SKILL.md`.
 `PROJECT.md` belongs to Nathan; the coordinator edits it only when Nathan
 asks.
 
@@ -28,7 +29,7 @@ session that inherited its `HERDR_PANE_ID`.
 ```markdown
 - Coordinator only: when your `HERDR_PANE_ID` equals `pane_id` in this
   project's `.state/coordinator.json`, invoke
-  `/my-second-brain-playground:stage-manager` and finish its startup before any
+  `/my-second-brain-playground:stage-manager` and confirm the role before any
   cast, then read `library/stage-manager-handoff.md`. Otherwise keep the role
   your brief names.
 ```
@@ -51,12 +52,14 @@ with and misses any update (observed in Herdr Projects 0.2.25,
    restarting it.
 3. Send `/my-second-brain-playground:stage-manager` as the first prompt;
    `open` sends none.
-4. Record a fresh startup receipt. The previous receipt covers the previous
-   process only.
+4. Refresh observations for the new process before the next cast. Include
+   them in that cast's record; an earlier record covers the earlier process.
 
 ## Check
 
 - The coordinator's first prompt was the explicit skill invocation.
-- The coordinator's startup receipt exists before its first `thread start`.
+- The coordinator confirms its role before casting; its cast record includes
+  current observations and any skipped-guide reason.
+- A bounded read-only request can be answered without a thread or receipt.
 - A thread whose pane differs from the recorded coordinator pane keeps its
   worker role, and its report names that role.

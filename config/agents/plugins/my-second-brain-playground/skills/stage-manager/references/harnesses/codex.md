@@ -1,6 +1,7 @@
 # Codex CLI self-evidence
 
-Use this reference for Stage Manager startup step 2. These observations were
+Use this diagnostic reference for Stage Manager cast preparation step 2 when
+qualifying model-specific guidance or investigating a route problem. These observations were
 made in a Codex CLI 0.156.1 worker on 2026-09-25 and in Codex CLI
 coordinator processes on 2026-09-30, including resumed sessions and sessions
 with subagents. They are **observed, undocumented** behavior, not a Codex CLI
@@ -48,8 +49,8 @@ treat the session version as unavailable. A session resumed after an ordinary
 update then resolves through the mapped executable below.
 
 When `CODEX_VERSION` and the current session version are both available and
-agree, record that version. If they disagree, record `unknown` and refuse at
-step 2. When only one is available, use `lsof -a -p <pid> -d txt` to select
+agree, record that version. If they disagree, record `unknown` and skip
+model-specific guidance. When only one is available, use `lsof -a -p <pid> -d txt` to select
 the mapped Codex executable entry, not a library or Node entry, and run that
 absolute path with `--version`. An ambiguous executable entry makes this
 direct source unavailable. Record the version only if the direct result
@@ -66,24 +67,26 @@ not a running-process conflict.
 | `CODEX_VERSION` | Current session | Mapped direct | `PATH` | Step 2 version |
 | --- | --- | --- | --- | --- |
 | 0.159.0 | 0.159.0 | unavailable or 0.159.1 | 0.159.2 | 0.159.0; warn on disk and `PATH` |
-| 0.159.0 | 0.159.1 | 0.159.0 | 0.159.2 | `unknown`; refuse |
-| 0.159.1 | unavailable | 0.159.0 | 0.159.2 | `unknown`; refuse |
+| 0.159.0 | 0.159.1 | 0.159.0 | 0.159.2 | `unknown`; skip guide |
+| 0.159.1 | unavailable | 0.159.0 | 0.159.2 | `unknown`; skip guide |
 | 0.159.2 | unavailable: resumed, created by 0.159.1 | 0.159.2 | 0.159.2 | 0.159.2 |
-| 0.159.2 | unavailable: resumed, created by 0.159.1 | unavailable | 0.159.2 | `unknown`; refuse |
+| 0.159.2 | unavailable: resumed, created by 0.159.1 | unavailable | 0.159.2 | `unknown`; skip guide |
 | 0.159.0 | unavailable: no `CODEX_SESSION_ID` match | 0.159.0 | 0.159.2 | 0.159.0; warn on `PATH` |
-| 0.159.0 | unavailable | unavailable or 0.159.1 | 0.159.2 | `unknown`; refuse |
+| 0.159.0 | unavailable | unavailable or 0.159.1 | 0.159.2 | `unknown`; skip guide |
 
 Sandbox: under Codex's `read-only` seatbelt sandbox, `ps` failed with
 `operation not permitted` (observed 2026-09-30, Codex CLI 0.159.0 `exec`).
 Record the agent pid, version, serving model and effort `unknown` when
-process inspection is denied, and name the repair: Nathan relaunches the
-coordinator with a sandbox that allows `ps` and `lsof`. The coordinator whose
+process inspection is denied, and continue without model-specific advice.
+If a cast's coordinator-role check itself requires unavailable process
+inspection, report that separate authority gap. The coordinator whose
 pid matched on 2026-09-29 ran with its sandbox disabled; `workspace-write` was
 not observed.
 
-If the exact serving model or version remains unknown, startup refuses at
-step 2. If the guide exists but its independent review record does not,
-startup refuses at step 4.
+If the exact serving model or version remains unknown, use the shared role
+instructions. If a guide lacks a valid independent review record, leave it
+unapplied. Neither condition alone refuses an answer or a cast; `SKILL.md`
+owns the role, authority and capability requirements.
 
 ## Turn context reading
 
