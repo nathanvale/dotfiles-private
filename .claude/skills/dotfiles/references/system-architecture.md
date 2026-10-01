@@ -28,7 +28,6 @@ profiles, state management, and setup.sh phases.
 |   +-- macos/                           # macOS preference scripts
 +-- apps/                                # Major standalone apps
 |   +-- hyperflow/                       # Hyper key orchestration
-|   +-- taskdock/                        # Task management + git worktrees
 +-- .claude/                             # Claude Code project config
     +-- commands/, agents/, skills/, rules/
 ```

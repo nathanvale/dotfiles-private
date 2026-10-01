@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # HyperFlow CLI Entry Point
-# Mirrors the TaskDock shim pattern for consistency
 
 # Find HyperFlow root
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

@@ -15,7 +15,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Available templates (excluding cloud-agents which is special)
+# Available templates
 TEMPLATES=("standard" "fullstack" "nextjs" "mac-mini")
 
 show_help() {
@@ -49,10 +49,6 @@ list_templates() {
             echo -e "  ${GREEN}$t${NC}"
         fi
     done
-    # Also show cloud-agents if it exists
-    if [ -f "$TMUXINATOR_DIR/cloud-agents.yml" ]; then
-        echo -e "  ${YELLOW}cloud-agents${NC} (special)"
-    fi
 }
 
 # Resolve project name/path to full path

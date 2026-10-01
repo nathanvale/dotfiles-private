@@ -9,7 +9,7 @@ Migrate the specified functionality from the dotfiles repository (`~/code/dotfil
 - **Location**: `~/code/dotfiles`
 - **Architecture**: Modular shell scripts, symlinked configs, tmux integration
 - **Key directories**:
-  - `apps/` - Standalone applications (hyperflow, taskdock, vault)
+  - `apps/` - Standalone applications (hyperflow, vault)
   - `bin/` - Scripts organized by domain (dotfiles, system, tmux, utils)
   - `config/` - Tool configurations symlinked to `~/.config/`
   - `.claude/` - Claude Code configuration (commands, agents, skills, rules)
