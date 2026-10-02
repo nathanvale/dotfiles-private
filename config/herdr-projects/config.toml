@@ -30,7 +30,7 @@ effort = "high"
 [profiles.codex-luna-max]
 agent = "codex"
 model = "gpt-6-luna"
-effort = "ultra"
+effort = "max"
 description = "GPT-6-Luna at max effort: Figma and Chrome parity checks"
 args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'sandbox_workspace_write.writable_roots=["/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"]', "--ask-for-approval", "never", "--search"]
 
@@ -41,3 +41,25 @@ model = "claude-haiku-4-5-20251001"
 [profiles.claude-haiku]
 agent = "claude"
 model = "claude-haiku-4-5-20251001"
+
+[profiles.codex-intake-fg]
+agent = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+description = "Granted one-item Source Intake foreground"
+args = ["--sandbox", "danger-full-access", "--ask-for-approval", "never"]
+
+[profiles.codex-terra]
+agent = "codex"
+model = "gpt-5.6-terra"
+effort = "high"
+
+[profiles.codex-sol61]
+agent = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
+
+[profiles.claude-sonnet-55]
+agent = "claude"
+model = "claude-sonnet-5-5"
+effort = "high"
