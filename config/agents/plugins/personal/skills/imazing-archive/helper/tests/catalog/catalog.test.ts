@@ -90,6 +90,16 @@ test("an unknown import effect hands off and never retries", () => {
   });
 });
 
+test("the unchanged import station never tells a no-op preview to apply", () => {
+  const unchanged = stationsFor("imazing-archive.import").find(
+    (station) => station.causeCode === "SUCCESS_UNCHANGED",
+  );
+  // Independent literal oracle for the discovery guidance text.
+  expect(unchanged?.guidance).toEqual({
+    nextAction: "Rerun with --plan DIGEST when the preview plans changes; when it plans none, there is nothing to apply.",
+  });
+});
+
 test("selected-command discovery returns the same catalogue the tests use", () => {
   const result = Bun.spawnSync(
     [process.execPath, "run", "src/cli.ts", "--discover-command", "imazing-archive.import", "--json"],

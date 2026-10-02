@@ -18,10 +18,10 @@ ARCHIVE/
   blobs/<aa>/<sha256>.<ext>     content-addressed attachment bytes
   records/items.jsonl           one record per message row identity
   records/observations.jsonl    one record per imported CSV row: export, row, strategy
-  records/associations.jsonl    message-to-attachment links
+  records/associations.jsonl    message-to-attachment associations
   records/blobs.jsonl           blob path, size, and source file
   records/decisions.jsonl       image type, meme, review, and album decisions
-  records/ambiguities.jsonl     item sets an unresolved Message ID link could join
+  records/ambiguities.jsonl     item sets an unresolved message ID link could join
   derived/messages.csv          one row per item, latest decisions applied
   derived/attachments.csv       one row per association
   derived/pending-images.csv    resolved images without a reviewed decision
@@ -76,23 +76,28 @@ sums `beforeStart` once per applied export from the receipts in `imports/`.
   export. A unique fingerprint with zero candidates creates a new item. Anything
   else, including a fingerprint repeated within one export, is held as an
   ambiguous message: no item is created and the receipt lists the row under
-  `ambiguousMessages`. A rerun of that export lists the held row there again
-  without creating an item or writing a record.
+  `ambiguousMessages`. Its observation record names no item, and `status`
+  counts such rows as `heldMessages`. A rerun of that export lists the held
+  row there again without creating an item or writing a record. No command
+  resolves a held row.
 - `nearMatches` lists new items sharing a Message Date and direction with an
   existing item. They may be edited duplicates; nothing merges them.
 
 ## Exported names
 
 iMazing names each exported file `<Message Date, colons as spaces> - <Chat
-Session> - <name>`. Resolution checks, at the same second:
+Session> - <name>`. Resolution searches files at most two folders below the
+attachments root. The preview, apply result, and receipt count files deeper
+than that as `deeperFiles`; the preview and apply message warn when it is above
+0, or when no file for the chat is found (`chatFiles` 0). Resolution checks, at the same second:
 
 1. The exact attachment cell, which may contain commas or vertical bars.
 2. A variant: the stem cut to 40 characters, a ` N` suffix before the
    extension, or an extension in another case.
 
 Candidates sharing one SHA-256 resolve to that blob; differing bytes are
-ambiguous. Leftover `.url` files link to the one row at that second whose text
-holds a URL. Files with the chat prefix that nothing claims are
+ambiguous. A leftover web link (`.url` file) resolves to the one row at that
+second whose text holds a URL. Files with the chat prefix that nothing claims are
 `unreferencedFiles`; files for other chats are ignored.
 
 Same bytes sent in two messages make two associations and one blob. A later
@@ -102,10 +107,23 @@ association left missing; the resolved record supersedes it.
 ## Decisions
 
 Each `decide` appends one record keyed by `itemKey`. Later fields override
-earlier ones. `image_type` is one of photo, screenshot, gif, sticker, url,
-other, unknown. `contains_meme` is true, false, or unknown and is independent
-of `image_type`. Until reviewed, the derived image type is the helper's
+earlier ones. `image_type` is one of photo, screenshot, screenshot_with_meme,
+meme, document, gif, sticker, url, other, unknown; the classifier trial's
+classes are among them. `contains_meme` is true, false, or unknown and is
+independent of `image_type`: a screenshot can contain a meme, and a photo can
+be a photo of one. Until reviewed, the derived image type is the helper's
 detection: `url`, `gif`, `other` for non-images, else `unknown`.
+
+`derived/messages.csv` and `derived/pending-images.csv` show each decision as
+`image_type`, `contains_meme`, `visual_review`, and `album_selection`. `decide
+--reviewed` sets `visual_review` to `reviewed`; `--album` sets
+`album_selection`. Without a decision the defaults are `visual_review`
+`pending`, `album_selection` `undecided`, `contains_meme` `unknown`, and
+`image_type` the helper's detection. `contains_meme` `unknown` therefore means
+either no decision set it or a decision recorded `unknown`; `visual_review`
+tells the two apart. `image_type` is blank for a text row with no attachment.
+In `derived/messages.csv`, `ambiguous_with` is a JSON array of the item keys an
+unresolved message ID link could join, and is empty when there are none.
 
 ## Recovery
 
@@ -132,6 +150,9 @@ Writes refuse with `DOMAIN_RECOVERY_UNPROVABLE` and leave its bytes unchanged,
 completion that cannot be appended after durable effects returns
 `INTERNAL_RESULT_UNKNOWN`.
 
+`recover` names the pending intent's `runId` and `expectedValueHash`: in
+`data` when it proves the write, and in the handoff reason when it cannot.
+
 `recover` reports a pending import intent as complete only when a receipt with
 the same run ID, effect ID, and plan digest exists and every file and record
 span it names reads back with matching SHA-256. A pending decision intent is
@@ -144,8 +165,18 @@ under the lock, then proceeds. Anything else is unproven: later writes refuse.
 To reconcile an unproven write, with Nathan's approval:
 
 1. Copy the archive aside.
-2. Remove record lines after the last line that belonged to a completed import
-   (observations name their export SHA-256).
+2. For an import intent, remove record lines after the last line that belonged
+   to a completed import (observations name their export SHA-256). For a
+   decision intent, remove an unterminated last line from
+   `records/decisions.jsonl`, if there is one, so the file ends in a newline;
+   no other record changes.
 3. Delete the stale `archive.journal.lock` when no helper process runs.
-4. Append a `completed` journal line with the intent's `runId`, `effectId`, and
-   `expectedValueHash`, then preview the import again.
+4. Append this line to `archive.journal.jsonl`, ending in a newline, with the
+   values copied from the unmatched `intent` line:
+
+   ```json
+   {"effectId":"<effectId>","expectedValueHash":"<expectedValueHash>","journalVersion":1,"phase":"completed","runId":"<runId>"}
+   ```
+
+5. For an import, preview the import again. For a decision, run `decide` again
+   if the decision is still wanted.

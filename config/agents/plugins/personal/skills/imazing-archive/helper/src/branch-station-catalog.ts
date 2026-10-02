@@ -89,7 +89,7 @@ const ROWS: Row[] = [
   ["imazing-archive.help", "SUCCESS_UNCHANGED", "Help is shown.", NO_FOLLOW_UP, null],
   ["imazing-archive.discovery", "SUCCESS_UNCHANGED", "The contract is described.", NO_FOLLOW_UP, null],
   ["imazing-archive.command-discovery", "SUCCESS_UNCHANGED", "One command's stations are described.", NO_FOLLOW_UP, null],
-  ["imazing-archive.import", "SUCCESS_UNCHANGED", "A preview writes only its runtime receipt, or an apply finds nothing new.", { nextAction: "Rerun with --plan DIGEST to apply a reviewed preview." }, null],
+  ["imazing-archive.import", "SUCCESS_UNCHANGED", "A preview writes only its runtime receipt, or an apply finds nothing new.", { nextAction: "Rerun with --plan DIGEST when the preview plans changes; when it plans none, there is nothing to apply." }, null],
   ["imazing-archive.import", "SUCCESS_COMPLETED", "The previewed plan is written and its receipt recorded.", { nextAction: "Review the receipt's missing and ambiguous lists." }, null],
   ["imazing-archive.import", "SCHEMA_INVALID_INPUT", "The CSV is not a supported iMazing export, or the digest or start date is malformed.", { nextAction: "Pass an unmodified iMazing CSV export and a previewed digest." }, "Pass an unmodified iMazing CSV export and a previewed digest."],
   PRECONDITION("imazing-archive.import", "A source path is missing, the archive is a foreign folder or inside the attachments root, the chat identity or start date differs from the archive's, or a dead writer left its lock."),
