@@ -186,24 +186,55 @@ async function hashFile(path: string): Promise<string> {
   return hasher.digest("hex");
 }
 
-async function listFiles(root: string): Promise<string[]> {
-  const paths: string[] = [];
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (entry.name.startsWith(".")) continue;
-    if (entry.isFile()) paths.push(entry.name);
-    if (!entry.isDirectory()) continue;
-    for (const child of await readdir(join(root, entry.name), {
-      withFileTypes: true,
-    })) {
-      if (child.isFile() && !child.name.startsWith(".")) {
-        paths.push(join(entry.name, child.name));
-      }
+async function visibleEntries(directory: string) {
+  return (await readdir(directory, { withFileTypes: true })).filter(
+    (entry) => !entry.name.startsWith("."),
+  );
+}
+
+/** Counts files below `directory`, at any depth; hidden entries are skipped. */
+async function countFiles(directory: string): Promise<number> {
+  let count = 0;
+  for (const entry of await visibleEntries(directory)) {
+    if (entry.isFile()) count += 1;
+    if (entry.isDirectory()) count += await countFiles(join(directory, entry.name));
+  }
+  return count;
+}
+
+interface Listing {
+  deeperFiles: number;
+  paths: string[];
+}
+
+/** Files directly in `folder`; files in its subfolders are only counted. */
+async function listLevel(root: string, folder: string): Promise<Listing> {
+  const listing: Listing = { deeperFiles: 0, paths: [] };
+  for (const entry of await visibleEntries(join(root, folder))) {
+    if (entry.isFile()) listing.paths.push(join(folder, entry.name));
+    if (entry.isDirectory()) {
+      listing.deeperFiles += await countFiles(join(root, folder, entry.name));
     }
   }
-  return paths.sort();
+  return listing;
+}
+
+/** Files at depth one and two, and the count of files deeper than that. */
+async function listFiles(root: string): Promise<Listing> {
+  const listing: Listing = { deeperFiles: 0, paths: [] };
+  for (const entry of await visibleEntries(root)) {
+    if (entry.isFile()) listing.paths.push(entry.name);
+    if (!entry.isDirectory()) continue;
+    const level = await listLevel(root, entry.name);
+    listing.paths.push(...level.paths);
+    listing.deeperFiles += level.deeperFiles;
+  }
+  return { deeperFiles: listing.deeperFiles, paths: listing.paths.sort() };
 }
 
 export interface AttachmentScan {
+  /** Files more than two folders below the root; resolution never sees them. */
+  deeperFiles: number;
   files: AttachmentFile[];
   totalFiles: number;
 }
@@ -214,9 +245,8 @@ async function scanAttachments(
   chatSession: string,
   csvPath: string,
 ): Promise<AttachmentScan> {
-  const paths = (await listFiles(root)).filter(
-    (path) => resolve(root, path) !== csvPath,
-  );
+  const listed = await listFiles(root);
+  const paths = listed.paths.filter((path) => resolve(root, path) !== csvPath);
   const files: AttachmentFile[] = [];
   for (const relativePath of paths) {
     const name = basename(relativePath);
@@ -232,7 +262,7 @@ async function scanAttachments(
       timestamp,
     });
   }
-  return { files, totalFiles: paths.length };
+  return { deeperFiles: listed.deeperFiles, files, totalFiles: paths.length };
 }
 
 async function readMarker(archive: string) {
@@ -378,7 +408,12 @@ export interface RecordSpan {
 }
 
 export interface Receipt {
-  attachmentsRoot: { chatFiles: number; path: string; totalFiles: number };
+  attachmentsRoot: {
+    chatFiles: number;
+    deeperFiles: number;
+    path: string;
+    totalFiles: number;
+  };
   csv: { chatSession: string; path: string; sha256: string };
   effectId?: string;
   effects?: EffectManifest;
@@ -401,6 +436,7 @@ export function receiptFor(
     archive: source.archive,
     attachmentsRoot: {
       chatFiles: prepared.scan.files.length,
+      deeperFiles: prepared.scan.deeperFiles,
       path: source.attachments,
       totalFiles: prepared.scan.totalFiles,
     },
@@ -830,9 +866,9 @@ async function decisionProven(
 }
 
 export type RecoveryObservation =
-  | { effectId: null; reason?: undefined; state: "none" }
+  | { effectId: null; intent?: undefined; reason?: undefined; state: "none" }
   | { effectId: string; intent: JournalRecord; state: "completed" }
-  | { effectId: string; reason?: string; state: "unknown" };
+  | { effectId: string; intent?: JournalRecord; reason?: string; state: "unknown" };
 
 /** Read-only: a pending intent is complete only when its effects read back. */
 export async function inspectRecovery(
@@ -850,9 +886,13 @@ export async function inspectRecovery(
     pending.effectId === DECISION_EFFECT
       ? await decisionProven(archive, pending)
       : pending.effectId === IMPORT_EFFECT && (await importProven(archive, pending));
-  return proven
-    ? { effectId: pending.effectId, intent: pending, state: "completed" }
-    : { effectId: pending.effectId, state: "unknown" };
+  if (proven) return { effectId: pending.effectId, intent: pending, state: "completed" };
+  return {
+    effectId: pending.effectId,
+    intent: pending,
+    reason: `An interrupted ${pending.effectId} (runId ${pending.runId}, expectedValueHash ${pending.expectedValueHash}) has no verified completion proof; its effects are unproven.`,
+    state: "unknown",
+  };
 }
 
 /** Rows left out before the start date, counted once per applied export. */
@@ -870,6 +910,10 @@ export async function archiveStatus(archive: string) {
   for (const record of state.associations.values()) {
     associations[record.status] += 1;
   }
+  let heldMessages = 0;
+  for (const itemKey of state.observedRows.values()) {
+    if (itemKey === null) heldMessages += 1;
+  }
   return {
     ambiguousItems: state.ambiguities.size,
     associations,
@@ -877,6 +921,7 @@ export async function archiveStatus(archive: string) {
     blobs: state.blobs.size,
     decisions: state.decisions.size,
     exports: state.originals.size,
+    heldMessages,
     items: state.items.size,
     pendingImages: pendingImages(state).length,
     recovery: (await inspectRecovery(archive)).state,

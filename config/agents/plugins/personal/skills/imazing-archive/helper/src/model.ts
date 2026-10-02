@@ -44,6 +44,9 @@ export const DEFAULT_START_DATE = "2023-10-15";
 export const IMAGE_TYPES = [
   "photo",
   "screenshot",
+  "screenshot_with_meme",
+  "meme",
+  "document",
   "gif",
   "sticker",
   "url",

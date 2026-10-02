@@ -30,6 +30,12 @@ function blobPathFor(state: ArchiveState, sha: string | null): string {
   return sha === null ? "" : (state.blobs.get(sha)?.path ?? "");
 }
 
+/** A JSON array of the item keys an unresolved link could join; empty when none. */
+function ambiguousWith(state: ArchiveState, itemKey: string): string {
+  const others = state.ambiguities.get(itemKey);
+  return others === undefined || others.size === 0 ? "" : JSON.stringify([...others].sort());
+}
+
 function sortedItems(state: ArchiveState): ItemRecord[] {
   return [...state.items.values()].sort(
     (left, right) =>
@@ -76,7 +82,7 @@ function messagesCsv(state: ArchiveState): string {
       item.attachment?.originalName ?? "",
       cell?.status ?? "",
       blobPathFor(state, cell?.sha256 ?? null),
-      JSON.stringify([...(state.ambiguities.get(item.itemKey) ?? [])].sort()),
+      ambiguousWith(state, item.itemKey),
       ...reviewColumns(state.decisions.get(item.itemKey), cell),
     ];
   });
