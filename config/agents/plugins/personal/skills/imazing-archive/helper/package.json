@@ -1,0 +1,18 @@
+{
+  "name": "imazing-archive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "biome check --diagnostic-level=error .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test tests --timeout=30000",
+    "build:bundle": "NODE_ENV=production bun build --target bun --minify-whitespace src/cli.ts --outfile dist/imazing-archive.js",
+    "imazing-archive": "bun --no-install dist/imazing-archive.js"
+  },
+  "dependencies": {
+    "@logtape/logtape": "2.3.1",
+    "@logtape/redaction": "2.3.1",
+    "zod": "4.4.3"
+  }
+}
