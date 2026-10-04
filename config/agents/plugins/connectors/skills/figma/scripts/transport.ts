@@ -1,12 +1,14 @@
 // The Figma transport: one tools/call through the front door's selected
 // MCPorter to the hosted server, planned by the shared route with cached OAuth
-// only (the route adds --no-oauth to every call). prepare() plans the route and
-// selects MCPorter, so nothing leaves before send().
+// only (the route adds --no-oauth to every call) and run in Figma's own vault
+// root. prepare() plans the route, owns the vault root, and selects MCPorter,
+// so nothing leaves before send().
 import type { ExecutionCapabilities } from "../../../bin/adapters/contract.ts";
 import { MCPORTER_REPAIR_ACTION } from "../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute } from "../../../bin/provider-route.ts";
 import { type EnvironmentSource, safeEnvironment } from "../../../bin/safe-environment.ts";
 import type { Call } from "./catalogue.ts";
+import { figmaVault, prepareVault } from "./vault.ts";
 
 export const INTERNAL_CONTEXT = "figma-adapter";
 const CALL_TIMEOUT_MS = "60000";
@@ -47,12 +49,15 @@ export function figmaCaller(env: EnvironmentSource, skillsRoot: string, capabili
 		} catch {
 			return { ok: false, sent: false, cause: "route-invalid", repair: "Restore skills/figma/config to the packaged Figma registry and route" };
 		}
+		// The grant lives in Figma's own vault root, never the caller's HOME vault.
+		const vault = figmaVault(env);
+		if (!prepareVault(vault)) return { ok: false, sent: false, cause: "vault-root-invalid", repair: "Figma's MCPorter vault root under Connectors state is not a private owned directory; make it an owner-only (0700) directory this user owns, then retry" };
 		const mcporter = await capabilities.selectMcporter();
 		if (mcporter === null) return { ok: false, sent: false, cause: "mcporter-unselected", repair: MCPORTER_REPAIR_ACTION };
 		return {
 			ok: true,
 			send() {
-				const run = Bun.spawnSync([mcporter, ...plan.argv], { env: plan.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+				const run = Bun.spawnSync([mcporter, ...plan.argv], { env: { ...plan.env, ...vault.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 				return parseReply(run.exitCode, run.stdout.toString());
 			},
 		};

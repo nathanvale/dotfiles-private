@@ -228,7 +228,7 @@ test("auth status reads only the vault's presence, and login needs Nathan's own 
 		};
 		const status = await run(["auth", "status", "figma"]);
 		expect(station(status)).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
-		expect(status.result.data).toMatchObject({ server: "figma-connectors", endpoint: HOSTED_ENDPOINT, custody: "mcporter-native-vault", vault: "mcporter-default", vaultIndex: "absent", grant: "absent" });
+		expect(status.result.data).toMatchObject({ server: "figma-connectors", endpoint: HOSTED_ENDPOINT, custody: "mcporter-native-vault", vault: "connectors-figma", vaultIndex: "absent", grant: "absent" });
 		for (const argv of [["auth", "login", "figma"], ["auth", "login", "figma", "--no-browser", "--reset"]]) {
 			expect([argv, station(await run(argv))]).toEqual([argv, { code: 3, cause: "DOMAIN_ATTENDED_REQUIRED", connectorCause: null }]);
 		}
@@ -237,4 +237,19 @@ test("auth status reads only the vault's presence, and login needs Nathan's own 
 	} finally {
 		bundle.dispose();
 	}
+}, 120_000);
+
+// MCPorter records each hosted server in its vault even without a grant, so the
+// vault a read touches is observable. The Figma grant must live only in Figma's
+// own vault root: never in the keyless root other connectors' children share,
+// and never in the caller's HOME vault.
+test.skipIf(!OFFICIAL_MCPORTER)("reads, schema, and writes use only Figma's own MCPorter vault root", async () => {
+	await withFigma(async ({ run, machine }) => {
+		expect(station(await run(["run", "figma", "whoami"]))).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
+		await previewApply(run, "add_code_connect_map", { fileKey: "FileKeyExisting01", nodeId: "1:1", source: "src/Button.tsx", componentName: "Button", label: "React" });
+		const vault = (root: string) => path.join(machine.state, "connectors", root, "data", "mcporter", "credentials.json");
+		expect(existsSync(vault("figma-mcporter"))).toBe(true);
+		expect(existsSync(vault("mcporter-keyless")) && readFileSync(vault("mcporter-keyless"), "utf8").includes("figma-connectors")).toBe(false);
+		expect(existsSync(path.join(machine.home, ".mcporter"))).toBe(false);
+	});
 }, 120_000);

@@ -5,7 +5,7 @@ description: Read and write Figma designs through Figma's hosted MCP on the Conn
 
 # Figma hosted MCP
 
-One packaged route to Figma's hosted MCP (`https://mcp.figma.com/mcp`). MCPorter holds the OAuth grant in its own default vault; the route never prints it. Keep native Harness MCP tools, raw MCPorter calls, and Figma REST requests outside this route.
+One packaged route to Figma's hosted MCP (`https://mcp.figma.com/mcp`). MCPorter holds the OAuth grant in Figma's own vault root under Connectors state; the route never prints it. Keep native Harness MCP tools, raw MCPorter calls, and Figma REST requests outside this route.
 
 Resolve the front door from this skill directory: no global `connectors` command, no dotfiles path.
 

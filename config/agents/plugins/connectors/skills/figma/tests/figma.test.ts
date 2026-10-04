@@ -101,9 +101,9 @@ describe("Figma hosted Provider", () => {
 		expect(harness.has("mcporter.json")).toBe(false);
 	});
 
-	// Canva moves MCPorter's data and cache homes into a per-account vault;
-	// Figma's adapter keeps MCPorter's default vault and cached-grant reads.
-	test("the adapter's route plans attended auth and cached calls on the declared server with the default vault", () => {
+	// The route plan carries no data root of its own; the adapter adds Figma's
+	// vault root (packaged.test.ts proves where MCPorter then writes).
+	test("the adapter's route plans attended auth and cached calls on the declared server with no ambient data root", () => {
 		const env = { HOME: harness.home, PATH: "/usr/bin:/bin", XDG_DATA_HOME: "/must-not-cross", AMBIENT_SENTINEL: "x" };
 		const auth = planDispatcherRoute(["figma", "--", "auth", "--no-browser", "--reset"], SKILLS, env, INTERNAL_CONTEXT);
 		expect(auth.argv).toEqual(["--config", CONFIG, "auth", "figma-connectors", "--no-browser", "--reset"]);

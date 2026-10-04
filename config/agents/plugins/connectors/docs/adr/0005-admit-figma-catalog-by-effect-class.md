@@ -32,6 +32,7 @@ We will choose Option B because it reaches every tool whose effect the route can
 
 - `skills/figma/config/route.json` is `dispatcherOwned`; the plain route refuses every Figma verb. `skills/figma/adapter.ts` serves `connectors auth status|login figma`, `run figma`, `schema figma`, and `recover figma`, and refuses any registry that is not exactly the packaged one.
 - The registry admits exactly 32 names, equal to the catalogue in `skills/figma/scripts/catalogue.ts`.
+- Custody moves from MCPorter's default HOME vault (ADR 0003) to Figma's own vault root under Connectors state (`scripts/vault.ts`), named in every plan. The front door otherwise runs a plan without its own data root in the keyless root other connectors share, which would put the Figma grant beside them. Activating this needs one attended `connectors auth login figma`; the old HOME-vault grant stays where it is until Nathan resets it.
 - Writes follow the Mermaid flow in `scripts/writes.ts` and `scripts/journal.ts`. The read-back rule per tool lives in `scripts/evidence.ts`: an unfamiliar result shape yields no evidence, so an effect stays unknown and its object blocked; it never completes by assumption.
 
 | Class | Tools | Read-back |
@@ -57,7 +58,7 @@ No operator-attested adjudication is assumed; settling by read-back evidence sta
 
 - Positive: 32 of 35 catalog tools reach Codex and Claude Code through one route once installed, each write under preview, journal, and evidence-only settlement.
 - Positive: a Weave spend needs a cost Figma quoted for that exact input within 15 minutes.
-- Negative: reads move from `provider-route figma -- call` to `connectors run figma`; installed copies need the rebuilt front door.
+- Negative: reads move from `provider-route figma -- call` to `connectors run figma`; installed copies need the rebuilt front door, and Nathan needs one attended login into the new vault root.
 - Negative: each write costs up to three rate-limited reads (preview, apply, read-back). On a View or Collab seat this exhausts the monthly allowance quickly; View seats may also lack edit rights on a file.
 - Negative: an unprovable `use_figma` or create blocks its object until a read-back finds the change.
 - Neutral: read-back parsers were built against the live input schemas and a stub, not against live write replies; their live behavior is unproved until an authorized write.
@@ -82,7 +83,7 @@ No operator-attested adjudication is assumed; settling by read-back evidence sta
 ## Confirmation
 
 - `skills/figma/tests/figma.test.ts`: the 35-tool catalog literal (18, 11, 6); the registry admits exactly 32 and equals the catalogue; the plain route refuses `auth`, `list`, and `call` as dispatcher-owned; and the installed MCPorter, given a stdio probe advertising all 35 names plus the prompt, `get_figma_skill`, and `executeWrite`, lists exactly the 32 and refuses the rest before the server starts.
-- `skills/figma/tests/packaged.test.ts`: through the compiled front door and the official MCPorter 0.14.0 against a stateful loopback stub: the live listing is exactly 32; every admitted write applies once after its preview and only on read-back; a preview applies once with identical input; Weave acknowledges only a quoted cost; an unreplied write blocks its object and settles only on found evidence; `use_figma` never settles unchanged; auth status reads presence only and login needs an attended terminal.
+- `skills/figma/tests/packaged.test.ts`: through the compiled front door and the official MCPorter 0.14.0 against a stateful loopback stub: the live listing is exactly 32; every admitted write applies once after its preview and only on read-back; a preview applies once with identical input; Weave acknowledges only a quoted cost; an unreplied write blocks its object and settles only on found evidence; `use_figma` never settles unchanged; auth status reads presence only and login needs an attended terminal; reads and writes touch only Figma's vault root, never the keyless root or HOME.
 - Live, 5 October 2026: a cached-grant schema listing returned the 18 documented reads, and `get_metadata`, `get_screenshot`, and `get_variable_defs` read one Monash node. No live write, upload, or Weave run has been made.
 - Revisit when Figma changes its catalog, when the decisions above are made, or when Figma documents a Connectors-specific client or write contract.
 

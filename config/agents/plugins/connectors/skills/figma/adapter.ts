@@ -1,13 +1,14 @@
 // Figma's packaged adapter for the generic `connectors auth`, `run`, `schema`,
 // and `recover` commands. Figma's route is dispatcher-owned: this adapter is
-// the only way to the hosted server. It keeps ADR 0003's custody: MCPorter's
-// own OAuth in its default vault, the fixed endpoint, and the borrowed client
-// name. Reads pass through as one cached-grant call. Writes go through the
-// journaled preview, apply, and recover flows in scripts/writes.ts (ADR 0005).
+// the only way to the hosted server. MCPorter owns the OAuth grant in Figma's
+// own vault root (scripts/vault.ts) with ADR 0003's fixed endpoint and
+// borrowed client name. Reads pass through as one cached-grant call. Writes
+// go through the journaled preview, apply, and recover flows in
+// scripts/writes.ts (ADR 0005).
 //
 // Every prepare step validates the request purely, and no refusal echoes
 // caller input.
-import { lstatSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Adapter, AdapterRefusal, AdapterRequest, Executed, LocalEffect, LoginOption, Prepared, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
 import { planDispatcherRoute, RouteError } from "../../bin/provider-route.ts";
@@ -16,6 +17,7 @@ import { acceptedKeys, OPERATION_CATALOGUE, OPERATION_NAMES, operationKind, SERV
 import { FIGMA_ENDPOINT } from "./scripts/endpoint.ts";
 import { type Journal, openJournal, PREVIEW_ID, type Receipt, RUN_ID } from "./scripts/journal.ts";
 import { figmaCaller, INTERNAL_CONTEXT } from "./scripts/transport.ts";
+import { directoryStamp, figmaVault, prepareVault, vaultStamp } from "./scripts/vault.ts";
 import { adjudicate, applyWrite, JOURNAL_CORRUPT, previewWrite, unlockWrite } from "./scripts/writes.ts";
 
 type RefusalKind = AdapterRefusal["kind"];
@@ -32,6 +34,7 @@ const WRITE_PHASE_REPAIR = "A Figma write needs --preview first, then --apply <p
 const READ_PHASE_REPAIR = "A Figma read takes neither --preview nor --apply; run it without them";
 const ENTRY_KEYS = "allowedTools,auth,baseUrl,clientName,description";
 const AUTH_VERBS = new Set(["status", "login"]);
+const VAULT_REPAIR = "Figma's MCPorter vault root under Connectors state is not a private owned directory; make it an owner-only (0700) directory this user owns, then retry";
 const MCPORTER_LOGIN_FLAGS: Readonly<Record<LoginOption, string>> = { "no-browser": "--no-browser", reset: "--reset" };
 
 function refused(kind: RefusalKind, connectorCause: string, repair: string = REPAIR[kind]): Prepared {
@@ -54,17 +57,6 @@ function registryValid(skillsRoot: string): boolean {
 	}
 }
 
-// MCPorter 0.14.0's default vault: the route passes HOME and no XDG data
-// root. Metadata only; the file is never opened.
-function vaultStamp(request: SchemaRequest): string | null {
-	try {
-		const stat = lstatSync(path.join(request.env.HOME ?? "", ".mcporter", "credentials.json"), { bigint: true });
-		return `${stat.ino}:${stat.mtimeNs}:${stat.size}`;
-	} catch {
-		return null;
-	}
-}
-
 // The route stays the only MCPorter argv composer; its refusal names a fixed
 // code, never the caller's input.
 function transport(request: SchemaRequest, mcporterArgs: readonly string[], effect: "read" | "attended-login", data: Record<string, unknown>): Prepared {
@@ -77,19 +69,22 @@ function transport(request: SchemaRequest, mcporterArgs: readonly string[], effe
 		if (error instanceof RouteError) return refused(error.exitCode === 2 ? "usage" : "schema", `route-${error.code}`);
 		throw error;
 	}
+	const vault = figmaVault(request.env);
 	let before: string | null = null;
 	return {
 		kind: "transport",
 		effect,
 		argv,
-		env,
+		env: { ...env, ...vault.env },
 		data: { server: SERVER, endpoint: FIGMA_ENDPOINT, ...data },
 		commit() {
-			before = vaultStamp(request);
-			return { refusal: null, completed: [] };
+			const directories = directoryStamp(vault);
+			if (!prepareVault(vault)) return { refusal: { kind: "domain", connectorCause: "vault-root-invalid", repair: VAULT_REPAIR }, completed: [] };
+			before = vaultStamp(vault);
+			return { refusal: null, completed: directoryStamp(vault) === directories ? [] : ["account-vault"] };
 		},
 		settle(): readonly LocalEffect[] {
-			return vaultStamp(request) === before ? [] : ["mcporter-vault-file"];
+			return vaultStamp(vault) === before ? [] : ["mcporter-vault-file"];
 		},
 	};
 }
@@ -98,8 +93,8 @@ function prepareAuth(request: AdapterRequest, verb: string, options: readonly Lo
 	if (!AUTH_VERBS.has(verb)) return refused("verb-unsupported", "auth-verb-unsupported");
 	if (verb === "status") {
 		// A present vault may hold only MCPorter's grant-free index.
-		const present = vaultStamp(request) !== null;
-		return { kind: "inspected", data: { server: SERVER, endpoint: FIGMA_ENDPOINT, custody: "mcporter-native-vault", vault: "mcporter-default", vaultIndex: present ? "present" : "absent", grant: present ? "unknown" : "absent", nextStep: "connectors auth login figma" } };
+		const present = vaultStamp(figmaVault(request.env)) !== null;
+		return { kind: "inspected", data: { server: SERVER, endpoint: FIGMA_ENDPOINT, custody: "mcporter-native-vault", vault: "connectors-figma", vaultIndex: present ? "present" : "absent", grant: present ? "unknown" : "absent", nextStep: "connectors auth login figma" } };
 	}
 	return transport(request, ["auth", ...options.map((option) => MCPORTER_LOGIN_FLAGS[option])], "attended-login", {});
 }
