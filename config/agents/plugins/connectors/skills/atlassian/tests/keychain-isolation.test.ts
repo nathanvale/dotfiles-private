@@ -14,7 +14,7 @@ const SKILL = path.resolve(import.meta.dir, "..");
 const ATTENDED_MODULE = path.join("tests", "fixtures", "attended-keychain.ts");
 // Independent oracles: the plugin-relative paths a copy may change, and the
 // shipped leaf's one spawn.
-const LEAF = "skills/atlassian/scripts/custody/keychain-read.ts";
+const LEAF = "bin/keychain-read.ts";
 const MANIFEST = "requirements.json";
 const FRONT_DOOR = "bin/connectors";
 const SECOND = "skills/atlassian/scripts/custody/one-password.ts";
@@ -44,12 +44,14 @@ describe("source scan", () => {
 });
 
 describe("shipped Keychain reader", () => {
-	test("the leaf is the only script naming security, spawns only its literal path, and no shipped source carries the fake marker", () => {
+	test("the shared reader spawns only the fixed security path, and Atlassian scripts carry no reader or fake marker", () => {
 		const scripts = sources().filter((file) => file.startsWith(`scripts${path.sep}`));
-		expect(scripts.filter((file) => readFileSync(path.join(SKILL, file), "utf8").includes("/usr/bin/security"))).toEqual([path.join("scripts", "custody", "keychain-read.ts")]);
+		expect(scripts.filter((file) => readFileSync(path.join(SKILL, file), "utf8").includes("/usr/bin/security"))).toEqual([]);
 		const leaf = readFileSync(path.join(SHIPPED_ROOT, LEAF), "utf8");
 		expect(leaf.split("spawnSync(").length).toBe(2);
 		expect(leaf).toContain(SHIPPED_SPAWN);
+		expect(leaf).toContain("timeout: 15_000");
+		expect(leaf).not.toContain(FAKE_MARKER);
 		expect(scripts.filter((file) => /keychain-read-fake|connectors-test-keychain-reader-fake/.test(readFileSync(path.join(SKILL, file), "utf8")))).toEqual([]);
 	});
 
@@ -61,7 +63,7 @@ describe("substituted plugin copy", () => {
 
 	test("differs from source by exactly the Keychain leaf, the fake op and uv digests, and its recompiled front door", () => {
 		const copy = substitutedPluginRoot();
-		expect(changedPaths(SHIPPED_ROOT, copy)).toEqual([FRONT_DOOR, MANIFEST, LEAF]);
+		expect(changedPaths(SHIPPED_ROOT, copy)).toEqual([FRONT_DOOR, LEAF, MANIFEST]);
 		expect(readFileSync(path.join(copy, LEAF), "utf8")).toContain(FAKE_MARKER);
 		const [shipped, copied] = [manifest(SHIPPED_ROOT), manifest(copy)];
 		expect([copied.sources.op?.binarySha256, copied.sources.uv?.binarySha256]).toEqual([digest(FAKE_OP_LAUNCHER), digest(FAKE_UV_LAUNCHER)]);
@@ -88,7 +90,7 @@ describe("substituted plugin copy", () => {
 		const copy = copyWithFakeReader("connectors-copy-guard-");
 		try {
 			appendFileSync(path.join(copy, SECOND), "\n// changed\n");
-			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([FRONT_DOOR, MANIFEST, LEAF])}: ${JSON.stringify([FRONT_DOOR, MANIFEST, LEAF, SECOND])}`);
+			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([FRONT_DOOR, LEAF, MANIFEST])}: ${JSON.stringify([FRONT_DOOR, LEAF, MANIFEST, SECOND])}`);
 			writeFileSync(path.join(copy, SECOND), readFileSync(path.join(SHIPPED_ROOT, SECOND)));
 			const widened = manifest(copy);
 			widened.sources.op = { ...widened.sources.op, sha256: "0".repeat(64) };
@@ -104,7 +106,7 @@ describe("substituted plugin copy", () => {
 			verifySubstitutedCopy(copy);
 			writeFileSync(path.join(copy, MANIFEST), readFileSync(path.join(SHIPPED_ROOT, MANIFEST)));
 			writeFileSync(path.join(copy, LEAF), readFileSync(path.join(SHIPPED_ROOT, LEAF)));
-			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([FRONT_DOOR, MANIFEST, LEAF])}: ${JSON.stringify([FRONT_DOOR])}`);
+			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([FRONT_DOOR, LEAF, MANIFEST])}: ${JSON.stringify([FRONT_DOOR])}`);
 		} finally {
 			rmSync(copy, { recursive: true, force: true });
 		}

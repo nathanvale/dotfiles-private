@@ -2,14 +2,11 @@
 // the plugin-owned verified MCPorter, trusted site origin and principal from
 // the product item's metadata, and the private write journal. The packaged
 // front door supplies its MCPorter selection and its own internal-role
-// command; the Bun script entry selects MCPorter here and reaches the plugin's
-// compiled front door from source.
-import path from "node:path";
+// command for every invocation.
 import type { ExecutionCapabilities } from "../../../../bin/adapters/contract.ts";
-import { ensureMcporter } from "../../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
-import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, type RegisteredItems, sourceInternalCommand, TENANT_PATTERN } from "../custody/index.ts";
+import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, type RegisteredItems, TENANT_PATTERN } from "../custody/index.ts";
 import { stageFile } from "../outbox.ts";
 import { productFor, REST_SERVER } from "./contract.ts";
 import type { Dependencies, Transport, TransportFailure, TransportResult } from "./engine.ts";
@@ -18,20 +15,14 @@ import { restReply, restSchema } from "./rest.ts";
 import { translateFailure } from "./translate.ts";
 
 const CALL_TIMEOUT_MS = "30000";
-const SKILLS_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..", "skills");
-const REST_PROVIDER_SCRIPT = path.resolve(import.meta.dir, "..", "atlassian-rest-provider.ts");
 
 export type Environment = Record<string, string | undefined>;
-
-function scrubbed(env: Environment): Record<string, string> {
-	return safeEnvironment(env);
-}
 
 // One route call at a time; the dispatcher never overlaps provider calls, so a
 // synchronous spawn is sufficient and keeps the process tree simple.
 function planRoute(env: Environment, tenant: string, binding: CredentialBinding, server: string, mcporterArgs: string[], skillsRoot: string): RoutePlan | TransportFailure {
 	try {
-		return planDispatcherRoute(["atlassian", "--provider", server, "--select", `tenant=${tenant}`, "--", ...mcporterArgs], skillsRoot, scrubbed(env), bindingChannel(binding));
+		return planDispatcherRoute(["atlassian", "--provider", server, "--select", `tenant=${tenant}`, "--", ...mcporterArgs], skillsRoot, safeEnvironment(env), bindingChannel(binding));
 	} catch {
 		return { ok: false, cause: "refused-precondition", hint: "repair the Connector Skill route registry" };
 	}
@@ -43,18 +34,6 @@ function spawnRoute(mcporter: string, plan: RoutePlan): { code: number; stdout: 
 }
 
 type McporterSelection = () => Promise<{ ok: true; binary: string } | TransportFailure>;
-
-// The plugin-owned MCPorter, selected once per transport. PATH never
-// supplies it; first use may bootstrap the pinned release, and any later
-// mismatch refuses with the explicit repair.
-function verifiedMcporter(env: Environment): McporterSelection {
-	let selection: ReturnType<typeof ensureMcporter> | undefined;
-	return async () => {
-		selection ??= ensureMcporter(env);
-		const selected = await selection;
-		return selected.ok ? { ok: true, binary: selected.binary } : { ok: false, cause: "refused-precondition", hint: selected.repair };
-	};
-}
 
 // The packaged front door's selection. It renders its own failure, so this
 // transport only stops before any send.
@@ -95,7 +74,7 @@ function providerReadiness(env: Environment, tenant: string, binding: Credential
 	const product = productFor(server);
 	if (!product) return { ok: false, ...translateFailure({ kind: "malformed", message: "unknown Provider route" }) };
 	const run = Bun.spawnSync([...providerCommand, "--preflight"], {
-		env: { ...scrubbed(env), ...invocationEnvironment({ tenant, product, binding }) },
+		env: { ...safeEnvironment(env), ...invocationEnvironment({ tenant, product, binding }) },
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -116,7 +95,7 @@ function providerReadiness(env: Environment, tenant: string, binding: Credential
 // error and its Jira message text never leaves this adapter.
 function restCall(command: readonly string[], env: Environment, tenant: string, binding: CredentialBinding, tool: string, args: Record<string, unknown>): TransportResult {
 	const run = Bun.spawnSync([...command], {
-		env: { ...scrubbed(env), ...invocationEnvironment({ tenant, product: "jira", binding }) },
+		env: { ...safeEnvironment(env), ...invocationEnvironment({ tenant, product: "jira", binding }) },
 		stdin: Buffer.from(JSON.stringify({ tool, args })),
 		stdout: "pipe",
 		stderr: "pipe",
@@ -131,7 +110,7 @@ function restCall(command: readonly string[], env: Environment, tenant: string, 
 // MCPorter's JSON shapes are not fully documented; a result that is not JSON is
 // reported as malformed rather than guessed. This adapter is the only place
 // provider text is seen; it leaves here as a translated closed cause.
-export function routeTransport(env: Environment, tenant: string, skillsRoot: string = SKILLS_ROOT, packaged?: ExecutionCapabilities): Transport {
+export function routeTransport(env: Environment, tenant: string, skillsRoot: string, capabilities: ExecutionCapabilities): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
 	const toResult = (run: { code: number; stdout: string; stderr: string }): TransportResult => {
 		if (run.code !== 0) return { ok: false, ...translateFailure({ kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout }) };
@@ -144,9 +123,9 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 		if (inBand !== undefined) return { ok: false, ...translateFailure({ kind: "tool-error", message: inBand.slice(0, 2000) }) };
 		return { ok: true, data };
 	};
-	const mcporter = packaged ? packagedMcporter(packaged) : verifiedMcporter(env);
-	const providerCommand = packaged ? packaged.internalCommand("provider") : sourceInternalCommand("provider");
-	const restProviderCommand = packaged ? packaged.internalCommand("rest-provider") : [process.execPath, REST_PROVIDER_SCRIPT];
+	const mcporter = packagedMcporter(capabilities);
+	const providerCommand = capabilities.internalCommand("provider");
+	const restProviderCommand = capabilities.internalCommand("rest-provider");
 	const request = async (binding: CredentialBinding, server: string, mcporterArgs: string[]): Promise<TransportResult> => {
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
@@ -180,10 +159,10 @@ export type Custody = { items: RegisteredItems } | null;
 // for any other slug is an adapter defect, never a use of another tenant's
 // item IDs. The packaged front door passes its physical skills root and its
 // capabilities.
-export function productionDependencies(tenant: string, env: Environment, custody: Custody, packaged?: { skillsRoot: string; capabilities: ExecutionCapabilities }): Dependencies {
-	const custodyCommand = packaged ? packaged.capabilities.internalCommand("custody-child") : sourceInternalCommand("custody-child");
+export function productionDependencies(tenant: string, env: Environment, custody: Custody, packaged: { skillsRoot: string; capabilities: ExecutionCapabilities }): Dependencies {
+	const custodyCommand = packaged.capabilities.internalCommand("custody-child");
 	return {
-		transport: routeTransport(env, tenant, packaged?.skillsRoot, packaged?.capabilities),
+		transport: routeTransport(env, tenant, packaged.skillsRoot, packaged.capabilities),
 		bindCredential: async (slug, product) => {
 			if (slug !== tenant) throw new Error("an Atlassian binding named another tenant");
 			if (custody === null) throw new Error("an Atlassian binding without a validated registration");

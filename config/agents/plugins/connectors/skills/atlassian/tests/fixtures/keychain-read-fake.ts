@@ -1,5 +1,5 @@
 // connectors-test-keychain-reader-fake
-// Test-owned stand-in for scripts/custody/keychain-read.ts. plugin-copy.ts
+// Test-owned stand-in for bin/keychain-read.ts. plugin-copy.ts
 // writes it over that leaf inside a copied plugin root only; the shipped
 // tree always runs the real /usr/bin/security. It emulates the one security
 // call custody makes: the item's value and a trailing newline with status 0

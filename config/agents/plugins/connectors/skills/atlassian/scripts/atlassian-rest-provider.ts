@@ -131,5 +131,3 @@ export async function runRestProvider(argv: readonly string[]): Promise<never> {
 	if (tool === DELETE_TOOL) await guardDelete(item.origin, authorization, args);
 	return emit(await perform(item.origin, authorization, request));
 }
-
-if (import.meta.main) await runRestProvider(process.argv.slice(2));

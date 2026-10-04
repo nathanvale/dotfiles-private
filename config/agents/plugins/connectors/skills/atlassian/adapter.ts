@@ -181,10 +181,6 @@ function prepareRecover(request: RecoverRequest): Prepared {
 	return planGated(request, validated, "adjudicate", label);
 }
 
-// The core accepts any role name; this narrows the adapter's own calls to
-// the roles it registers.
-const roleCommand = (capabilities: ExecutionCapabilities, role: AtlassianInternalRole): readonly string[] => capabilities.internalCommand(role);
-
 // A custody check binds both products' registered items through the custody
 // role. It proves the items and the service token are in custody; it never
 // starts MCPorter or a Provider, so it never claims authentication.
@@ -197,7 +193,7 @@ function prepareAuthCheck(request: AdapterRequest, tenant: string): Prepared {
 		async execute(capabilities: ExecutionCapabilities): Promise<Executed> {
 			const bindings: Record<string, string>[] = [];
 			for (const product of PRODUCTS) {
-				const bound = bindCredential(tenant, product, items[product], request.env, roleCommand(capabilities, "custody-child"));
+				const bound = bindCredential(tenant, product, items[product], request.env, capabilities.internalCommand("custody-child" satisfies AtlassianInternalRole));
 				if (!bound.ok) return { kind: "refused", refusal: { kind: "domain", connectorCause: bound.cause, repair: bound.detail } };
 				bindings.push({ product, ...bound.binding });
 			}
