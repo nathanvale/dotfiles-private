@@ -1,6 +1,6 @@
 {
   "name": "connectors",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Nathan's service connectors for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Connectors",
     "shortDescription": "Work with connected services",
-    "longDescription": "Service connectors shared by Codex and Claude Code, with Atlassian and Canva routes and a local Figma MCP OAuth connection.",
+    "longDescription": "Service connectors shared by Codex and Claude Code, with Atlassian, Canva, and Mermaid routes and a packaged Figma MCP route with journaled writes.",
     "developerName": "Nathan Vale",
     "category": "Productivity",
     "capabilities": [
