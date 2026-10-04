@@ -23,15 +23,15 @@ import path from "node:path";
 import { FIGMA_ENDPOINT } from "../scripts/endpoint.ts";
 import { createBundle, runBundle } from "../../../tests/harness.ts";
 import { type Envelope, FigmaMachine, OFFICIAL_MCPORTER } from "./fixtures/figma-machine.ts";
-import { type FigmaStub, startFigmaStub } from "./fixtures/figma-stub.ts";
+import { type FigmaStub, startFigmaStub, UPLOAD_CAPABILITY } from "./fixtures/figma-stub.ts";
 
 if (process.env.CI && !OFFICIAL_MCPORTER) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for the packaged Figma proof");
 
 // Independent oracles, restated from ADR 0005 and Figma's catalog.
 const HOSTED_ENDPOINT = "https://mcp.figma.com/mcp";
 const ADMITTED_READS = ["whoami", "get_metadata", "get_design_context", "get_screenshot", "get_variable_defs", "download_assets", "get_motion_context", "get_figjam", "get_libraries", "search_design_system", "get_code_connect_map", "get_code_connect_suggestions", "get_context_for_code_connect", "list_generative_plugins", "get_generative_plugin", "list_shaders", "get_shader", "list_file_shaders", "weave_list_tools", "weave_get_tool_inputs", "weave_get_tool_run_output"];
-const ADMITTED_WRITES = ["add_code_connect_map", "send_code_connect_mappings", "create_generative_plugin", "create_shader", "update_generative_plugin", "update_shader", "create_new_file", "generate_diagram", "use_figma", "weave_cancel_tool_run", "weave_run_tool"];
-const NOT_ADMITTED = ["generate_figma_design", "upload_assets", "weave_upload_asset"];
+const ADMITTED_WRITES = ["add_code_connect_map", "send_code_connect_mappings", "create_generative_plugin", "create_shader", "update_generative_plugin", "update_shader", "create_new_file", "generate_diagram", "use_figma", "upload_assets", "weave_cancel_tool_run", "weave_run_tool"];
+const NOT_ADMITTED = ["generate_figma_design", "weave_upload_asset"];
 const AMBIENT_SENTINEL = "SENTINEL_AMBIENT_FIGMA_TOKEN";
 
 interface Context {
@@ -57,7 +57,10 @@ async function withFigma(body: (context: Context) => Promise<void>): Promise<voi
 		// The first command bootstraps the verified MCPorter; later ones read.
 		expect((await machine.run(["schema", "figma"])).code).toBe(0);
 		await body(context);
-		for (const surface of [...outputs, JSON.stringify(stub.calls)]) expect(surface).not.toContain(AMBIENT_SENTINEL);
+		for (const surface of [...outputs, JSON.stringify(stub.calls), machine.stateText()]) {
+			expect(surface).not.toContain(AMBIENT_SENTINEL);
+			expect(surface).not.toContain(UPLOAD_CAPABILITY);
+		}
 		expect(machine.hostileCalls()).toEqual([]);
 	} finally {
 		stub.stop();
@@ -90,7 +93,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("schema and reads reach exactly the admitted too
 		// advertises all 35 catalog tools.
 		const live = ((schema.result.data?.schema?.tools ?? []) as { name: string }[]).map((tool) => tool.name).sort();
 		expect(live).toEqual([...ADMITTED_READS, ...ADMITTED_WRITES].sort());
-		expect(live).toHaveLength(32);
+		expect(live).toHaveLength(33);
 		expect([...(schema.result.data?.allowedTools as string[])].sort()).toEqual(live);
 
 		const whoami = await run(["run", "figma", "whoami"]);
@@ -112,8 +115,11 @@ test.skipIf(!OFFICIAL_MCPORTER)("schema and reads reach exactly the admitted too
 }, 120_000);
 
 // Writes in an order where each one's precondition was made by an earlier one.
-// The stub numbers new objects 0001 onward in creation order.
-const WRITES: { operation: string; input: unknown; effects: string[] }[] = [
+// The stub numbers new objects 0001 onward in creation order. 13 flows cover
+// the 12 admitted write tools: generate_diagram runs twice (new board, then
+// into an existing file). An input given as a function receives the machine's
+// asset directory.
+const WRITES: { operation: string; input: unknown | ((assets: string) => unknown); effects: string[] }[] = [
 	{ operation: "add_code_connect_map", input: { fileKey: "FileKeyExisting01", nodeId: "1:1", source: "src/Button.tsx", componentName: "Button", label: "React" }, effects: ["figma-node:FileKeyExisting01:1:1"] },
 	{ operation: "send_code_connect_mappings", input: { fileKey: "FileKeyExisting01", nodeId: "1:2", mappings: [{ nodeId: "1:3", componentName: "Card", source: "src/Card.tsx", label: "React" }] }, effects: ["figma-node:FileKeyExisting01:1:2"] },
 	{ operation: "create_generative_plugin", input: { name: "Squares", description: "draws squares", planKey: "team::1" }, effects: ["gp-0001"] },
@@ -124,16 +130,20 @@ const WRITES: { operation: string; input: unknown; effects: string[] }[] = [
 	{ operation: "generate_diagram", input: { name: "Flow", mermaidSyntax: "flowchart LR\n  A --> B", planKey: "team::1" }, effects: ["BoardKeyNewOne0004"] },
 	{ operation: "generate_diagram", input: { name: "Second flow", mermaidSyntax: "flowchart LR\n  C --> D", fileKey: "FileKeyExisting01" }, effects: ["FileKeyExisting01"] },
 	{ operation: "use_figma", input: { fileKey: "FileKeyExisting01", code: 'add("Hero banner")', description: "add a banner", verify: { tool: "get_metadata", nodeId: "0:1", contains: ["Hero banner"] } }, effects: ["figma-file:FileKeyExisting01"] },
-	{ operation: "weave_run_tool", input: { recipeId: "recipe-1", inputs: [{ nodeId: "prompt", value: "a cat" }] }, effects: ["run-0005"] },
-	{ operation: "weave_cancel_tool_run", input: { recipeId: "recipe-1", runIds: ["run-0005"] }, effects: ["run-0005"] },
+	{ operation: "upload_assets", input: (assets: string) => ({ fileKey: "FileKeyExisting01", currentPageId: "0:1", assets: [{ path: path.join(assets, "hero.png"), contentType: "image/png" }] }), effects: ["1:4"] },
+	{ operation: "weave_run_tool", input: { recipeId: "recipe-1", inputs: [{ nodeId: "prompt", value: "a cat" }] }, effects: ["run-0006"] },
+	{ operation: "weave_cancel_tool_run", input: { recipeId: "recipe-1", runIds: ["run-0006"] }, effects: ["run-0006"] },
 ];
 
 test.skipIf(!OFFICIAL_MCPORTER)("every admitted write sends once after its preview and applies only on read-back", async () => {
-	await withFigma(async ({ run, stub }) => {
+	await withFigma(async ({ run, stub, machine }) => {
+		expect([WRITES.length, new Set(WRITES.map((write) => write.operation)).size]).toEqual([13, 12]);
 		expect([...new Set(WRITES.map((write) => write.operation))].sort()).toEqual([...ADMITTED_WRITES].sort());
+		const assets = machine.assets({ "hero.png": "PNG-HERO" });
 		for (const write of WRITES) {
 			const sentBefore = callsOf(stub, write.operation).length;
-			const applied = await previewApply(run, write.operation, write.input);
+			const value = typeof write.input === "function" ? write.input(assets) : write.input;
+			const applied = await previewApply(run, write.operation, value);
 			expect([write.operation, station(applied)]).toEqual([write.operation, { code: 0, cause: "SUCCESS_RUN_APPLIED", connectorCause: null }]);
 			expect([write.operation, (applied.result.data?.receipt?.effects as { id: string }[]).map((effect) => effect.id)]).toEqual([write.operation, write.effects]);
 			expect([write.operation, callsOf(stub, write.operation).length - sentBefore]).toEqual([write.operation, 1]);
@@ -253,3 +263,49 @@ test.skipIf(!OFFICIAL_MCPORTER)("reads, schema, and writes use only Figma's own 
 		expect(existsSync(path.join(machine.home, ".mcporter"))).toBe(false);
 	});
 }, 120_000);
+
+const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
+
+// The upload URLs are capabilities: the adapter alone holds and POSTs them,
+// and withFigma sweeps every output and the whole state root for the token.
+test.skipIf(!OFFICIAL_MCPORTER)("upload_assets posts the previewed bytes itself and applies only when read-back shows the placement", async () => {
+	await withFigma(async ({ run, stub, machine }) => {
+		const assets = machine.assets({ "a.png": "PNG-A", "b.png": "PNG-B" });
+		const page = await previewApply(run, "upload_assets", { fileKey: "FileKeyExisting01", currentPageId: "0:1", assets: [{ path: path.join(assets, "a.png"), contentType: "image/png" }, { path: path.join(assets, "b.png"), contentType: "image/png" }] });
+		expect(station(page)).toEqual({ code: 0, cause: "SUCCESS_RUN_APPLIED", connectorCause: null });
+		expect((page.result.data?.receipt?.effects as { id: string }[]).map((effect) => effect.id)).toEqual(["1:2", "1:3"]);
+		expect(stub.posts.map((post) => [post.contentType, post.sha256])).toEqual([["image/png", sha256("PNG-A")], ["image/png", sha256("PNG-B")]]);
+		expect(callsOf(stub, "upload_assets").map((call) => call.args)).toEqual([{ fileKey: "FileKeyExisting01", count: 2, currentPageId: "0:1" }]);
+
+		const fill = await previewApply(run, "upload_assets", { fileKey: "FileKeyExisting01", nodeIds: ["1:1"], assets: [{ path: path.join(assets, "a.png"), contentType: "image/png" }], scaleMode: "FIT" });
+		expect(station(fill)).toEqual({ code: 0, cause: "SUCCESS_RUN_APPLIED", connectorCause: null });
+		expect((fill.result.data?.receipt?.effects as { id: string }[]).map((effect) => effect.id)).toEqual(["1:1"]);
+		expect(callsOf(stub, "upload_assets")[1]?.args).toEqual({ fileKey: "FileKeyExisting01", count: 1, nodeIds: ["1:1"], scaleMode: "FIT" });
+		expect(stub.posts).toHaveLength(3);
+	});
+}, 180_000);
+
+test.skipIf(!OFFICIAL_MCPORTER)("upload_assets refuses changed bytes, unreadable sources, bad shapes, and any upload URL off Figma's origin", async () => {
+	await withFigma(async ({ run, stub, machine }) => {
+		const assets = machine.assets({ "a.png": "PNG-A", "logo.svg": "<svg/>" });
+		const value = { fileKey: "FileKeyExisting01", currentPageId: "0:1", assets: [{ path: path.join(assets, "a.png"), contentType: "image/png" }] };
+		const preview = await run(["run", "figma", "upload_assets", ...input(value), "--preview"]);
+		machine.assets({ "a.png": "PNG-A-CHANGED" });
+		expect(station(await run(["run", "figma", "upload_assets", ...input(value), "--apply", preview.result.data?.previewId as string]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "preview-input-mismatch" });
+		expect(station(await run(["run", "figma", "upload_assets", ...input({ ...value, assets: [{ path: assets, contentType: "image/png" }] }), "--preview"]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "file-unreadable" });
+		for (const bad of [
+			{ ...value, assets: [{ path: "a.png", contentType: "image/png" }] },
+			{ ...value, assets: [{ path: path.join(assets, "a.png"), contentType: "application/pdf" }] },
+			{ fileKey: "FileKeyExisting01", assets: value.assets },
+			{ fileKey: "FileKeyExisting01", nodeIds: ["1:1", "1:2"], assets: value.assets },
+			{ fileKey: "FileKeyExisting01", nodeIds: ["1:1"], assets: [{ path: path.join(assets, "logo.svg"), contentType: "image/svg+xml" }] },
+		]) expect(station(await run(["run", "figma", "upload_assets", ...input(bad), "--preview"]))).toEqual({ code: 4, cause: "SCHEMA_ADAPTER_REFUSED", connectorCause: "input-invalid" });
+		expect(callsOf(stub, "upload_assets")).toHaveLength(0);
+
+		stub.uploadOrigin = "https://uploads.example.test";
+		const fresh = machine.assets({ "c.png": "PNG-C" });
+		const refused = await previewApply(run, "upload_assets", { ...value, assets: [{ path: path.join(fresh, "c.png"), contentType: "image/png" }] });
+		expect(station(refused)).toEqual({ code: 3, cause: "DOMAIN_RUN_FAILED_RECORDED", connectorCause: "upload-url-refused" });
+		expect([callsOf(stub, "upload_assets").length, stub.posts.length]).toEqual([1, 0]);
+	});
+}, 180_000);

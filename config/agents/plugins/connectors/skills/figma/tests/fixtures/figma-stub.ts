@@ -2,7 +2,8 @@
 // MCP's JSON-over-HTTP transport to the real MCPorter, advertises the whole
 // documented catalog (so MCPorter's allow-list does the filtering), and keeps
 // just enough state for read-back: Code Connect mappings, generative plugins,
-// shaders, files with their visible names, plans, and Weave runs. It never
+// shaders, files with their visible frames, node fills, plans, Weave runs,
+// and single-use upload slots whose URLs carry UPLOAD_CAPABILITY. It never
 // sees the Connectors envelope and supplies no cause or effect. Its call log
 // is test-owned evidence of what reached it.
 export const CATALOG = [
@@ -14,6 +15,8 @@ export const CATALOG = [
 ];
 
 export type Args = Record<string, any>;
+// The secret-shaped token every upload URL carries; no output may contain it.
+export const UPLOAD_CAPABILITY = "SENTINEL_FIGMA_UPLOAD_CAPABILITY";
 interface Item {
 	id: string;
 	name: string;
@@ -29,6 +32,10 @@ export interface FigmaStub {
 	weaveCost: number;
 	// The next use_figma reply succeeds but takes no visible effect.
 	silentUseFigma: boolean;
+	// Every upload POST the stub accepted, in order.
+	readonly posts: { slot: string; contentType: string; sha256: string }[];
+	// When set, upload URLs name this origin instead of the stub's own.
+	uploadOrigin: string | null;
 	// A mapping that lands outside any reply, as a late request would.
 	landMapping(fileKey: string, nodeId: string, componentName: string, source: string): void;
 	stop(): void;
@@ -40,6 +47,8 @@ export function startFigmaStub(): FigmaStub {
 	const shaders: Item[] = [];
 	const files = new Map<string, string[]>([["FileKeyExisting01", ["Root"]]]);
 	const runs: { runId: string; status: string }[] = [{ runId: "run-0", status: "COMPLETED" }];
+	const fills = new Map<string, string>();
+	const slots = new Map<string, { fileKey: string; nodeId: string | null; used: boolean }>();
 	let counter = 0;
 	const next = (prefix: string) => `${prefix}${String(++counter).padStart(4, "0")}`;
 	const metadata = (fileKey: string) => {
@@ -49,6 +58,17 @@ export function startFigmaStub(): FigmaStub {
 	const effects: Record<string, (args: Args) => unknown> = {
 		whoami: () => ({ email: "fixture@example.test", plans: [{ key: "team::1", name: "Fixture team", seat: "Full" }] }),
 		get_metadata: (args) => metadata(args.fileKey),
+		get_design_context: (args) => ({ code: `<div data-node-id="${args.nodeId}" data-fill="${fills.get(`${args.fileKey}:${args.nodeId}`) ?? "none"}" />` }),
+		upload_assets: (args) => {
+			if (!files.has(args.fileKey)) return null;
+			const uploads = Array.from({ length: args.count }, (_, index) => {
+				const slot = next("slot-");
+				const nodeId = args.nodeIds?.[index] ?? null;
+				slots.set(slot, { fileKey: args.fileKey, nodeId, used: false });
+				return { uploadUrl: `${stub.uploadOrigin ?? origin()}/upload/${slot}?token=${UPLOAD_CAPABILITY}`, ...(nodeId ? { targetNodeId: nodeId } : {}) };
+			});
+			return { uploads };
+		},
 		get_code_connect_map: (args) => ({ mappings: mappings.get(`${args.fileKey}:${args.nodeId}`) ?? [] }),
 		add_code_connect_map: (args) => {
 			const key = `${args.fileKey}:${args.nodeId}`;
@@ -124,6 +144,8 @@ export function startFigmaStub(): FigmaStub {
 		failNext: null,
 		weaveCost: 0,
 		silentUseFigma: false,
+		posts: [],
+		uploadOrigin: null,
 		landMapping(fileKey, nodeId, componentName, source) {
 			const key = `${fileKey}:${nodeId}`;
 			mappings.set(key, [...(mappings.get(key) ?? []), { componentName, source }]);
@@ -138,6 +160,8 @@ export function startFigmaStub(): FigmaStub {
 		idleTimeout: 0,
 		async fetch(request) {
 			if (request.method !== "POST") return new Response(null, { status: 405 });
+			const url = new URL(request.url);
+			if (url.pathname.startsWith("/upload/")) return upload(url, request);
 			const message = (await request.json()) as { id?: number; method: string; params?: { protocolVersion?: string; name?: string; arguments?: Args } };
 			if (message.id === undefined) return new Response(null, { status: 202 });
 			const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: message.id, result });
@@ -157,6 +181,22 @@ export function startFigmaStub(): FigmaStub {
 			return reply({ content: [{ type: "text", text: JSON.stringify(result) }] });
 		},
 	});
-	(stub as { url: string }).url = `http://127.0.0.1:${server.port}/mcp`;
+	function origin(): string {
+		return `http://127.0.0.1:${server.port}`;
+	}
+	// One single-use slot: the POST places its bytes as a node fill or a new
+	// frame, as Figma documents for an upload URL.
+	async function upload(url: URL, request: Request): Promise<Response> {
+		const slot = slots.get(url.pathname.slice("/upload/".length));
+		if (url.searchParams.get("token") !== UPLOAD_CAPABILITY || slot === undefined || slot.used) return new Response(null, { status: 410 });
+		slot.used = true;
+		const bytes = new Uint8Array(await request.arrayBuffer());
+		const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+		stub.posts.push({ slot: url.pathname.slice("/upload/".length), contentType: request.headers.get("content-type") ?? "", sha256 });
+		if (slot.nodeId) fills.set(`${slot.fileKey}:${slot.nodeId}`, sha256.slice(0, 12));
+		else files.get(slot.fileKey)?.push(`Image ${sha256.slice(0, 8)}`);
+		return Response.json({ ok: true });
+	}
+	(stub as { url: string }).url = `${origin()}/mcp`;
 	return stub;
 }

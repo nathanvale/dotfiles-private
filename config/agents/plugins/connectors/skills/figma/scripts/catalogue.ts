@@ -5,10 +5,11 @@
 // documented catalog and the authenticated tools/list of 2026-10-05. The
 // registry's allow-list restates exactly these names.
 //
-// Not admitted: generate_figma_design (its effect is a provider-supplied
-// capture script run in a browser outside this adapter), upload_assets and
-// weave_upload_asset (each returns a capability URL or token whose upload
-// happens outside MCP, and no admitted read observes the uploaded effect).
+// Not yet admitted, and still required: generate_figma_design (its effect is
+// a provider-supplied capture script run in a browser outside this adapter)
+// and weave_upload_asset (no admitted read observes a Weave asset). ADR 0005
+// records the contract change each needs. upload_assets runs through the
+// adapter-owned outbox in uploads.ts.
 import { createHash } from "node:crypto";
 
 export const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -29,7 +30,8 @@ export interface Call {
 // new-id: exactly one identifier outside the baseline, carrying the marks.
 // reply-target: the reply names a created file that a read then finds.
 // weave-run: the reply names runs a read then finds, or a quote that spent nothing.
-export type EvidenceClass = "marks" | "version" | "canceled" | "new-id" | "reply-target" | "weave-run";
+// upload: uploads.ts observes the target page or nodes itself.
+export type EvidenceClass = "marks" | "version" | "canceled" | "new-id" | "reply-target" | "weave-run" | "upload";
 
 export interface WriteSpec {
 	readonly keys: KeySpec;
@@ -67,6 +69,18 @@ const files = list(shaped(["path", "content"]));
 // A Weave input: its nodeId and, optionally, a value of the input's own type.
 const weaveInput: Check = (value) => isRecord(value) && text(value.nodeId) && Object.keys(value).every((key) => key === "nodeId" || key === "value");
 const VERIFY_TOOLS = ["get_metadata", "get_design_context", "get_variable_defs"];
+// Figma's documented upload types; an SVG becomes vectors, never a node fill.
+const UPLOAD_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
+const MAX_UPLOADS = 60;
+const asset: Check = (value) => isRecord(value) && Object.keys(value).sort().join(",") === "contentType,path" && text(value.path) && (value.path as string).startsWith("/") && oneOf(...UPLOAD_TYPES)(value.contentType);
+// Targets fill one existing node per raster asset; otherwise new frames land
+// on a named page, so read-back has one observable place to look.
+function uploadShape(input: Input): boolean {
+	const assets = input.assets as { contentType: string }[];
+	if (assets.length > MAX_UPLOADS) return false;
+	if (input.nodeIds === undefined) return input.currentPageId !== undefined;
+	return (input.nodeIds as string[]).length === assets.length && assets.every((item) => item.contentType !== "image/svg+xml");
+}
 const verify: Check = (value) => isRecord(value) && Object.keys(value).sort().join(",") === "contains,nodeId,tool" && oneOf(...VERIFY_TOOLS)(value.tool) && text(value.nodeId) && list(text)(value.contains);
 
 const s = (input: Input, key: string): string => input[key] as string;
@@ -145,6 +159,14 @@ const WRITES: Readonly<Record<string, WriteSpec>> = {
 		evidence: "marks",
 		partial: true,
 		send: (input) => Object.fromEntries(Object.entries(input).filter(([key]) => key !== "verify")),
+	},
+	upload_assets: {
+		keys: { required: { fileKey: text, assets: list(asset) }, optional: { nodeIds: list(text), currentPageId: text, scaleMode: oneOf("FILL", "FIT", "TILE") } },
+		identity: (input) => `figma-file:${s(input, "fileKey")}`,
+		observe: (input) => ({ tool: "get_metadata", args: { fileKey: s(input, "fileKey"), nodeId: (input.currentPageId as string | undefined) ?? "" } }),
+		marks: () => [],
+		evidence: "upload",
+		valid: uploadShape,
 	},
 	weave_cancel_tool_run: {
 		keys: { required: { recipeId: text, runIds: list(text) }, optional: {} },

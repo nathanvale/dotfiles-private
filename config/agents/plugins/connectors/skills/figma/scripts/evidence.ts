@@ -58,11 +58,22 @@ function collect(data: unknown, keys: ReadonlySet<string>): string[] {
 	return [...new Set(found)].sort();
 }
 
+// Node ids inside an XML outline such as get_metadata's.
+const XML_ID = / id="([^"]+)"/g;
+function xmlIds(data: unknown): string[] {
+	const found: string[] = [];
+	walk(data, (_key, value) => {
+		if (typeof value === "string") for (const match of value.matchAll(XML_ID)) found.push(match[1] as string);
+	});
+	return found;
+}
+
 function observationOf(data: unknown): Observation {
 	const expanded = expand(data);
 	const text = JSON.stringify(expanded);
 	const versions = collect(expanded, new Set(["version"]));
-	return { text, baseline: { digest: sha256(text), ids: collect(expanded, ID_KEYS), version: versions.length === 1 ? (versions[0] as string) : null }, statuses: collect(expanded, new Set(["status"])) };
+	const ids = [...new Set([...collect(expanded, ID_KEYS), ...xmlIds(expanded)])].sort();
+	return { text, baseline: { digest: sha256(text), ids, version: versions.length === 1 ? (versions[0] as string) : null }, statuses: collect(expanded, new Set(["status"])) };
 }
 
 export async function observe(call: Call, caller: Caller): Promise<Observed> {
@@ -103,7 +114,7 @@ export function baselineRefusal(write: WriteInput, observation: Observation): st
 	return null;
 }
 
-const newIds = (baseline: Baseline, observation: Observation): string[] => observation.baseline.ids.filter((id) => !baseline.ids.includes(id));
+export const newIds = (baseline: Baseline, observation: Observation): string[] => observation.baseline.ids.filter((id) => !baseline.ids.includes(id));
 
 type Rule = (write: WriteInput, baseline: Baseline, observation: Observation, unchanged: Evidence) => Evidence;
 
@@ -126,6 +137,8 @@ const RULES: Readonly<Record<WriteInput["spec"]["evidence"], Rule>> = {
 	"weave-run": (_write, baseline, observation) => (newIds(baseline, observation).length === 0 ? { proof: "baseline" } : { proof: "none" }),
 	// Only an existing destination file can show its baseline; an unchanged
 	// plan list says nothing about a file created elsewhere.
+	// uploads.ts settles uploads from its own page or node reads.
+	upload: () => ({ proof: "none" }),
 	"reply-target": ({ spec, input }, _baseline, observation, unchanged) => {
 		if (input.fileKey === undefined) return { proof: "none" };
 		return allPresent(spec.marks(input), observation.text) ? completed([input.fileKey as string]) : unchanged;

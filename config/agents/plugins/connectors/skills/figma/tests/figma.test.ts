@@ -52,9 +52,9 @@ const FIGMA_WRITE_TOOLS = [
 ];
 const FIGMA_WEAVE_TOOLS = ["weave_list_tools", "weave_get_tool_inputs", "weave_upload_asset", "weave_run_tool", "weave_get_tool_run_output", "weave_cancel_tool_run"];
 const FIGMA_CATALOG = [...FIGMA_READ_TOOLS, ...FIGMA_WRITE_TOOLS, ...FIGMA_WEAVE_TOOLS];
-// ADR 0005: the adapter reaches every catalog tool except three whose effect
-// no admitted read can observe or whose capability would leave the adapter.
-const FIGMA_NOT_ADMITTED = ["generate_figma_design", "upload_assets", "weave_upload_asset"];
+// ADR 0005: the adapter reaches every catalog tool except two whose effect no
+// admitted read can yet observe; both remain required open capabilities.
+const FIGMA_NOT_ADMITTED = ["generate_figma_design", "weave_upload_asset"];
 const FIGMA_ADMITTED = FIGMA_CATALOG.filter((tool) => !FIGMA_NOT_ADMITTED.includes(tool)).sort();
 // Names an upstream server can expose outside the catalog: the MCP prompt, a
 // tool named only in server instructions, and a broad dispatcher.
@@ -70,7 +70,7 @@ describe("Figma hosted Provider", () => {
 	test("the documented catalog oracle holds 18 read, 11 write, and 6 Weave tools", () => {
 		expect([FIGMA_READ_TOOLS.length, FIGMA_WRITE_TOOLS.length, FIGMA_WEAVE_TOOLS.length]).toEqual([18, 11, 6]);
 		expect(new Set(FIGMA_CATALOG).size).toBe(35);
-		expect(FIGMA_ADMITTED).toHaveLength(32);
+		expect(FIGMA_ADMITTED).toHaveLength(33);
 	});
 
 	test("registry fixes the hosted endpoint and admits exactly the adapter's catalog", () => {
@@ -84,7 +84,7 @@ describe("Figma hosted Provider", () => {
 			auth: "oauth",
 			clientName: "Claude Code",
 		});
-		expect(allowedTools).toHaveLength(32);
+		expect(allowedTools).toHaveLength(33);
 		expect([...allowedTools].sort()).toEqual(FIGMA_ADMITTED);
 		expect([...OPERATION_NAMES].sort()).toEqual(FIGMA_ADMITTED);
 		expect(JSON.parse(readFileSync(ROUTE, "utf8"))).toEqual({ defaultProvider: "figma-connectors", oauth: "mcporter", dispatcherOwned: true });

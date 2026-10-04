@@ -8,7 +8,7 @@
 // PATH and must stay unused. Evidence is substituted-source packaged process
 // proof, never shipped-binary or hosted proof.
 import { afterAll } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { compileFrontDoor } from "../../../../tests/compile-front-door.ts";
@@ -96,6 +96,21 @@ export class FigmaMachine {
 	hostileCalls(): unknown[] {
 		const file = path.join(this.root, "hostile-mcporter.jsonl");
 		return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+	}
+
+	// Writes named files into this machine's asset directory and returns it.
+	assets(files: Record<string, string>): string {
+		const directory = path.join(this.root, "assets");
+		mkdirSync(directory, { recursive: true });
+		for (const [name, content] of Object.entries(files)) writeFileSync(path.join(directory, name), content);
+		return directory;
+	}
+
+	// Every regular file under this machine's Connectors state, as text.
+	stateText(): string {
+		const root = path.join(this.state, "connectors");
+		if (!existsSync(root)) return "";
+		return (readdirSync(root, { recursive: true }) as string[]).map((relative) => path.join(root, relative)).filter((file) => lstatSync(file).isFile() && lstatSync(file).size < 8 * 1024 * 1024).map((file) => readFileSync(file, "utf8")).join("\n");
 	}
 
 	journalDirectory(): string {

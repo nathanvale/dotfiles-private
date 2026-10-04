@@ -95,9 +95,14 @@ function pruneStale(outbox: string, keep: string, now: number): void {
 // Copy one absolute local file into the outbox as <digest>/<basename> and
 // return that relative path, the only form the Provider can read.
 export function stageFile(tenant: string, env: EnvironmentSource, file: string, now: number = Date.now()): StageResult {
+	return stageInto(outboxDirectory(tenant, env), file, now);
+}
+
+// The staging itself, into any owned outbox directory. The Figma adapter
+// stages its uploads through this same owner under its own state root.
+export function stageInto(outbox: string, file: string, now: number = Date.now()): StageResult {
 	const source = openRegularSource(file);
 	if (source === undefined) return { ok: false, reason: "file-unreadable" };
-	const outbox = outboxDirectory(tenant, env);
 	let temporary: string | undefined;
 	try {
 		if (!ownedDirectory(outbox).ok) return { ok: false, reason: "outbox-unavailable" };

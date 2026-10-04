@@ -28,10 +28,10 @@ The plugin's `AGENTS.md` requires any write capability to follow the Atlassian p
 
 ## Decision
 
-We will choose Option B because it reaches every tool whose effect the route can prove, keeps the write contract and the Weave cost gate as refusals rather than clauses, and states exactly what blocks the rest.
+We will choose Option B because it reaches every tool whose effect the route can prove, keeps the write contract and the Weave cost gate as refusals rather than clauses, and states exactly what the remaining required tools still need.
 
 - `skills/figma/config/route.json` is `dispatcherOwned`; the plain route refuses every Figma verb. `skills/figma/adapter.ts` serves `connectors auth status|login figma`, `run figma`, `schema figma`, and `recover figma`, and refuses any registry that is not exactly the packaged one.
-- The registry admits exactly 32 names, equal to the catalogue in `skills/figma/scripts/catalogue.ts`.
+- The registry admits exactly 33 names, equal to the catalogue in `skills/figma/scripts/catalogue.ts`.
 - Custody moves from MCPorter's default HOME vault (ADR 0003) to Figma's own vault root under Connectors state (`scripts/vault.ts`), named in every plan. The front door otherwise runs a plan without its own data root in the keyless root other connectors share, which would put the Figma grant beside them. Activating this needs one attended `connectors auth login figma`; the old HOME-vault grant stays where it is until Nathan resets it.
 - Writes follow the Mermaid flow in `scripts/writes.ts` and `scripts/journal.ts`. The read-back rule per tool lives in `scripts/evidence.ts`: an unfamiliar result shape yields no evidence, so an effect stays unknown and its object blocked; it never completes by assumption.
 
@@ -43,25 +43,28 @@ We will choose Option B because it reaches every tool whose effect the route can
 | Write | `update_generative_plugin`, `update_shader` | the object's version moved |
 | Write | `create_new_file`, `generate_diagram` | the reply's file key reads back through `get_metadata`; into an existing board, its name appears |
 | Write | `use_figma` | a caller-declared read (`verify`: tool, node, values) shows every value; the view is partial, so an unchanged read never proves no effect |
+| Write | `upload_assets` | new node ids on `currentPageId` (one per asset), or every `nodeIds` target's `get_design_context` moved (partial view, never unchanged). Local files are staged through the Atlassian outbox owner (`stageInto`) and their digests join the preview; the adapter holds the returned upload URLs in memory and POSTs the staged bytes itself, only to Figma's origin, never following a redirect. No URL reaches an envelope, the journal, an argument, or a log. |
 | Write | `weave_cancel_tool_run` | every named run reports `CANCELED` |
 | Paid write | `weave_run_tool` | the reply's run ids read back. A quote reply with an unchanged run list settles unchanged and records the quoted cost; `acknowledgedCost` must equal a fresh recorded quote for the identical input |
 
-### Not admitted, and the exact gap
+### Required capabilities still open
 
-- `generate_figma_design`: the effect is a provider-supplied capture script run in a browser against a web page, outside this adapter; only polling by `captureId` observes it. Admission needs a decision on executing that script (browser route and capability handling) and a captured-node read-back.
-- `upload_assets`: returns single-use upload URLs; the upload is an out-of-band POST, and a fill on an existing node is not visible to `get_metadata`. Admission needs an adapter-owned outbox (as the Atlassian Upload Outbox) that performs the POST so no URL leaves the adapter, plus a read that shows the placed image (likely `get_design_context` on the target node), qualified against live output.
-- `weave_upload_asset`: returns an upload URL and token; no admitted read observes a Weave asset afterwards, so an unreplied upload could never be adjudicated. Admission needs the same outbox and either a Weave asset read or an accepted rule that an asset is proven only by its use in a read-back run.
+Nathan's requirement is all 35 tools; these two remain required and unadmitted. A successful provider reply alone never relaxes the read-back contract.
+
+- `generate_figma_design`: the effect is a provider-supplied capture script run in a browser against a web page, outside this adapter; only polling by `captureId` observes it. Needed: an accepted decision that a native Harness browser (ADR-0011 route) may execute Figma's capture script against a page Nathan names; a capability rule that the script and `captureId` cross only by an owner-only file; and read-back by the captured node appearing in `get_metadata`. The proposal and canary travel with the Spec #67 ticket.
+- `weave_upload_asset`: returns an upload URL and token; the adapter outbox can contain both, but no admitted read observes a Weave asset afterwards, so an unreplied upload could never be adjudicated. Needed: either a Weave read that lists or fetches an uploaded asset, or an accepted evidence rule that an asset is proven only when a read-back Weave run that consumed it completes. Same ticket proposal.
 
 No operator-attested adjudication is assumed; settling by read-back evidence stays the contract.
 
 ## Consequences
 
-- Positive: 32 of 35 catalog tools reach Codex and Claude Code through one route once installed, each write under preview, journal, and evidence-only settlement.
+- Positive: 33 of 35 catalog tools reach Codex and Claude Code through one route once installed, each write under preview, journal, and evidence-only settlement.
 - Positive: a Weave spend needs a cost Figma quoted for that exact input within 15 minutes.
 - Negative: reads move from `provider-route figma -- call` to `connectors run figma`; installed copies need the rebuilt front door, and Nathan needs one attended login into the new vault root.
 - Negative: each write costs up to three rate-limited reads (preview, apply, read-back). On a View or Collab seat this exhausts the monthly allowance quickly; View seats may also lack edit rights on a file.
 - Negative: an unprovable `use_figma` or create blocks its object until a read-back finds the change.
 - Neutral: read-back parsers were built against the live input schemas and a stub, not against live write replies; their live behavior is unproved until an authorized write.
+- Neutral: the upload origin rule (`https` on `figma.com` or a subdomain) is unqualified against live upload URLs; a different live host refuses the POST as `upload-url-refused` and leaves the page unchanged until the rule is qualified.
 
 ## Options and Tradeoffs
 
@@ -82,8 +85,8 @@ No operator-attested adjudication is assumed; settling by read-back evidence sta
 
 ## Confirmation
 
-- `skills/figma/tests/figma.test.ts`: the 35-tool catalog literal (18, 11, 6); the registry admits exactly 32 and equals the catalogue; the plain route refuses `auth`, `list`, and `call` as dispatcher-owned; and the installed MCPorter, given a stdio probe advertising all 35 names plus the prompt, `get_figma_skill`, and `executeWrite`, lists exactly the 32 and refuses the rest before the server starts.
-- `skills/figma/tests/packaged.test.ts`: through the compiled front door and the official MCPorter 0.14.0 against a stateful loopback stub: the live listing is exactly 32; every admitted write applies once after its preview and only on read-back; a preview applies once with identical input; Weave acknowledges only a quoted cost; an unreplied write blocks its object and settles only on found evidence; `use_figma` never settles unchanged; auth status reads presence only and login needs an attended terminal; reads and writes touch only Figma's vault root, never the keyless root or HOME.
+- `skills/figma/tests/figma.test.ts`: the 35-tool catalog literal (18, 11, 6); the registry admits exactly 33 and equals the catalogue; the plain route refuses `auth`, `list`, and `call` as dispatcher-owned; and the installed MCPorter, given a stdio probe advertising all 35 names plus the prompt, `get_figma_skill`, and `executeWrite`, lists exactly the 33 and refuses the rest before the server starts.
+- `skills/figma/tests/packaged.test.ts`: through the compiled front door and the official MCPorter 0.14.0 against a stateful loopback stub: the live listing is exactly 33; 13 flows apply all 12 admitted write tools once after preview and only on read-back; upload_assets posts the exact previewed bytes and content type itself, refuses changed bytes, unreadable sources, bad shapes, and any URL off Figma's origin (no POST), and no upload capability appears in any output or state file; a preview applies once with identical input; Weave acknowledges only a quoted cost; an unreplied write blocks its object and settles only on found evidence; `use_figma` never settles unchanged; auth status reads presence only and login needs an attended terminal; reads and writes touch only Figma's vault root, never the keyless root or HOME.
 - Live, 5 October 2026: a cached-grant schema listing returned the 18 documented reads, and `get_metadata`, `get_screenshot`, and `get_variable_defs` read one Monash node. No live write, upload, or Weave run has been made.
 - Revisit when Figma changes its catalog, when the decisions above are made, or when Figma documents a Connectors-specific client or write contract.
 

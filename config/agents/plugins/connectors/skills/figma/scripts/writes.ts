@@ -20,10 +20,10 @@ import { baselineRefusal, costOf, type Evidence, evidenceFor, type Observed, obs
 import type { Baseline, Journal, Receipt } from "./journal.ts";
 import type { Caller, SentResult } from "./transport.ts";
 
-const JOURNAL_REPAIR = "the Figma write journal could not be prepared; check that the Figma Connectors state directory is an owned, non-symlink directory";
-const PREVIEW_AGAIN = "run connectors run figma <operation> --input <json> --preview again, then apply the new previewId with the identical input";
-const recoverRun = (runId: string) => `connectors recover figma --run ${runId}`;
-const UNKNOWN_REPAIR = (runId: string) => `Do not retry the write. Run ${recoverRun(runId)} to inspect it, then settle it with ${recoverRun(runId)} --adjudicate --input and the identical input`;
+export const JOURNAL_REPAIR = "the Figma write journal could not be prepared; check that the Figma Connectors state directory is an owned, non-symlink directory";
+export const PREVIEW_AGAIN = "run connectors run figma <operation> --input <json> --preview again, then apply the new previewId with the identical input";
+export const recoverRun = (runId: string) => `connectors recover figma --run ${runId}`;
+export const UNKNOWN_REPAIR = (runId: string) => `Do not retry the write. Run ${recoverRun(runId)} to inspect it, then settle it with ${recoverRun(runId)} --adjudicate --input and the identical input`;
 const BASELINE_REPAIR: Readonly<Record<string, string>> = {
 	"destination-unknown": "the authenticated account does not show the destination plan; run whoami and use one of its plan keys",
 	"already-present": "the object already shows every requested value; nothing to write",
@@ -32,21 +32,21 @@ const BASELINE_REPAIR: Readonly<Record<string, string>> = {
 };
 const COST_REPAIR = "acknowledgedCost must equal a cost Figma quoted for this exact input in the last 15 minutes; apply the run without acknowledgedCost to get a quote, show Nathan the cost, and on his approval preview again with that cost";
 
-const refused = (connectorCause: string, repair: string): Executed => ({ kind: "refused", refusal: { kind: "domain", connectorCause, repair } });
+export const refused = (connectorCause: string, repair: string): Executed => ({ kind: "refused", refusal: { kind: "domain", connectorCause, repair } });
 export const JOURNAL_CORRUPT: Executed = refused("journal-corrupt", "a Figma write receipt is unreadable, malformed, or misnamed, so no write can prove its object is clear; restore it in the Figma journal's receipts directory as <runId>.json, an owner-only (0600) file holding its recorded JSON, then run connectors recover figma");
 
-function blockedRefusal(journal: Journal, identity: string): Executed | null {
+export function blockedRefusal(journal: Journal, identity: string): Executed | null {
 	const blocking = journal.blocking(identity);
 	if (!blocking.ok) return JOURNAL_CORRUPT;
 	return blocking.receipt ? refused("object-blocked", `an earlier write to this object has an unresolved receipt; run ${recoverRun(blocking.receipt.runId)}`) : null;
 }
 
-const digestOf = (operation: string, input: Record<string, unknown>): string => sha256(JSON.stringify([operation, Object.entries(input).sort(([left], [right]) => left.localeCompare(right))]));
+export const digestOf = (operation: string, input: Record<string, unknown>): string => sha256(JSON.stringify([operation, Object.entries(input).sort(([left], [right]) => left.localeCompare(right))]));
 const inputDigest = (write: WriteInput): string => digestOf(write.operation, { ...write.input });
 // The run input a quote applies to: everything but the acknowledgement.
 const quoteKey = (write: WriteInput): string => digestOf(write.operation, Object.fromEntries(Object.entries(write.input).filter(([key]) => key !== "acknowledgedCost")));
 
-function readFailure(result: Extract<Observed, { ok: false }>["result"]): Executed {
+export function readFailure(result: Extract<Observed, { ok: false }>["result"]): Executed {
 	if (!result.sent) return refused(result.cause, result.repair);
 	return { kind: "failed", connectorCause: result.cause, repair: "The Figma read did not complete; check the input against connectors schema figma, then run the same command again" };
 }

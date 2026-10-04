@@ -17,6 +17,7 @@ import { acceptedKeys, OPERATION_CATALOGUE, OPERATION_NAMES, operationKind, SERV
 import { FIGMA_ENDPOINT } from "./scripts/endpoint.ts";
 import { type Journal, openJournal, PREVIEW_ID, type Receipt, RUN_ID } from "./scripts/journal.ts";
 import { figmaCaller, INTERNAL_CONTEXT } from "./scripts/transport.ts";
+import { adjudicateUpload, applyUpload, previewUpload } from "./scripts/uploads.ts";
 import { directoryStamp, figmaVault, prepareVault, vaultStamp } from "./scripts/vault.ts";
 import { adjudicate, applyWrite, JOURNAL_CORRUPT, previewWrite, unlockWrite } from "./scripts/writes.ts";
 
@@ -119,6 +120,7 @@ function prepareWrite(request: WriteRequest): Prepared {
 	const write = writeInput(request.operation, request.input);
 	if (write === null) return refused("schema", "input-invalid", acceptedKeys(request.operation) ?? REPAIR.schema);
 	const { phase } = request;
+	if (write.spec.evidence === "upload") return journaled(request, (journal, caller) => (phase.kind === "preview" ? previewUpload(write, request.env, caller, journal) : applyUpload(write, phase.previewId, request.env, caller, journal)));
 	return journaled(request, (journal, caller) => (phase.kind === "preview" ? previewWrite(write, caller, journal) : applyWrite(write, phase.previewId, caller, journal)));
 }
 
@@ -148,7 +150,9 @@ function prepareRecover(request: RecoverRequest): Prepared {
 		if (!scan.ok) return JOURNAL_CORRUPT;
 		const receipt = journal.receipt(runId);
 		if (receipt === null) return missing;
-		return adjudicate(receipt, writeInput(receipt.operation, input), caller, journal);
+		const write = writeInput(receipt.operation, input);
+		if (write?.spec.evidence === "upload") return adjudicateUpload(receipt, write, request.env, caller, journal);
+		return adjudicate(receipt, write, caller, journal);
 	});
 }
 

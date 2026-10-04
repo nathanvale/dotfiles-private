@@ -1,6 +1,6 @@
 ---
 name: figma
-description: Read and write Figma designs through Figma's hosted MCP on the Connectors plugin's packaged route, with attended OAuth. Use for design context, screenshots, variables, metadata, assets, libraries, Code Connect reads and mappings, use_figma canvas edits, new files and FigJam diagrams, generative plugins and shaders, Weave tool runs, or connecting this route; not for the native Figma MCP or Figma's own plugin skills.
+description: Read and write Figma designs through Figma's hosted MCP on the Connectors plugin's packaged route, with attended OAuth. Use for design context, screenshots, variables, metadata, assets, libraries, Code Connect reads and mappings, use_figma canvas edits, image uploads, new files and FigJam diagrams, generative plugins and shaders, Weave tool runs, or connecting this route; not for the native Figma MCP or Figma's own plugin skills.
 ---
 
 # Figma hosted MCP
@@ -51,10 +51,13 @@ A write changes Nathan's Figma account. Run one only when Nathan asked for that 
 | `create_new_file` | The reply's file key reads back; `planKey` must be one of `whoami`'s plans |
 | `generate_diagram` | The reply's board reads back; into an existing `fileKey`, its `name` appears there |
 | `use_figma` | Your `verify` read shows every `contains` value (below) |
+| `upload_assets` | New frames appear on `currentPageId`, or every target in `nodeIds` changed (below) |
 | `weave_cancel_tool_run` | Every named run reports `CANCELED` |
 | `weave_run_tool` | The runs the reply names read back (Weave costs below) |
 
 `use_figma` runs arbitrary Plugin API code, so its input adds `"verify": {"tool": "get_metadata" | "get_design_context" | "get_variable_defs", "nodeId": "<existing node>", "contains": ["<value the code will make visible>"]}`. The route strips `verify` before sending. Choose a node and values the change will certainly show; a change it cannot show stays unknown and blocks the file.
+
+`upload_assets` takes local files, never upload URLs: `{"fileKey": "<key>", "assets": [{"path": "<absolute path>", "contentType": "image/png"}], "currentPageId": "<page>"}` places new frames on that page; `"nodeIds": ["<node>", ...]` (one per raster asset, no SVG) sets fills instead. PNG, JPEG, GIF, WebP, and SVG up to 10 MB each, at most 60. The route stages the exact bytes at preview and posts them itself; an apply refuses if a file changed. Figma's upload URLs never appear in its output.
 
 ### Weave costs
 
@@ -74,4 +77,4 @@ A Weave run spends Nathan's paid Weave credits. A free tool runs at once.
 
 ## Not admitted
 
-`generate_figma_design`, `upload_assets`, and `weave_upload_asset` refuse as `operation-not-allowed`; read [ADR 0005](../../docs/adr/0005-admit-figma-catalog-by-effect-class.md). Report the refusal; the route has no fallback.
+`generate_figma_design` and `weave_upload_asset` refuse as `operation-not-allowed` until their open contract changes land; read [ADR 0005](../../docs/adr/0005-admit-figma-catalog-by-effect-class.md). Report the refusal; the route has no fallback.
