@@ -31,7 +31,26 @@ The plugin's `AGENTS.md` requires any write capability to follow the Atlassian p
 We will choose Option B because it delivers every read now, keeps the write contract and the Weave cost gate intact, and leaves one bounded adapter as the only path to the remaining 17 tools.
 
 - Now: `skills/figma/config/mcporter.json` admits exactly the 18 read tools. Real MCPorter refuses the write, Weave, prompt, and uncatalogued names with `blocked by configuration` before any server starts.
-- Next, to complete the catalog: a packaged `figma` adapter on the `bin/connectors` front door, modelled on the Mermaid adapter (`skills/mermaid/adapter.ts`, `scripts/journal.ts`, `scripts/writes.ts`). Its route becomes `dispatcherOwned`, and the registry then admits all 35 names. Reads pass through; each write needs `--preview` then `--apply <previewId>` with identical input, bound to a durable journal receipt and an `effect-unknown` adjudication path; each Weave run additionally needs the previewed credit cost acknowledged at apply. Free Weave reads (`weave_list_tools`, `weave_get_tool_inputs`, `weave_get_tool_run_output`) may pass through as reads once the adapter owns the route.
+- Next, to complete the catalog: a packaged `figma` adapter on the `bin/connectors` front door, modelled on the Mermaid adapter (`skills/mermaid/adapter.ts`, `scripts/journal.ts`, `scripts/writes.ts`). Its route becomes `dispatcherOwned`, and the registry then admits all 35 names. Reads pass through; each write needs `--preview` then `--apply <previewId>` with identical input, bound to a durable journal receipt and an `effect-unknown` adjudication path.
+
+### Effect classes (live `tools/list`, 5 October 2026)
+
+All 35 documented names were served for Nathan's account; nothing extra or missing.
+
+| Class | Tools | Adapter path |
+|---|---|---|
+| Weave read | `weave_list_tools`, `weave_get_tool_inputs`, `weave_get_tool_run_output` | Read pass-through. |
+| Write with read-back | `add_code_connect_map`, `send_code_connect_mappings` (read back by `get_code_connect_map`); `create_generative_plugin`, `create_shader` (new id in `list_*`); `update_generative_plugin`, `update_shader` (version in `get_*`); `weave_cancel_tool_run` (run status) | Journaled preview and apply; adjudication by read-back. |
+| Paid write | `weave_run_tool` | Preview calls without `acknowledgedCost`, which Figma documents as a quote that spends nothing; apply echoes the previewed cost. Read back by run ids. |
+| Write without read-back | `use_figma`, `create_new_file`, `generate_diagram`, `generate_figma_design` | Open decision below. |
+| Capability-token write | `upload_assets` (single-use upload URLs), `weave_upload_asset` (upload URL and token) | Open decision below. |
+
+### Open decision
+
+The journal contract settles an `effect-unknown` receipt only on read-back evidence; the Mermaid adapter excluded a tool for lacking one. The four writes without read-back can therefore never be adjudicated, and the two upload tools return a capability URL or token that would cross the envelope, while the upload itself is an out-of-band POST. Admitting these six needs one of:
+
+- Operator-attested adjudication: Nathan inspects Figma and records `applied` or `absent` for an `effect-unknown` receipt, with pre- and post-apply `get_metadata` digests kept as supporting evidence. Uploads go through an adapter-owned outbox, following the Atlassian Upload Outbox, so the adapter performs the POST and no capability leaves it.
+- Keep the six unadmitted, and record full parity as 29 of 35 tools.
 
 ## Consequences
 
@@ -62,7 +81,7 @@ We will choose Option B because it delivers every read now, keeps the write cont
 ## Confirmation
 
 - `skills/figma/tests/figma.test.ts` pins the catalog from a test-owned literal (18, 11, 6), asserts the registry admits exactly the 18 read names, and drives the installed MCPorter against a stdio probe that advertises the full catalog plus `create_design_system_rules`, `get_figma_skill`, and `executeWrite`: the listing returns exactly the 18 reads, `get_screenshot` reaches the server, and every write, Weave, prompt, and uncatalogued name is refused before the server starts.
-- A cached-grant schema listing through the exact candidate confirms which admitted reads the hosted server returns for Nathan's account.
+- A cached-grant schema listing through the exact candidate returned all 18 admitted reads with their input schemas on 5 October 2026, and `get_metadata`, `get_screenshot`, and `get_variable_defs` read one Monash design node. A disposable list-only registry admitting all 35 names returned all 35; no write, Weave, or upload tool was called.
 - Revisit when Figma changes its catalog, when the adapter ticket lands, or when Figma documents a Connectors-specific client or write-confirmation contract.
 
 ## References
