@@ -8,86 +8,88 @@ status: proposed
 
 [ADR 0003](0003-scope-native-mcporter-oauth-to-figma.md) admitted `whoami` alone for the Figma connection slice and left design reads to later ticket gates. On 5 October 2026 Nathan asked that every Figma MCP tool be allowed, with parity between Codex and Claude Code through this route.
 
-Figma's [tool catalog](https://developers.figma.com/docs/figma-mcp-server/tools-and-prompts/) (read 5 October 2026) documents 35 tools: 18 read, 11 write, and 6 Weave tools, plus one MCP prompt, `create_design_system_rules`, which is not a tool. Weave runs spend paid Weave credits; Figma says the agent shows the cost and asks for confirmation. Figma's server instructions also name `get_figma_skill`, which the catalog does not list.
+Figma's [tool catalog](https://developers.figma.com/docs/figma-mcp-server/tools-and-prompts/) (read 5 October 2026) documents 35 tools: 18 read, 11 write, and 6 Weave tools, plus one MCP prompt, `create_design_system_rules`, which is not a tool. An authenticated `tools/list` for Nathan's account on the same day returned exactly those 35 names. Weave runs spend paid Weave credits; Figma says a run without `acknowledgedCost` only quotes, and a free tool runs at once. Figma's server instructions also name `get_figma_skill`, which the catalog does not list.
 
-The plugin's `AGENTS.md` requires any write capability to follow the Atlassian pattern: preview and apply through a durable journal, exact provider write tools, and an operator adjudication path. The plain Provider Route forwards a call directly to MCPorter and has no preview, journal, or adjudication. Nathan's request does not waive that owner. How does the route reach the whole catalog without unguarded writes or credit spend?
+The plugin's `AGENTS.md` requires any write capability to follow the Atlassian pattern: preview and apply through a durable journal, exact provider write tools, and an operator adjudication path that settles only on read-back evidence. The plain Provider Route forwards a call directly to MCPorter and has none of these. How does the route reach the whole catalog without unguarded writes or credit spend?
 
 ## Decision Drivers
 
 - Reach every documented catalog tool from Codex and Claude Code through one owned route.
-- Keep the existing write contract: preview, durable journal, exact write tools, adjudication.
-- Keep paid Weave runs behind an explicit, per-run cost acknowledgement.
+- Keep the existing write contract: preview, durable journal, exact write tools, adjudication on read-back evidence.
+- Keep paid Weave runs behind a cost Figma itself quoted and Nathan approved.
 - Keep the fixed endpoint, MCPorter OAuth custody, and borrowed client identity from ADR 0003.
 - Admit tools by exact name from a test-owned catalog oracle, never by wildcard or implicit widening.
 
 ## Considered Options
 
 - A. Admit all 35 tools on the plain Provider Route.
-- B. Admit the 18 read tools on the plain route now; reach the 11 write and 6 Weave tools only through a packaged Figma adapter with preview and apply.
-- C. Keep `whoami` alone until the write adapter exists.
+- B. A dispatcher-owned packaged `figma` adapter: reads pass through, and each write is journaled and admitted only with a read-back that can prove its effect.
+- C. Keep `whoami` alone.
 
 ## Decision
 
-We will choose Option B because it delivers every read now, keeps the write contract and the Weave cost gate intact, and leaves one bounded adapter as the only path to the remaining 17 tools.
+We will choose Option B because it reaches every tool whose effect the route can prove, keeps the write contract and the Weave cost gate as refusals rather than clauses, and states exactly what blocks the rest.
 
-- Now: `skills/figma/config/mcporter.json` admits exactly the 18 read tools. Real MCPorter refuses the write, Weave, prompt, and uncatalogued names with `blocked by configuration` before any server starts.
-- Next, to complete the catalog: a packaged `figma` adapter on the `bin/connectors` front door, modelled on the Mermaid adapter (`skills/mermaid/adapter.ts`, `scripts/journal.ts`, `scripts/writes.ts`). Its route becomes `dispatcherOwned`, and the registry then admits all 35 names. Reads pass through; each write needs `--preview` then `--apply <previewId>` with identical input, bound to a durable journal receipt and an `effect-unknown` adjudication path.
+- `skills/figma/config/route.json` is `dispatcherOwned`; the plain route refuses every Figma verb. `skills/figma/adapter.ts` serves `connectors auth status|login figma`, `run figma`, `schema figma`, and `recover figma`, and refuses any registry that is not exactly the packaged one.
+- The registry admits exactly 32 names, equal to the catalogue in `skills/figma/scripts/catalogue.ts`.
+- Writes follow the Mermaid flow in `scripts/writes.ts` and `scripts/journal.ts`. The read-back rule per tool lives in `scripts/evidence.ts`: an unfamiliar result shape yields no evidence, so an effect stays unknown and its object blocked; it never completes by assumption.
 
-### Effect classes (live `tools/list`, 5 October 2026)
-
-All 35 documented names were served for Nathan's account; nothing extra or missing.
-
-| Class | Tools | Adapter path |
+| Class | Tools | Read-back |
 |---|---|---|
-| Weave read | `weave_list_tools`, `weave_get_tool_inputs`, `weave_get_tool_run_output` | Read pass-through. |
-| Write with read-back | `add_code_connect_map`, `send_code_connect_mappings` (read back by `get_code_connect_map`); `create_generative_plugin`, `create_shader` (new id in `list_*`); `update_generative_plugin`, `update_shader` (version in `get_*`); `weave_cancel_tool_run` (run status) | Journaled preview and apply; adjudication by read-back. |
-| Paid write | `weave_run_tool` | Preview calls without `acknowledgedCost`, which Figma documents as a quote that spends nothing; apply echoes the previewed cost. Read back by run ids. |
-| Write without read-back | `use_figma`, `create_new_file`, `generate_diagram`, `generate_figma_design` | Open decision below. |
-| Capability-token write | `upload_assets` (single-use upload URLs), `weave_upload_asset` (upload URL and token) | Open decision below. |
+| Read | 18 documented reads, `weave_list_tools`, `weave_get_tool_inputs`, `weave_get_tool_run_output` | n/a |
+| Write | `add_code_connect_map`, `send_code_connect_mappings` | `get_code_connect_map` shows each requested component and source |
+| Write | `create_generative_plugin`, `create_shader` | one new id carrying the new name in the library list |
+| Write | `update_generative_plugin`, `update_shader` | the object's version moved |
+| Write | `create_new_file`, `generate_diagram` | the reply's file key reads back through `get_metadata`; into an existing board, its name appears |
+| Write | `use_figma` | a caller-declared read (`verify`: tool, node, values) shows every value; the view is partial, so an unchanged read never proves no effect |
+| Write | `weave_cancel_tool_run` | every named run reports `CANCELED` |
+| Paid write | `weave_run_tool` | the reply's run ids read back. A quote reply with an unchanged run list settles unchanged and records the quoted cost; `acknowledgedCost` must equal a fresh recorded quote for the identical input |
 
-### Open decision
+### Not admitted, and the exact gap
 
-The journal contract settles an `effect-unknown` receipt only on read-back evidence; the Mermaid adapter excluded a tool for lacking one. The four writes without read-back can therefore never be adjudicated, and the two upload tools return a capability URL or token that would cross the envelope, while the upload itself is an out-of-band POST. Admitting these six needs one of:
+- `generate_figma_design`: the effect is a provider-supplied capture script run in a browser against a web page, outside this adapter; only polling by `captureId` observes it. Admission needs a decision on executing that script (browser route and capability handling) and a captured-node read-back.
+- `upload_assets`: returns single-use upload URLs; the upload is an out-of-band POST, and a fill on an existing node is not visible to `get_metadata`. Admission needs an adapter-owned outbox (as the Atlassian Upload Outbox) that performs the POST so no URL leaves the adapter, plus a read that shows the placed image (likely `get_design_context` on the target node), qualified against live output.
+- `weave_upload_asset`: returns an upload URL and token; no admitted read observes a Weave asset afterwards, so an unreplied upload could never be adjudicated. Admission needs the same outbox and either a Weave asset read or an accepted rule that an asset is proven only by its use in a read-back run.
 
-- Operator-attested adjudication: Nathan inspects Figma and records `applied` or `absent` for an `effect-unknown` receipt, with pre- and post-apply `get_metadata` digests kept as supporting evidence. Uploads go through an adapter-owned outbox, following the Atlassian Upload Outbox, so the adapter performs the POST and no capability leaves it.
-- Keep the six unadmitted, and record full parity as 29 of 35 tools.
+No operator-attested adjudication is assumed; settling by read-back evidence stays the contract.
 
 ## Consequences
 
-- Positive: design context, screenshots, variables, metadata, assets, libraries, and Code Connect reads work through the route today.
-- Positive: no write or credit spend can leave the route before a journal and an adjudication path exist.
-- Negative: canvas writes and Weave remain unreachable until the adapter lands, so full catalog parity is two changes, not one.
-- Negative: making the route `dispatcherOwned` later replaces the direct `provider-route figma -- call` reads with `connectors run figma`; the skill's read steps change again then.
-- Neutral: rate limits by seat apply to every read except `whoami`. They gate how many reads succeed, not which tools are admitted.
+- Positive: 32 of 35 catalog tools reach Codex and Claude Code through one route once installed, each write under preview, journal, and evidence-only settlement.
+- Positive: a Weave spend needs a cost Figma quoted for that exact input within 15 minutes.
+- Negative: reads move from `provider-route figma -- call` to `connectors run figma`; installed copies need the rebuilt front door.
+- Negative: each write costs up to three rate-limited reads (preview, apply, read-back). On a View or Collab seat this exhausts the monthly allowance quickly; View seats may also lack edit rights on a file.
+- Negative: an unprovable `use_figma` or create blocks its object until a read-back finds the change.
+- Neutral: read-back parsers were built against the live input schemas and a stub, not against live write replies; their live behavior is unproved until an authorized write.
 
 ## Options and Tradeoffs
 
 ### A. All 35 on the plain route
 
-- Good: one-line parity; every catalog tool is reachable today.
-- Bad: forwards `use_figma`, file creation, uploads, and paid Weave runs with no preview, journal, or adjudication, contrary to the plugin's write contract.
-- Bad: the cost gate becomes a prose instruction that can fail late in a long session.
+- Good: one-line parity.
+- Bad: forwards canvas edits, file creation, uploads, and paid Weave runs with no preview, journal, or adjudication, contrary to the plugin's write contract.
 
-### B. Reads now, writes and Weave through an adapter
+### B. Dispatcher-owned adapter by effect class
 
-- Good: every read now; writes keep the existing contract; the cost gate becomes a refusal, not a clause.
-- Bad: the adapter is a larger bounded change with its own design, tests, and live write qualification.
+- Good: every provable tool admitted; the write contract and cost gate are enforced by refusals.
+- Bad: three tools wait on the decisions above; reads change command.
 
 ### C. Identity only
 
 - Good: no new exposure.
-- Bad: blocks the design reads Nathan and the Design System Feedback Uplift need, with no path to parity.
+- Bad: blocks the design reads and writes Nathan asked for.
 
 ## Confirmation
 
-- `skills/figma/tests/figma.test.ts` pins the catalog from a test-owned literal (18, 11, 6), asserts the registry admits exactly the 18 read names, and drives the installed MCPorter against a stdio probe that advertises the full catalog plus `create_design_system_rules`, `get_figma_skill`, and `executeWrite`: the listing returns exactly the 18 reads, `get_screenshot` reaches the server, and every write, Weave, prompt, and uncatalogued name is refused before the server starts.
-- A cached-grant schema listing through the exact candidate returned all 18 admitted reads with their input schemas on 5 October 2026, and `get_metadata`, `get_screenshot`, and `get_variable_defs` read one Monash design node. A disposable list-only registry admitting all 35 names returned all 35; no write, Weave, or upload tool was called.
-- Revisit when Figma changes its catalog, when the adapter ticket lands, or when Figma documents a Connectors-specific client or write-confirmation contract.
+- `skills/figma/tests/figma.test.ts`: the 35-tool catalog literal (18, 11, 6); the registry admits exactly 32 and equals the catalogue; the plain route refuses `auth`, `list`, and `call` as dispatcher-owned; and the installed MCPorter, given a stdio probe advertising all 35 names plus the prompt, `get_figma_skill`, and `executeWrite`, lists exactly the 32 and refuses the rest before the server starts.
+- `skills/figma/tests/packaged.test.ts`: through the compiled front door and the official MCPorter 0.14.0 against a stateful loopback stub: the live listing is exactly 32; every admitted write applies once after its preview and only on read-back; a preview applies once with identical input; Weave acknowledges only a quoted cost; an unreplied write blocks its object and settles only on found evidence; `use_figma` never settles unchanged; auth status reads presence only and login needs an attended terminal.
+- Live, 5 October 2026: a cached-grant schema listing returned the 18 documented reads, and `get_metadata`, `get_screenshot`, and `get_variable_defs` read one Monash node. No live write, upload, or Weave run has been made.
+- Revisit when Figma changes its catalog, when the decisions above are made, or when Figma documents a Connectors-specific client or write contract.
 
 ## References
 
 - [ADR 0003](0003-scope-native-mcporter-oauth-to-figma.md): the connection slice this decision widens; its history and evidence stand.
-- [ADR 0001](0001-route-atlassian-through-mcporter.md): the write contract.
-- `skills/mermaid/SKILL.md`: the nearest preview, apply, and recover precedent.
-- [Spec #67](https://github.com/nathanvale/dotfiles-private/issues/67): its "never expose Figma write tools through this route" direction needs amendment for the adapter path.
+- [ADR 0001](0001-route-atlassian-through-mcporter.md): the write contract and the Upload Outbox.
+- `skills/mermaid/`: the preview, apply, and recover precedent this adapter follows.
+- [Spec #67](https://github.com/nathanvale/dotfiles-private/issues/67): its "never expose Figma write tools through this route" direction needs amendment.
 - [Figma rate limits and access](https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/).

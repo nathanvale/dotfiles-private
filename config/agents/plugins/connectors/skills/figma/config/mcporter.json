@@ -25,7 +25,21 @@
 				"get_generative_plugin",
 				"list_shaders",
 				"get_shader",
-				"list_file_shaders"
+				"list_file_shaders",
+				"weave_list_tools",
+				"weave_get_tool_inputs",
+				"weave_get_tool_run_output",
+				"add_code_connect_map",
+				"send_code_connect_mappings",
+				"create_generative_plugin",
+				"create_shader",
+				"update_generative_plugin",
+				"update_shader",
+				"create_new_file",
+				"generate_diagram",
+				"use_figma",
+				"weave_cancel_tool_run",
+				"weave_run_tool"
 			]
 		}
 	}

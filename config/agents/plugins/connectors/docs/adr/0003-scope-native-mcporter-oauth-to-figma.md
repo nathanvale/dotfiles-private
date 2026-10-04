@@ -26,7 +26,7 @@ The Connectors route currently forces `--no-oauth` and keeps credentials below M
 
 Declare `oauth: "mcporter"` only on Figma's route. The shared launcher permits attended `auth` only for that declaration and keeps `--no-oauth` on ordinary `list` and `call`, which use cached credentials. MCPorter owns the Figma OAuth cache. Existing Provider routes retain their current credential custody and behavior. The registry fixes Figma's endpoint, admits `whoami` alone for this connection slice, and uses the locally working `clientName: "Claude Code"`. Later frame reads require their own ticket gates.
 
-Dated note, 5 October 2026: [ADR 0005](0005-admit-figma-catalog-by-effect-class.md) proposes widening the admitted tools to Figma's 18 documented read tools and routing write and Weave tools through a later preview and apply adapter. The endpoint, OAuth custody, and client-name decisions here are unchanged.
+Dated note, 5 October 2026: [ADR 0005](0005-admit-figma-catalog-by-effect-class.md) proposes a dispatcher-owned packaged adapter that admits 32 of Figma's 35 catalog tools, with journaled writes, in place of this route's `whoami`-only slice. The endpoint, OAuth custody, and client-name decisions here are unchanged.
 
 An explicit `auth --reset` forwards to MCPorter's per-server reset for this declared OAuth route. It clears the local `figma-connectors` grant before attended reauthorization; it does not claim remote revocation.
 
