@@ -31,6 +31,12 @@ const tool = {
 	description: `stdio child probe: ${JSON.stringify(probe)}`,
 	inputSchema: { type: "object", properties: {}, additionalProperties: false },
 };
+// PROBE_TOOL_NAMES (comma-separated) advertises extra tool names so a real
+// MCPorter allow-list can be observed filtering a known upstream catalog.
+const extraTools = (process.env.PROBE_TOOL_NAMES ?? "")
+	.split(",")
+	.filter((name) => name.length > 0)
+	.map((name) => ({ name, description: "probe catalog tool", inputSchema: tool.inputSchema }));
 function reply(id: unknown, result: unknown): void {
 	process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
 }
@@ -43,7 +49,7 @@ for await (const chunk of Bun.stdin.stream()) {
 		buffer = buffer.slice(newline + 1);
 		newline = buffer.indexOf("\n");
 		if (!line) continue;
-		const message = JSON.parse(line) as { id?: unknown; method?: string; params?: { protocolVersion?: string } };
+		const message = JSON.parse(line) as { id?: unknown; method?: string; params?: { protocolVersion?: string; name?: string } };
 		switch (message.method) {
 			case "initialize":
 				reply(message.id, {
@@ -56,10 +62,10 @@ for await (const chunk of Bun.stdin.stream()) {
 				reply(message.id, {});
 				break;
 			case "tools/list":
-				reply(message.id, { tools: [tool] });
+				reply(message.id, { tools: [tool, ...extraTools] });
 				break;
 			case "tools/call":
-				reply(message.id, { content: [{ type: "text", text: JSON.stringify(probe) }] });
+				reply(message.id, { content: [{ type: "text", text: JSON.stringify({ ...probe, calledTool: message.params?.name ?? null }) }] });
 				break;
 			default:
 				if (message.id !== undefined) {
