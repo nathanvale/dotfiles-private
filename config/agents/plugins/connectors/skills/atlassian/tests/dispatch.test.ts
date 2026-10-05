@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ExecutionCapabilities } from "../../../bin/adapters/contract.ts";
 import { OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 import { type Dispatched, dispatch, invocationFor, type Request } from "../scripts/atlassian-dispatch.ts";
 import { ALLOWED_TOOLS, OPERATION_SPECS, type OperationId, type OperationSpec, productFor, PROVIDER, type ProviderName, registryToolVocabulary, REST_SERVER, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
@@ -1829,15 +1830,19 @@ describe("production adapters", () => {
 	});
 	afterEach(() => fixture.dispose());
 	const env = () => fixture.environment();
+	const capabilities = (): ExecutionCapabilities => ({
+		selectMcporter: async () => { throw new Error("this supporting test must refuse before MCPorter selection"); },
+		internalCommand: (role) => [path.join(fixture.pluginRoot, "bin", "connectors"), "__internal", "atlassian", role],
+	});
 
-	// No-bypass: the dispatcher module is no longer an entry. Bun running it
+	// No-bypass: dispatcher and REST modules are no longer entries. Bun running them
 	// directly on a fully provisioned, registered machine (Keychain token, op,
 	// uv, item, and canned schema all present, so a live entry would reach each)
 	// prints nothing, exits 0, and reads no credential or starts no route.
-	test("no-bypass: bun running the retired dispatcher script as an entry does nothing on a provisioned, registered machine", async () => {
+	test.each(["atlassian-dispatch.ts", "atlassian-rest-provider.ts"])("no-bypass: bun running retired %s as an entry does nothing on a provisioned, registered machine", async (script) => {
 		fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
 		fixture.canned("jira", "jira_get_issue", { key: "EX-1", summary: "canned" });
-		const proc = Bun.spawn([process.execPath, path.join(fixture.skill, "scripts", "atlassian-dispatch.ts"), "--tenant", "example", "issue.get", "--input", '{"issueKey":"EX-1"}'], { env: env(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		const proc = Bun.spawn([process.execPath, path.join(fixture.skill, "scripts", script), "--tenant", "example", "issue.get", "--input", '{"issueKey":"EX-1"}'], { env: env(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 		const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
 		expect([code, stdout, stderr]).toEqual([0, "", ""]);
 		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl"), fixture.lines("effects.jsonl")]).toEqual([[], [], [], []]);
@@ -1859,7 +1864,7 @@ describe("production adapters", () => {
 			mkdirSync(config, { recursive: true });
 			writeFileSync(path.join(config, "mcporter.json"), JSON.stringify(registry));
 			writeFileSync(path.join(config, "route.json"), JSON.stringify(route));
-			const result = await routeTransport(env(), "example", skillsRoot).listTools(binding, CJ);
+			const result = await routeTransport(env(), "example", skillsRoot, capabilities()).listTools(binding, CJ);
 			expect([label, result]).toEqual([label, { ok: false, cause: "refused-precondition", hint: "repair the Connector Skill route registry" }]);
 		}
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
@@ -1869,7 +1874,7 @@ describe("production adapters", () => {
 
 	test("the REST route lists its owned schema without a process, and a call reaches the REST Provider, which refuses before any request when the item is unreadable or the tool is outside the vocabulary", async () => {
 		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID };
-		const transport = routeTransport(env(), "example");
+		const transport = routeTransport(env(), "example", path.join(fixture.pluginRoot, "skills"), capabilities());
 		const listed = await transport.listTools(binding, RJ);
 		expect(listed.ok && (listed.data as { name: string }[]).map((tool) => tool.name)).toEqual(["jira_rest_myself", "jira_rest_issue_attachments", "jira_rest_comments_list", "jira_rest_comment_get", "jira_rest_comment_add", "jira_rest_comment_edit", "jira_rest_attachment_head", "jira_rest_issue_attachment_context", "jira_rest_attachment_delete"]);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);

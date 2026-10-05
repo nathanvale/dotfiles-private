@@ -14,7 +14,6 @@
 // the Provider start only as internal roles of the compiled front door. The Provider
 // cannot start without the plugin-owned uv, so a missing or changed uv
 // refuses before any credential is read.
-import path from "node:path";
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { atlassianProcess } from "../provider-process.ts";
 import { type CredentialBinding, encodeBinding, parseBinding } from "./channel.ts";
@@ -22,15 +21,15 @@ import { custodyContext } from "./child.ts";
 import { isItemId, isProduct, itemBinding, itemFieldMap, type Product, SITE_URL_FIELD, TENANT_PATTERN } from "./item.ts";
 import { itemHandoff, OP_SETUP_REPAIR, readAtlassianItem, SERVICE_TOKEN_HANDOFF } from "./one-password.ts";
 import { installedUv as selectedUv } from "../../../../bin/setup/uv.ts";
-import { UV_SETUP_REPAIR } from "./plugin-tools.ts";
 
 export { runCustodyChild } from "./child.ts";
 export { PRODUCTS, type Product, TENANT_PATTERN } from "./item.ts";
 export { installedUv as selectedUv } from "../../../../bin/setup/uv.ts";
-export { UV_SETUP_REPAIR } from "./plugin-tools.ts";
+export const UV_SETUP_REPAIR = "the plugin-owned uv is not set up; run connectors setup";
 export { CREDENTIAL_VAULT } from "./one-password.ts";
 export { CONFIGURE_INPUT_REPAIR, configureInput, configureTenant, ITEM_ID_REPAIR, type RegisteredItems, registeredTenant } from "./registration.ts";
 export type { CredentialBinding } from "./channel.ts";
+export { encodeBinding as bindingChannel } from "./channel.ts";
 
 const CHILD_FAILURE = /^atlassian-credential-binding:error:([a-z-]+)(?::[^\n]*)?$/m;
 const TENANT_ENV = "ATLASSIAN_TENANT";
@@ -62,18 +61,11 @@ function childFailure(code: string | undefined, itemId: string): BindFailure {
 export const ATLASSIAN_ADAPTER_ID = "atlassian";
 export type AtlassianInternalRole = "custody-child" | "provider" | "rest-provider";
 
-// The plugin's compiled front door in one Atlassian internal role, reached
-// from source through this module's own location. The packaged front door
-// passes its own command instead, because its module location is virtual.
-export function sourceInternalCommand(role: AtlassianInternalRole): readonly string[] {
-	return [path.resolve(import.meta.dir, "..", "..", "..", "..", "bin", "connectors"), "__internal", ATLASSIAN_ADAPTER_ID, role];
-}
-
 // The dispatcher's only credential access, for the item ID the tenant's
 // registration names for this product. The child inspects the complete item;
 // this process sees one JSON line or a closed cause. A binding for any other
 // item is refused.
-export function bindCredential(tenant: string, product: Product, itemId: string, env: EnvironmentSource, custodyCommand: readonly string[] = sourceInternalCommand("custody-child")): BindResult {
+export function bindCredential(tenant: string, product: Product, itemId: string, env: EnvironmentSource, custodyCommand: readonly string[]): BindResult {
 	if (!isItemId(itemId)) throw new Error("an Atlassian binding needs a registered item ID");
 	if (selectedUv(env) === null) return { ok: false, cause: "refused-precondition", detail: UV_SETUP_REPAIR };
 	const read = Bun.spawnSync([...custodyCommand], { env: { ...safeEnvironment(env), [INTERNAL_INVOCATION_CONTEXT_ENV]: custodyContext(tenant, product, itemId) }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -81,9 +73,6 @@ export function bindCredential(tenant: string, product: Product, itemId: string,
 	const binding = parseBinding(read.stdout.toString());
 	return binding && binding.item === itemId ? { ok: true, binding } : { ok: false, cause: "refused-precondition", detail: "credential custody returned an invalid context" };
 }
-
-// The single-line channel value the route carries for one binding.
-export const bindingChannel = (binding: CredentialBinding): string => encodeBinding(binding);
 
 export interface ProviderInvocation {
 	tenant: string;

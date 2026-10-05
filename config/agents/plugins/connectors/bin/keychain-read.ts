@@ -1,8 +1,6 @@
-// The custody module's one Keychain process: the fixed macOS security tool,
-// run with the caller's argv and environment. Nothing here selects another
-// executable, and nothing here maps or parses the result; one-password.ts
-// owns that. Routine tests replace this file only inside a copied plugin
-// root, never in this tree.
+// Shared Keychain read for static-credential Providers. Tests substitute this
+// module only in private plugin copies; the shipped reader always executes
+// the fixed macOS security tool. 1Password custody owns result mapping.
 import { spawnSync } from "node:child_process";
 
 export interface KeychainRead {
