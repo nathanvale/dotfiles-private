@@ -11,15 +11,11 @@ import { chmodSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSy
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { type Bundle, createBundle, createFakeMcporterBinDir, PLUGIN_ROOT } from "./harness.ts";
-import { heldMcporter, ownedVault } from "./fixtures/native-oauth.ts";
+import { DENY_NETWORK, heldMcporter, ownedVault } from "./fixtures/native-oauth.ts";
 
 const official = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
 if (process.env.CI && !official) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for CI process proof");
 
-// Denies outbound network and any Keychain command. macOS refuses a nested
-// sandbox with a different profile, so a runner that wraps this suite in its
-// own sandbox must use this exact profile.
-const DENY_NETWORK = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(deny process-exec (literal "/usr/bin/security"))';
 const GRANT_SENTINEL = "SENTINEL_CANVA_GRANT_VALUE";
 const ARGV_SENTINEL = "SENTINEL_CANVA_ARGV_VALUE";
 const LEGACY_SENTINEL = "SENTINEL_CANVA_LEGACY_REFRESH_TOKEN";

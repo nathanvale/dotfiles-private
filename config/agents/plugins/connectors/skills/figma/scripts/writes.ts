@@ -13,7 +13,8 @@
 // call is therefore a journaled apply. A quote reply whose run list is still
 // at its baseline settles unchanged and records the quoted cost for that exact
 // input; a later preview may carry acknowledgedCost only when it equals a
-// fresh recorded quote, so no apply can acknowledge a cost Figma never quoted.
+// fresh unused quote. It authorizes at most one approved apply attempt; another
+// run needs a fresh quote, so no apply acknowledges a cost Figma never quoted.
 import type { Executed } from "../../../bin/adapters/contract.ts";
 import { sendArgs, sha256, type WriteInput } from "./catalogue.ts";
 import { baselineRefusal, costOf, type Evidence, evidenceFor, type Observed, observe, runIdsOf, statusOf } from "./evidence.ts";
@@ -30,7 +31,7 @@ const BASELINE_REPAIR: Readonly<Record<string, string>> = {
 	"name-exists": "an object with this name already exists, so a created one could not be told apart; choose a distinct name",
 	"runs-finished": "at least one named run has already finished; preview again with only runs that are still running",
 };
-const COST_REPAIR = "acknowledgedCost must equal a cost Figma quoted for this exact input in the last 15 minutes; apply the run without acknowledgedCost to get a quote, show Nathan the cost, and on his approval preview again with that cost";
+const COST_REPAIR = "acknowledgedCost must equal the cost of an unused quote Figma gave for this exact input in the last 15 minutes; each quote authorizes at most one approved apply attempt, so another run needs a fresh quote; apply the run without acknowledgedCost to get a quote, show Nathan the cost, and on his approval preview and apply with that cost";
 
 export const refused = (connectorCause: string, repair: string): Executed => ({ kind: "refused", refusal: { kind: "domain", connectorCause, repair } });
 export const JOURNAL_CORRUPT: Executed = refused("journal-corrupt", "a Figma write receipt is unreadable, malformed, or misnamed, so no write can prove its object is clear; restore it in the Figma journal's receipts directory as <runId>.json, an owner-only (0600) file holding its recorded JSON, then run connectors recover figma");

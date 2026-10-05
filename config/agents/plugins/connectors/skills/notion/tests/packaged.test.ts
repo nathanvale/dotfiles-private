@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { heldMcporter, ownedVault } from "../../../tests/fixtures/native-oauth.ts";
+import { DENY_NETWORK, heldMcporter, ownedVault } from "../../../tests/fixtures/native-oauth.ts";
 import { createBundle, runBundle, PLUGIN_ROOT, createHarness, runInteractiveBundle } from "../../../tests/harness.ts";
 import { afterCall, writeInput } from "../scripts/catalogue.ts";
 import { openJournal } from "../scripts/journal.ts";
@@ -102,6 +102,7 @@ test.skipIf(!official)("terminal Notion rejection proves unchanged while partial
 		const preview = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--preview"]);
 		const result = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", String(preview.envelope.result.data?.previewId)]);
 		expect([result.code, result.stderr, result.envelope.result.data?.receipt?.status]).toEqual([3, "", "unchanged"]);
+		// Fails if an unchanged rejection leaves its preview reusable.
 		const reused = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", String(preview.envelope.result.data?.previewId)]);
 		expect([reused.code, reused.stderr, reused.envelope.result.data?.connectorCause]).toEqual([3, "", "preview-consumed"]);
 		expect(machine.calls.filter((call) => call.tool === "notion-update-page")).toHaveLength(1);
@@ -435,13 +436,12 @@ test.skipIf(!official)("Notion attended login forwards native auth flags inside 
 		{ account: "bare", flags: [], expected: ["auth", "notion-connectors"] },
 		{ account: "flagged", flags: ["--reset", "--no-browser"], expected: ["auth", "notion-connectors", "--no-browser", "--reset"] },
 	];
-	const sandbox = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(deny process-exec (literal "/usr/bin/security"))';
 	try {
 		for (const row of rows) {
 			const vaultRoot = path.join(state, "connectors/notion-mcporter", row.account);
 			const fifo = ownedVault(vaultRoot);
 			execFileSync("/usr/bin/mkfifo", [fifo]);
-			const running = runInteractiveBundle({ ...bundle, binary: "/usr/bin/sandbox-exec" }, ["-p", sandbox, bundle.binary, "auth", "login", "notion", ...row.flags.slice(0, 1), "--select", `account=${row.account}`, ...row.flags.slice(1)], { home, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: official, NOTION_TOKEN: "SENTINEL_AUTH_AMBIENT" }, timeoutMs: 60000 });
+			const running = runInteractiveBundle({ ...bundle, binary: "/usr/bin/sandbox-exec" }, ["-p", DENY_NETWORK, bundle.binary, "auth", "login", "notion", ...row.flags.slice(0, 1), "--select", `account=${row.account}`, ...row.flags.slice(1)], { home, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: official, NOTION_TOKEN: "SENTINEL_AUTH_AMBIENT" }, timeoutMs: 60000 });
 			const held = await heldMcporter(fifo, state, "auth", running);
 			const result = await running;
 			expect(held?.argv).toEqual(row.expected);

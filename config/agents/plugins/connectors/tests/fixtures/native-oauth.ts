@@ -3,6 +3,11 @@ import { closeSync, constants, mkdirSync, openSync, renameSync, writeFileSync, w
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
+// Denies outbound network and any Keychain command. macOS refuses a nested
+// sandbox with a different profile, so a runner that wraps this suite in its
+// own sandbox must use this exact profile.
+export const DENY_NETWORK = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(deny process-exec (literal "/usr/bin/security"))';
+
 export function ownedVault(root: string): string {
 	for (const directory of [root, path.join(root, "data"), path.join(root, "cache"), path.join(root, "data", "mcporter")]) mkdirSync(directory, { recursive: true, mode: 0o700 });
 	return path.join(root, "data", "mcporter", "credentials.json");

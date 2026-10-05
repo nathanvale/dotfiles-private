@@ -23,7 +23,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { FIGMA_ENDPOINT } from "../scripts/endpoint.ts";
 import { createBundle, runBundle, runInteractiveBundle } from "../../../tests/harness.ts";
-import { heldMcporter, ownedVault } from "../../../tests/fixtures/native-oauth.ts";
+import { DENY_NETWORK, heldMcporter, ownedVault } from "../../../tests/fixtures/native-oauth.ts";
 import { type Envelope, FigmaMachine, OFFICIAL_MCPORTER } from "./fixtures/figma-machine.ts";
 import { type FigmaStub, startFigmaStub, UPLOAD_CAPABILITY } from "./fixtures/figma-stub.ts";
 
@@ -169,6 +169,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("a preview applies once, with its identical inpu
 	});
 }, 120_000);
 
+// Fails if a consumed quote admits another approved apply.
 test.skipIf(!OFFICIAL_MCPORTER)("a Weave run acknowledges a quoted cost once, refusing reuse through future and existing previews", async () => {
 	await withFigma(async ({ run, stub }) => {
 		stub.weaveCost = 3;
@@ -293,8 +294,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("attended Figma login forwards no-browser and re
 	mkdirSync(state);
 	const sandbox = path.join(bundle.root, "attended-sandbox");
 	const exitFile = path.join(bundle.root, "attended-exit");
-	const profile = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(deny process-exec (literal "/usr/bin/security"))';
-	writeFileSync(sandbox, `#!/bin/sh\n/usr/bin/sandbox-exec -p '${profile}' '${bundle.binary}' "$@"\nauth_exit=$?\nprintf '%s\\n' "$auth_exit" > '${exitFile}'\nexit "$auth_exit"\n`, { mode: 0o700 });
+	writeFileSync(sandbox, `#!/bin/sh\n/usr/bin/sandbox-exec -p '${DENY_NETWORK}' '${bundle.binary}' "$@"\nauth_exit=$?\nprintf '%s\\n' "$auth_exit" > '${exitFile}'\nexit "$auth_exit"\n`, { mode: 0o700 });
 	const vault = path.join(state, "connectors", "figma-mcporter");
 	try {
 		const cases = [
