@@ -6,9 +6,8 @@
 // here prints, logs, or returns a token, and nothing here creates, rotates, or
 // imports a credential: a missing token or item is a handoff to its owner.
 //
-// The caller passes its own skill's Keychain leaf, the one file that spawns
-// the macOS security tool, so each skill keeps its own substitutable reader.
-// This module names no service.
+// The caller passes the shared Keychain reader, substituted only inside
+// private test copies. This module names no service.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import type { EnvironmentSource } from "./safe-environment.ts";

@@ -1,6 +1,6 @@
 // One temp machine for Mermaid account-tier process tests, run from a
 // private copy of the whole plugin that differs from source in exactly four
-// declared places: the Mermaid Keychain leaf holds the one test-owned reader
+// declared places: the shared Keychain reader holds the one test-owned reader
 // fake (owned by the Atlassian fixtures), the Mermaid endpoint leaf holds
 // endpoint-fake.ts, requirements.json names the fake op launcher's digest as
 // the qualified op, and bin/connectors is compiled from that copy. Every
@@ -16,14 +16,13 @@ import os from "node:os";
 import path from "node:path";
 import { ownedDirectory } from "../../../../bin/private-state.ts";
 import { compileFrontDoor } from "../../../../tests/compile-front-door.ts";
-import { changedPaths, FAKE_OP_LAUNCHER, fakeLauncher, REQUIREMENTS, SHIPPED_ROOT } from "../../../atlassian/tests/fixtures/plugin-copy.ts";
+import { changedPaths, FAKE_OP_LAUNCHER, fakeLauncher, KEYCHAIN_LEAF, REQUIREMENTS, SHIPPED_ROOT } from "../../../atlassian/tests/fixtures/plugin-copy.ts";
 
 export const OFFICIAL_MCPORTER = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
 export const SERVICE_TOKEN = "ops_fixture-mermaid-service-account-sentinel";
 export const PROVIDER_TOKEN = "fixture-mermaid-api-token-sentinel";
 // A test-owned 26-character item ID.
 export const ITEM_ID = "mermaidfixtureitem00000001";
-const KEYCHAIN_LEAF = path.join("skills", "mermaid", "scripts", "custody", "keychain-read.ts");
 const ENDPOINT_LEAF = path.join("skills", "mermaid", "scripts", "endpoint.ts");
 const FAKE_ENDPOINT = path.join(import.meta.dir, "endpoint-fake.ts");
 const ATLASSIAN_FIXTURES = path.resolve(import.meta.dir, "..", "..", "..", "atlassian", "tests", "fixtures");

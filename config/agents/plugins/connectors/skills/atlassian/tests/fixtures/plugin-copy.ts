@@ -26,7 +26,7 @@ import { compileFrontDoor } from "../../../../tests/compile-front-door.ts";
 
 export const SHIPPED_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..");
 // Plugin-relative path of the one file a copy may change.
-export const KEYCHAIN_LEAF = path.join("skills", "atlassian", "scripts", "custody", "keychain-read.ts");
+export const KEYCHAIN_LEAF = path.join("bin", "keychain-read.ts");
 const FAKE_READER = path.join(import.meta.dir, "keychain-read-fake.ts");
 // Present in the fake and nowhere the shipped plugin runs.
 export const FAKE_MARKER = "connectors-test-keychain-reader-fake";
@@ -100,7 +100,7 @@ function verifyCompiledFrontDoor(copy: string, shape: CopyShape): void {
 // the fake launchers' op and uv digests when it is the fixture's, and the
 // front door compiled from that source.
 export function verifySubstitutedCopy(copy: string, shape: CopyShape = ROUTINE, source: string = SHIPPED_ROOT): void {
-	const expected = [FRONT_DOOR, ...(shape.manifest === "fixture" ? [REQUIREMENTS] : []), ...(shape.reader === "fake" ? [KEYCHAIN_LEAF] : [])];
+	const expected = [FRONT_DOOR, ...(shape.manifest === "fixture" ? [REQUIREMENTS] : []), ...(shape.reader === "fake" ? [KEYCHAIN_LEAF] : [])].sort();
 	const changed = changedPaths(source, copy);
 	if (expected.length === 1 || JSON.stringify(changed) !== JSON.stringify(expected)) throw new Error(`substituted plugin copy does not change exactly ${JSON.stringify(expected)}: ${JSON.stringify(changed)}`);
 	if (shape.manifest === "fixture" && !Bun.deepEquals(JSON.parse(readFileSync(path.join(copy, REQUIREMENTS), "utf8")), fixtureRequirements(source), true)) throw new Error("substituted plugin copy changes a manifest field other than the fake op and uv digests");

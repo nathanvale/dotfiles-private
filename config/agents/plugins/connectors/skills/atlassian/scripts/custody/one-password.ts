@@ -1,10 +1,9 @@
 // Atlassian's binding of the shared 1Password custody mode
-// (bin/one-password-custody.ts): the item read through this skill's own
-// Keychain leaf, and the Atlassian item handoff. The item returned stays in
-// the caller process.
+// (bin/one-password-custody.ts): the item read through the shared Keychain
+// reader, and the Atlassian item handoff. The item stays in the caller process.
 import { CREDENTIAL_VAULT, type OnePasswordRead, readOnePasswordItem as readItem } from "../../../../bin/one-password-custody.ts";
 import type { EnvironmentSource } from "../../../../bin/safe-environment.ts";
-import { readKeychain } from "./keychain-read.ts";
+import { readKeychain } from "../../../../bin/keychain-read.ts";
 
 export { CREDENTIAL_VAULT, type OnePasswordFailure, OP_SETUP_REPAIR, SERVICE_TOKEN_ACCOUNT, SERVICE_TOKEN_HANDOFF, SERVICE_TOKEN_SERVICE } from "../../../../bin/one-password-custody.ts";
 

@@ -1,8 +1,8 @@
 // One temp machine for the Context7 and Firecrawl account-key process tests,
 // run from a private copy of the whole plugin that differs from source in
-// exactly its declared places: for each of the two connectors, the Keychain
-// leaf holds the test-owned reader fake (owned by the Atlassian fixtures),
-// the endpoint leaf names that connector's loopback stub, and the keyless
+// exactly its declared places: the shared Keychain reader holds the
+// test-owned fake (owned by the Atlassian fixtures); for each connector,
+// the endpoint leaf names its loopback stub, and the keyless
 // registry entry's baseUrl names the same stub; requirements.json names the
 // fake op launcher's digest as the qualified op; and bin/connectors is
 // compiled from that copy. Every process (front door, Provider preflight,
@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { changedPaths, FAKE_OP_LAUNCHER, fakeLauncher, REQUIREMENTS, SHIPPED_ROOT } from "../../skills/atlassian/tests/fixtures/plugin-copy.ts";
+import { changedPaths, FAKE_OP_LAUNCHER, fakeLauncher, KEYCHAIN_LEAF, REQUIREMENTS, SHIPPED_ROOT } from "../../skills/atlassian/tests/fixtures/plugin-copy.ts";
 import { ownedDirectory } from "../../bin/private-state.ts";
 import { compileFrontDoor } from "../compile-front-door.ts";
 import { type AccountKeyStub, startAccountKeyStub } from "./account-key-stub.ts";
@@ -42,7 +42,6 @@ const leaf = (id: string, name: string) => path.join("skills", id, "scripts", na
 const registryPath = (id: string) => path.join("skills", id, "config", "mcporter.json");
 
 function substitute(copy: string, connector: ConnectorFixture, url: string): void {
-	writeFileSync(path.join(copy, leaf(connector.id, "keychain-read.ts")), readFileSync(FAKE_READER));
 	writeFileSync(path.join(copy, leaf(connector.id, "endpoint.ts")), `// ${ENDPOINT_MARKER}\nexport const ACCOUNT_ENDPOINT = ${JSON.stringify(url)};\n`);
 	const registry = JSON.parse(readFileSync(path.join(copy, registryPath(connector.id)), "utf8")) as { mcpServers: Record<string, { baseUrl?: string }> };
 	const keyless = registry.mcpServers[connector.id];
@@ -62,10 +61,11 @@ function verifiedCopy(connectors: readonly ConnectorFixture[], stubs: ReadonlyMa
 	const copy = mkdtempSync(path.join(os.tmpdir(), "connectors-account-key-plugin-"));
 	chmodSync(copy, 0o700);
 	cpSync(SHIPPED_ROOT, copy, { recursive: true, verbatimSymlinks: true });
+	writeFileSync(path.join(copy, KEYCHAIN_LEAF), readFileSync(FAKE_READER));
 	for (const connector of connectors) substitute(copy, connector, stubs.get(connector.id)?.url ?? "");
 	writeFileSync(path.join(copy, REQUIREMENTS), fixtureRequirements());
 	compileFrontDoor(path.join(copy, "bin", "connectors.ts"), path.join(copy, "bin", "connectors"));
-	const expected = [path.join("bin", "connectors"), REQUIREMENTS, ...connectors.flatMap(({ id }) => [leaf(id, "keychain-read.ts"), leaf(id, "endpoint.ts"), registryPath(id)])].sort();
+	const expected = [path.join("bin", "connectors"), REQUIREMENTS, KEYCHAIN_LEAF, ...connectors.flatMap(({ id }) => [leaf(id, "endpoint.ts"), registryPath(id)])].sort();
 	const changed = changedPaths(SHIPPED_ROOT, copy);
 	if (JSON.stringify(changed) !== JSON.stringify(expected)) throw new Error(`account-key plugin copy changes ${JSON.stringify(changed)}, expected ${JSON.stringify(expected)}`);
 	for (const { id } of connectors) if (readFileSync(path.join(SHIPPED_ROOT, leaf(id, "endpoint.ts")), "utf8").includes(ENDPOINT_MARKER)) throw new Error(`the shipped ${id} endpoint leaf carries the test marker`);
