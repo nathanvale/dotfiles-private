@@ -92,17 +92,17 @@ No operator-attested adjudication is assumed; settling by read-back evidence sta
 
 ## Authority
 
-Decision authority: Nathan, who accepted this record on 2026-10-05, approving Option B —
+Decision authority: Nathan, who accepted this record on 2026-10-05, approving Option B:
 the dispatcher-owned packaged adapter admitting 33 of 35 catalog tools, each write under
 preview, journal, and read-back-only settlement, and the custody move from MCPorter's
-default HOME vault to Figma's own vault root under Connectors state — for exactly the
+default HOME vault to Figma's own vault root under Connectors state, for exactly the
 reviewed candidate at `26e4ec70d861253e5cceeff628b4f371a659a871`. This acceptance answers
 Spec #67's "never expose Figma write tools through this route" direction, which needs its
 own amendment to that ticket; the amendment is prepared separately and posts only after the
 foreground coordinator checks no intervening activity. It does not extend to
 `generate_figma_design` or `weave_upload_asset`, both still open per Required capabilities
 above, and it authorizes no live write, upload, Weave spend, credential action, auth login,
-or the release installation itself — those remain separate, foreground-coordinator-owned
+or the release installation itself: those remain separate, foreground-coordinator-owned
 steps.
 
 ## References
