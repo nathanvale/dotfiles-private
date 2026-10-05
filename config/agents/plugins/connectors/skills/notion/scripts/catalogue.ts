@@ -46,7 +46,7 @@ function verification(operation: string, args: Record<string, unknown>, value: u
 		const admitted = operation === "notion-create-file-upload" || operation === "notion-create-attachment" || operation === "notion-upload-skill" && args.action === "prepare";
 		return admitted && Object.keys(value).sort().join(",") === "before,reply" ? { before: value.before, reply: "prepared-handle" } : null;
 	}
-	if (Object.keys(value).some((key) => !["before", "after", "contains", "absent"].includes(key)) || !readCall(value.after)) return null;
+	if (Object.keys(value).some((key) => !["before", "after", "contains", "absent"].includes(key)) || !readCall(value.after) || !safeReferenceValue(value.after.args, true)) return null;
 	const contains = value.contains ?? [];
 	const absent = value.absent ?? [];
 	return literals(contains) && literals(absent) && contains.length + absent.length > 0 ? { before: value.before, after: value.after, contains, absent } : null;
@@ -77,15 +77,19 @@ function stableEntityUrl(value: unknown): boolean {
 	const host = url.hostname === "notion.so" || url.hostname.endsWith(".notion.so");
 	return url.protocol === "https:" && host && !url.port && !/\/(?:api|signed|uploads?|downloads?)(?:\/|$)/i.test(url.pathname);
 }
-function safeReferenceValue(value: unknown): boolean {
+function replyPathAllowed(reference: string): boolean {
+	return !reference.slice(7).split(".").some((key) => CREDENTIAL_KEY.test(key) || PROTOTYPE_KEYS.has(key));
+}
+function safeReferenceValue(value: unknown, allowReferences = false): boolean {
+	if (allowReferences && typeof value === "string" && value.startsWith("$reply.")) return replyPathAllowed(value);
 	if (typeof value === "string") return !/^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim()) || stableEntityUrl(value);
-	if (Array.isArray(value)) return value.every(safeReferenceValue);
-	if (record(value)) return Object.entries(value).every(([key, item]) => !CREDENTIAL_KEY.test(key) && !PROTOTYPE_KEYS.has(key) && (!urlKey(key) || stableEntityUrl(item)) && safeReferenceValue(item));
+	if (Array.isArray(value)) return value.every((item) => safeReferenceValue(item, allowReferences));
+	if (record(value)) return Object.entries(value).every(([key, item]) => !CREDENTIAL_KEY.test(key) && !PROTOTYPE_KEYS.has(key) && (!urlKey(key) || allowReferences && typeof item === "string" && item.startsWith("$reply.") || stableEntityUrl(item)) && safeReferenceValue(item, allowReferences));
 	return value !== undefined;
 }
 export function replyReferenceAllowed(reference: string, value: unknown): boolean {
 	const keys = reference.slice(7).split(".");
-	return !keys.some((key) => CREDENTIAL_KEY.test(key) || PROTOTYPE_KEYS.has(key)) && (!keys.some(urlKey) || stableEntityUrl(value)) && safeReferenceValue(value);
+	return replyPathAllowed(reference) && (!keys.some(urlKey) || stableEntityUrl(value)) && safeReferenceValue(value);
 }
 function selectReference(value: string, reply: unknown): unknown {
 	const keys = value.slice(7).split(".");
@@ -105,7 +109,7 @@ function missing(value: unknown): boolean {
 export function afterCall(write: Write, reply: unknown): Call | null {
 	if (write.verify.reply === "prepared-handle") return null;
 	const args = reference(write.verify.after.args, reply);
-	if (!record(args) || missing(args)) return null;
+	if (!record(args) || missing(args) || !safeReferenceValue(args)) return null;
 	return { tool: write.verify.after.tool, args };
 }
 

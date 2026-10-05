@@ -102,8 +102,8 @@ async function unchanged(write: Write, receipt: Receipt, caller: Caller): Promis
 function save(journal: Journal, receipt: Receipt, status: Receipt["status"]): Receipt | null {
 	return journal.settle(receipt, { status, replied: receipt.replied, effects: status === "completed" ? [{ kind: "notion-object", id: receipt.objectIdentity }] : [], readBack: receipt.readBack, taskId: receipt.taskId, taskState: receipt.taskState, terminalFailure: receipt.terminalFailure });
 }
-function unknownResult(receipt: Receipt, account: string, reply: unknown = null): Executed {
-	return { kind: "effect-unknown", data: { runId: receipt.runId, receipt, reply }, repair: unknownRepair(account, receipt.runId) };
+function unknownResult(receipt: Receipt, account: string): Executed {
+	return { kind: "effect-unknown", data: { runId: receipt.runId, receipt }, repair: unknownRepair(account, receipt.runId) };
 }
 function unchangedResult(receipt: Receipt): Executed {
 	return { kind: "failed-after-record", connectorCause: receipt.terminalFailure === "task-failed" ? "task-failed" : "provider-refused", data: { runId: receipt.runId, receipt }, repair: "The terminal provider failure and matching verification baselines prove unchanged; correct the input and preview again" };
@@ -121,7 +121,7 @@ async function refreshTask(write: Write, receipt: Receipt, caller: Caller, journ
 	if (receipt.taskId === null || receipt.taskState === "failed" || receipt.taskState === "succeeded") return receipt;
 	const task = await resolveTask(receipt, caller);
 	if (task.state === "pending") return receipt;
-	const next = { ...receipt, taskState: task.state, terminalFailure: task.state === "failed" ? "task-failed" as const : null, readBack: task.state === "succeeded" ? afterCall(write, task.data) : receipt.readBack };
+	const next = { ...receipt, taskState: task.state, terminalFailure: task.state === "failed" ? "task-failed" as const : null, readBack: task.state === "succeeded" ? afterCall(write, task.data) ?? receipt.readBack : receipt.readBack };
 	return save(journal, next, "unknown");
 }
 async function outcome(write: Write, receipt: Receipt, caller: Caller): Promise<Receipt["status"]> {
@@ -138,7 +138,7 @@ async function observedSettlement(write: Write, receipt: Receipt, caller: Caller
 	const final = save(journal, current, await outcome(write, current, caller));
 	if (final === null) return unknownResult(current, account);
 	if (final.status === "completed") return { kind: "applied", data: { runId: final.runId, receipt: final, reply } };
-	return final.status === "unchanged" ? unchangedResult(final) : unknownResult(final, account, reply);
+	return final.status === "unchanged" ? unchangedResult(final) : unknownResult(final, account);
 }
 async function settle(write: Write, receipt: Receipt, sent: Reply, caller: Caller, journal: Journal, account: string): Promise<Executed> {
 	// Only nonsecret task IDs and resolved verification arguments are durable.

@@ -178,6 +178,15 @@ export function openJournal(env: EnvironmentSource, now: () => number = Date.now
 		recordQuote(quoteKey: string, cost: number): boolean {
 			return writePrivateFile(quoteFile(quoteKey), `${JSON.stringify({ cost, at: now() })}\n`).ok;
 		},
+		// Called under the recipe lock before a paid request can leave.
+		consumeQuote(quoteKey: string): boolean {
+			try {
+				rmSync(quoteFile(quoteKey), { force: true });
+				return true;
+			} catch {
+				return false;
+			}
+		},
 		// The fresh cost Figma quoted for this exact run input, or null.
 		quote(quoteKey: string): number | null {
 			const quote = readJson<{ cost?: unknown; at?: unknown }>(quoteFile(quoteKey));

@@ -20,14 +20,17 @@ export function notionMachine(tools: string[], options: { timeoutMs?: number } =
 	let text = "Original page";
 	let pending = false;
 	let silent = false;
+	let mutationOverride: unknown;
+	let taskResult: unknown = { pages: [{ id: "created-page" }] };
 	let failure: "none" | "tool-error" | "partial-error" | "task-failed" | "transport-error" | "delayed-response" | "post-send-drop" = "none";
 	const pendingResponses: ((apply: boolean) => void)[] = [];
 	const objects = new Map<string, string>();
 	function taskReply(): unknown {
 		if (failure === "task-failed") return { response: { async_task: { task_id: "task-1", status: "failed", error: "fixture rejection" } } };
-		return pending ? { status: "running" } : { status: "succeeded", result: { pages: [{ id: "created-page" }] } };
+		return pending ? { status: "running" } : { status: "succeeded", result: taskResult };
 	}
 	function mutationReply(tool: string, args: Record<string, unknown>): unknown {
+		if (mutationOverride !== undefined) return mutationOverride;
 		if (tool === "notion-create-file-upload") return { upload_url: "https://upload.example.test/file?SENTINEL_SIGNED", upload_headers: { Authorization: "SENTINEL_UPLOAD_HEADER" } };
 		if (tool === "notion-create-attachment") return { markdown_source: "file-upload://attachment-1" };
 		if (tool === "notion-upload-skill" && args.action === "prepare") return { upload_url: "https://upload.example.test/skill", upload_headers: {}, upload_token: "SENTINEL_UPLOAD_TOKEN" };
@@ -88,6 +91,7 @@ export function notionMachine(tools: string[], options: { timeoutMs?: number } =
 	return {
 		root, home, state, calls,
 		releaseDelayed() { for (const release of pendingResponses.splice(0)) release(true); },
+		setMutationReply(value: unknown) { mutationOverride = value; }, setTaskResult(value: unknown) { taskResult = value; },
 		setText(value: string) { text = value; }, setObject(id: string, value: string) { objects.set(id, value); }, setFailure(value: typeof failure) { failure = value; }, setPending(value: boolean) { pending = value; }, setSilent(value: boolean) { silent = value; },
 		async run(argv: string[]) {
 			const result = await runBundle({ root: plugin, binary: path.join(plugin, "bin/connectors"), skillsRoot: path.join(plugin, "skills"), addSkill() {}, dispose() {} }, argv, { home, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE ?? "/nonexistent", NOTION_TOKEN: "SENTINEL_AMBIENT_NOTION" }, timeoutMs: 60000 });

@@ -38,6 +38,8 @@ export interface FigmaStub {
 	uploadOrigin: string | null;
 	// A mapping that lands outside any reply, as a late request would.
 	landMapping(fileKey: string, nodeId: string, componentName: string, source: string): void;
+	// A run finishes independently of a cancellation request.
+	finishRun(runId: string, status: "COMPLETED" | "FAILED"): void;
 	stop(): void;
 }
 
@@ -134,7 +136,7 @@ export function startFigmaStub(): FigmaStub {
 			return { runIds: started.map((run) => run.runId) };
 		},
 		weave_cancel_tool_run: (args) => {
-			for (const run of runs) if (args.runIds.includes(run.runId)) run.status = "CANCELED";
+			for (const run of runs) if (args.runIds.includes(run.runId) && run.status === "RUNNING") run.status = "CANCELED";
 			return { canceled: args.runIds.length };
 		},
 	};
@@ -149,6 +151,10 @@ export function startFigmaStub(): FigmaStub {
 		landMapping(fileKey, nodeId, componentName, source) {
 			const key = `${fileKey}:${nodeId}`;
 			mappings.set(key, [...(mappings.get(key) ?? []), { componentName, source }]);
+		},
+		finishRun(runId, status) {
+			const run = runs.find((item) => item.runId === runId);
+			if (run?.status === "RUNNING") run.status = status;
 		},
 		stop() {
 			server.stop(true);

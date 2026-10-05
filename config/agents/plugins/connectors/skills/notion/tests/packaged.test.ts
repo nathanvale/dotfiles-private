@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { createBundle, runBundle, PLUGIN_ROOT, createHarness } from "../../../tests/harness.ts";
+import { execFileSync } from "node:child_process";
+import { heldMcporter, ownedVault } from "../../../tests/fixtures/native-oauth.ts";
+import { createBundle, runBundle, PLUGIN_ROOT, createHarness, runInteractiveBundle } from "../../../tests/harness.ts";
 import { afterCall, writeInput } from "../scripts/catalogue.ts";
 import { openJournal } from "../scripts/journal.ts";
 import { notionCaller, type Caller } from "../scripts/transport.ts";
@@ -33,7 +35,10 @@ test("packaged Notion lists the complete 44-tool route and refuses an unjournale
 		}
 		expect(existsSync(path.join(bundle.root, "state"))).toBe(false);
 		const status = await run(["auth", "status", "notion", ...SELECT]);expect(JSON.parse(status.stdout).result.data).toMatchObject({ account: "personal", grant: "absent" });
-		const login = await run(["auth", "login", "notion", ...SELECT]);expect(login.code).toBe(3);expect(login.stderr).toBe("");
+		for (const flags of [[], ["--no-browser", "--reset"]]) {
+			const login = await run(["auth", "login", "notion", ...SELECT, ...flags]);
+			expect([login.code, login.stderr, JSON.parse(login.stdout).result.causeCode]).toEqual([3, "", "DOMAIN_ATTENDED_REQUIRED"]);
+		}
 	} finally { bundle.dispose(); }
 });
 
@@ -63,7 +68,7 @@ test.skipIf(!official)("previewed Notion writes send once with identical input, 
 		const mismatch = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(write("Different value")), "--apply", id]);expect(mismatch.code).toBe(3);expect(machine.calls.filter((call) => call.tool === "notion-update-page")).toHaveLength(0);
 		const applied = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", id]);expect([applied.code, applied.stderr]).toEqual([0, ""]);expect(applied.envelope.result.data?.receipt?.status).toBe("completed");
 		expect(machine.calls.filter((call) => call.tool === "notion-update-page").map((call) => call.args)).toEqual([{ page_id: "page-1", command: "replace_content", new_str: "Requested value" }]);
-		const again = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", id]);expect(again.code).toBe(3);
+		const again = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", id]);expect([again.code, again.envelope.result.data?.connectorCause]).toEqual([3, "preview-consumed"]);
 		machine.setText("Original page");machine.setSilent(true);
 		const p = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--preview"]);
 		const unknown = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", p.envelope.result.data?.previewId as string]);expect(unknown.envelope.result.transactionState).toBe("unknown");
@@ -97,6 +102,9 @@ test.skipIf(!official)("terminal Notion rejection proves unchanged while partial
 		const preview = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--preview"]);
 		const result = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", String(preview.envelope.result.data?.previewId)]);
 		expect([result.code, result.stderr, result.envelope.result.data?.receipt?.status]).toEqual([3, "", "unchanged"]);
+		const reused = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", String(preview.envelope.result.data?.previewId)]);
+		expect([reused.code, reused.stderr, reused.envelope.result.data?.connectorCause]).toEqual([3, "", "preview-consumed"]);
+		expect(machine.calls.filter((call) => call.tool === "notion-update-page")).toHaveLength(1);
 		machine.setFailure("partial-error");
 		const next = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--preview"]);
 		const partial = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", String(next.envelope.result.data?.previewId)]);
@@ -329,3 +337,123 @@ test("Notion nonzero JSON without positive tool-error evidence remains indetermi
 		}
 	} finally { bundle.dispose(); }
 });
+
+
+// Regression oracles use literal refusal causes and independently read files.
+// An accepted unsafe argument, leaked provider reply, or erased bound target
+// makes these public-process checks fail.
+test("Notion verification refuses malformed declarations and fixed capabilities before effects", async () => {
+	const bundle = createBundle();
+	const home = path.join(bundle.root, "home");
+	const state = path.join(bundle.root, "state");
+	mkdirSync(home);
+	cpSync(path.join(PLUGIN_ROOT, "skills/notion/config"), path.join(bundle.skillsRoot, "notion/config"), { recursive: true });
+	const before = { tool: "notion-fetch", args: { id: "page-1" } };
+	const after = { tool: "notion-fetch", args: { id: "page-1" } };
+	const declarations = [
+		{ before: { tool: "notion-update-page", args: { page_id: "page-1" } }, after, contains: ["Requested value"] },
+		{ before, after: { tool: "notion-update-page", args: { page_id: "page-1" } }, contains: ["Requested value"] },
+		{ before, after, contains: [] },
+		{ before, after, contains: [""] },
+		{ before, after, contains: ["   "] },
+		{ before, after, contains: "Requested value" },
+		{ before, after, absent: [17] },
+		{ before: { tool: "notion-fetch", args: { id: "$reply.page_id" } }, after, contains: ["Requested value"] },
+		{ before, reply: "prepared-handle" },
+		{ before, after, contains: ["Requested value"], reply: "prepared-handle" },
+		{ before, after: { tool: "notion-fetch", args: { id: "https://upload.example.test/file?signature=SENTINEL_FIXED_GRANT" } }, contains: ["Requested value"] },
+		{ before, after: { tool: "notion-fetch", args: { filter: { nested: [{ Authorization: "SENTINEL_FIXED_HEADER" }] } } }, contains: ["Requested value"] },
+		{ before, after: { tool: "notion-fetch", args: { id: "page-1", token: "SENTINEL_FIXED_TOKEN" } }, contains: ["Requested value"] },
+	];
+	try {
+		for (const declaration of declarations) {
+			const value = { ...write(), _verify: declaration };
+			const result = await runBundle(bundle, ["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--preview"], { home, extraEnv: { XDG_STATE_HOME: state } });
+			expect([result.code, result.stderr, JSON.parse(result.stdout).result.data?.connectorCause]).toEqual([4, "", "input-invalid"]);
+			expect(result.stdout).not.toContain("SENTINEL_FIXED");
+			expect(existsSync(state)).toBe(false);
+		}
+	} finally { bundle.dispose(); }
+}, 180000);
+
+test.skipIf(!official)("Notion malformed prepared handle stays unknown without exposing raw capability replies", async () => {
+	const machine = notionMachine(TOOLS);
+	try {
+		machine.setMutationReply({ upload_url: "https://upload.example.test/file?signature=SENTINEL_UNKNOWN_GRANT", upload_token: "SENTINEL_UNKNOWN_TOKEN" });
+		const value = { filename: "report.pdf", _verify: { before: { tool: "notion-fetch", args: { id: "page-1" } }, reply: "prepared-handle" } };
+		const preview = await machine.run(["run", "notion", ...SELECT, "notion-create-file-upload", ...input(value), "--preview"]);
+		expect(preview.code).toBe(0);
+		const applied = await machine.run(["run", "notion", ...SELECT, "notion-create-file-upload", ...input(value), "--apply", String(preview.envelope.result.data?.previewId)]);
+		expect([applied.code, applied.stderr, applied.envelope.result.transactionState]).toEqual([3, "", "unknown"]);
+		expect(applied.stdout).not.toContain("SENTINEL_UNKNOWN");
+		expect(applied.stdout).not.toContain("upload.example.test");
+		expect(applied.envelope.result.data).not.toHaveProperty("reply");
+		const durable = readFileSync(path.join(machine.state, "connectors/notion/personal/journal/receipts", `${applied.envelope.result.data?.runId}.json`), "utf8");
+		expect(durable).not.toContain("SENTINEL_UNKNOWN");
+		expect(durable).not.toContain("upload.example.test");
+		expect(JSON.parse(durable).status).toBe("unknown");
+		expect(machine.calls.filter((call) => call.tool === "notion-create-file-upload")).toHaveLength(1);
+	} finally { machine.dispose(); }
+}, 180000);
+
+test.skipIf(!official)("Notion successful task preserves an earlier bound readback when its result omits the reference", async () => {
+	const machine = notionMachine(TOOLS);
+	try {
+		machine.setPending(true);
+		machine.setMutationReply({ async_task: { task_id: "task-1" }, pages: [{ id: "created-page" }] });
+		machine.setTaskResult({ finished: true });
+		const value = { ...write(), _verify: { ...write()._verify, after: { tool: "notion-fetch", args: { id: "$reply.pages.0.id" } } } };
+		const preview = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--preview"]);
+		expect(preview.code).toBe(0);
+		const applied = await machine.run(["run", "notion", ...SELECT, "notion-update-page", ...input(value), "--apply", String(preview.envelope.result.data?.previewId)]);
+		expect(applied.envelope.result.transactionState).toBe("unknown");
+		machine.setPending(false);
+		machine.setText("Requested value");
+		const recovered = await machine.run(["recover", "notion", ...SELECT, "--run", String(applied.envelope.result.data?.runId), "--adjudicate", ...input(value)]);
+		expect([recovered.code, recovered.stderr, recovered.envelope.result.data?.receipt?.status]).toEqual([0, "", "completed"]);
+		const durable = JSON.parse(readFileSync(path.join(machine.state, "connectors/notion/personal/journal/receipts", `${applied.envelope.result.data?.runId}.json`), "utf8"));
+		expect(durable.readBack).toEqual({ tool: "notion-fetch", args: { id: "created-page" } });
+		expect(machine.calls.at(-1)).toEqual({ tool: "notion-fetch", args: { id: "created-page" } });
+		expect(machine.calls.filter((call) => call.tool === "notion-update-page")).toHaveLength(1);
+	} finally { machine.dispose(); }
+}, 180000);
+
+
+// Hosted registry, native pinned MCPorter, fixture-only empty vaults, and
+// denied outbound network prove the attended process handoff without OAuth.
+test.skipIf(!official)("Notion attended login forwards native auth flags inside only its selected account vault", async () => {
+	if (official === undefined) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for Notion attended process proof");
+	const bundle = createBundle();
+	const home = path.join(bundle.root, "home");
+	const state = path.join(bundle.root, "state");
+	mkdirSync(home);
+	cpSync(path.join(PLUGIN_ROOT, "skills/notion/config"), path.join(bundle.skillsRoot, "notion/config"), { recursive: true });
+	const other = ownedVault(path.join(state, "connectors/notion-mcporter/other"));
+	const otherContents = JSON.stringify({ version: 2, entries: {}, fixture: "OTHER_ACCOUNT_INDEX" });
+	writeFileSync(other, otherContents, { mode: 0o600 });
+	const rows = [
+		{ account: "bare", flags: [], expected: ["auth", "notion-connectors"] },
+		{ account: "flagged", flags: ["--reset", "--no-browser"], expected: ["auth", "notion-connectors", "--no-browser", "--reset"] },
+	];
+	const sandbox = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(deny process-exec (literal "/usr/bin/security"))';
+	try {
+		for (const row of rows) {
+			const vaultRoot = path.join(state, "connectors/notion-mcporter", row.account);
+			const fifo = ownedVault(vaultRoot);
+			execFileSync("/usr/bin/mkfifo", [fifo]);
+			const running = runInteractiveBundle({ ...bundle, binary: "/usr/bin/sandbox-exec" }, ["-p", sandbox, bundle.binary, "auth", "login", "notion", ...row.flags.slice(0, 1), "--select", `account=${row.account}`, ...row.flags.slice(1)], { home, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: official, NOTION_TOKEN: "SENTINEL_AUTH_AMBIENT" }, timeoutMs: 60000 });
+			const held = await heldMcporter(fifo, state, "auth", running);
+			const result = await running;
+			expect(held?.argv).toEqual(row.expected);
+			expect(held?.env.filter((value) => /^(?:XDG_DATA_HOME|XDG_CACHE_HOME|MCPORTER_NO_KEEPALIVE)=/.test(value)).sort()).toEqual(["MCPORTER_NO_KEEPALIVE=*", `XDG_CACHE_HOME=${vaultRoot}/cache`, `XDG_DATA_HOME=${vaultRoot}/data`]);
+			expect(held?.env.some((value) => value.startsWith("NOTION_TOKEN=") || value.includes("SENTINEL_AUTH_AMBIENT"))).toBe(false);
+			expect(result.stderr).toBe("");
+			expect(result.stdout.trim().split("\n")).toHaveLength(1);
+			expect(JSON.parse(result.stdout).result).toMatchObject({ causeCode: "DOMAIN_AUTH_LOGIN_UNKNOWN", transactionState: "unknown", data: { connector: "notion", account: row.account }, effects: { uncertain: ["account-grant"] } });
+			for (const output of [result.stdout, result.terminal]) expect(output).not.toContain("SENTINEL_AUTH_AMBIENT");
+			expect(readFileSync(other, "utf8")).toBe(otherContents);
+			expect(existsSync(path.join(home, ".mcporter"))).toBe(false);
+			expect(existsSync(path.join(state, "connectors/mcporter-keyless"))).toBe(false);
+		}
+	} finally { bundle.dispose(); }
+}, 180000);

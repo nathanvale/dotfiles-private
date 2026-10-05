@@ -110,7 +110,7 @@ export function baselineRefusal(write: WriteInput, observation: Observation): st
 	if (spec.evidence === "marks" && allPresent(marks, observation.text)) return "already-present";
 	if (spec.evidence === "new-id" && allPresent(marks, observation.text)) return "name-exists";
 	if (spec.evidence === "reply-target" && allPresent(marks, observation.text)) return "already-present";
-	if (spec.evidence === "canceled" && observation.statuses.length > 0 && observation.statuses.every((status) => TERMINAL.has(status))) return "runs-finished";
+	if (spec.evidence === "canceled" && observation.statuses.length > 0 && observation.statuses.some((status) => TERMINAL.has(status))) return "runs-finished";
 	return null;
 }
 
