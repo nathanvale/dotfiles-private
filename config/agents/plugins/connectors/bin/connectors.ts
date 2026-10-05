@@ -2604,11 +2604,11 @@ function executionCapabilities(manifest: ConnectorManifest, failure: { value: Se
 // check follows a published registration.
 const RECORDED_NEXT: Partial<Readonly<Record<RecordedEffect, string>>> = { "write-preview": "connectors.run.apply", "custody-registration": "connectors.auth" };
 
-// An execute step owns no connector account effect: its inventory is this
-// invocation's MCPorter selection effect, then the journaled-write effects its
-// outcome names.
+// Read executions report observed account effects alongside selection effects;
+// journaled-write outcomes continue to name their own durable effects.
 function emitExecuted(command: AdapterCommand, executed: Executed): void {
-	const completed = completedSelectionEffects();
+	const localEffects = executed.kind === "success" || executed.kind === "failed" ? executed.localEffects ?? [] : [];
+	const completed = [...completedSelectionEffects(), ...localEffects];
 	const data = (extra: Record<string, unknown>) => ({ connector: command.id, ...extra });
 	switch (executed.kind) {
 		case "refused":
@@ -2618,7 +2618,7 @@ function emitExecuted(command: AdapterCommand, executed: Executed): void {
 			emitAdapterEnvelope(command, completed.length > 0 ? "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT" : "DOMAIN_PROVIDER_CALL_FAILED", `${PROGRAM}: ${command.id} provider call did not complete (${executed.connectorCause})`, null, executed.repair, { completed, uncertain: [] }, "connectors.auth");
 			return;
 		case "success":
-			emitAdapterEnvelope(command, readSuccessCause([]), `${command.id}${operationLabel(command)} completed`, data(executed.data), null, { completed, uncertain: [] });
+			emitAdapterEnvelope(command, readSuccessCause(localEffects), `${command.id}${operationLabel(command)} completed`, data(executed.data), null, { completed, uncertain: [] });
 			return;
 		case "recorded":
 			emitAdapterEnvelope(command, "SUCCESS_RUN_RECORDED", `${command.id}${operationLabel(command)} recorded ${executed.effect}`, data(executed.data), null, { completed: [...completed, executed.effect], uncertain: [] }, RECORDED_NEXT[executed.effect]);
