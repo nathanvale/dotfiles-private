@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Admit Figma's MCP catalog by effect class
@@ -76,7 +76,7 @@ No operator-attested adjudication is assumed; settling by read-back evidence sta
 ### B. Dispatcher-owned adapter by effect class
 
 - Good: every provable tool admitted; the write contract and cost gate are enforced by refusals.
-- Bad: three tools wait on the decisions above; reads change command.
+- Bad: two tools wait on the decisions above; reads change command.
 
 ### C. Identity only
 
@@ -89,6 +89,21 @@ No operator-attested adjudication is assumed; settling by read-back evidence sta
 - `skills/figma/tests/packaged.test.ts`: through the compiled front door and the official MCPorter 0.14.0 against a stateful loopback stub: the live listing is exactly 33; 13 flows apply all 12 admitted write tools once after preview and only on read-back; upload_assets posts the exact previewed bytes and content type itself, refuses changed bytes, unreadable sources, bad shapes, and any URL off Figma's origin (no POST), and no upload capability appears in any output or state file; a preview applies once with identical input; Weave acknowledges only a quoted cost; an unreplied write blocks its object and settles only on found evidence; `use_figma` never settles unchanged; auth status reads presence only and login needs an attended terminal; reads and writes touch only Figma's vault root, never the keyless root or HOME.
 - Live, 5 October 2026: a cached-grant schema listing returned the 18 documented reads, and `get_metadata`, `get_screenshot`, and `get_variable_defs` read one Monash node. No live write, upload, or Weave run has been made.
 - Revisit when Figma changes its catalog, when the decisions above are made, or when Figma documents a Connectors-specific client or write contract.
+
+## Authority
+
+Decision authority: Nathan, who accepted this record on 2026-10-05, approving Option B —
+the dispatcher-owned packaged adapter admitting 33 of 35 catalog tools, each write under
+preview, journal, and read-back-only settlement, and the custody move from MCPorter's
+default HOME vault to Figma's own vault root under Connectors state — for exactly the
+reviewed candidate at `26e4ec70d861253e5cceeff628b4f371a659a871`. This acceptance answers
+Spec #67's "never expose Figma write tools through this route" direction, which needs its
+own amendment to that ticket; the amendment is prepared separately and posts only after the
+foreground coordinator checks no intervening activity. It does not extend to
+`generate_figma_design` or `weave_upload_asset`, both still open per Required capabilities
+above, and it authorizes no live write, upload, Weave spend, credential action, auth login,
+or the release installation itself — those remain separate, foreground-coordinator-owned
+steps.
 
 ## References
 
