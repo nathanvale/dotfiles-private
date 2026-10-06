@@ -47,10 +47,12 @@ crosses to the caller.
 - Run it only from the granted foreground, under the Steward skill's
   single-use Selection grant, with Nathan present. The command cannot verify
   that grant, and its success output is item detail.
-- Pinning is not process integrity. The granted foreground's Bun process may
-  load a `BUN_OPTIONS` or working-directory `bunfig.toml` preload, which runs
-  code inside this command (`project` too). That caller is trusted, like
-  `HOME` and `XDG_STATE_HOME`.
+- Pinning determines which chooser executable is requested. Native selection
+  also relies on the integrity of the granted foreground's process, an
+  assumption pending Nathan's acceptance. For example, a runtime preload
+  (`BUN_OPTIONS` or a working-directory `bunfig.toml`), library injection, or
+  the `bun` that the wrapper resolves through `PATH` can run code inside this
+  command, and inside `project` too.
 - It reads no file content, writes nothing, takes no operands and never reads
   standard input. The folder listing is visible only to Nathan in the dialog.
 - Every refusal is fixed and value-free: it never names a path, file name or
