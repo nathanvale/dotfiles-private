@@ -1,9 +1,10 @@
 // The one typed owner for Source Intake dispatch command identities, routes, stations, exit meanings and the
 // Contract Core 2.0 envelope. Every public path, the discovery catalogue and the process tests read these tables.
-// Profile: complex, because the projection command checks an exact-item approval grant. Every command is inspect-only.
+// Profile: complex, because the projection command checks an exact-item approval grant and choose serves a granted
+// foreground. Every command is inspect-only.
 const CONTRACT_VERSION = "2.0.0"
 
-export type CommandIdentity = "source-intake-dispatch.project" | "source-intake-dispatch.redacted"
+export type CommandIdentity = "source-intake-dispatch.choose" | "source-intake-dispatch.project" | "source-intake-dispatch.redacted"
 export type ControlIdentity =
 	| "source-intake-dispatch.command-discovery"
 	| "source-intake-dispatch.discovery"
@@ -23,9 +24,16 @@ export const COMMANDS = [
 		summary: "Project only the granted classification metadata fields after validating a grant and request piped on standard input.",
 	},
 	{ commandIdentity: "source-intake-dispatch.redacted", effectClass: "inspect", route: ["--redacted"], summary: "Return the fixed redacted projection for status or evaluation." },
+	{
+		commandIdentity: "source-intake-dispatch.choose",
+		effectClass: "inspect",
+		route: ["choose"],
+		summary: "Open the native macOS chooser so Nathan selects one file directly inside a local Google Drive 00 Inbox; return its name and local account.",
+	},
 ] as const satisfies readonly { commandIdentity: Identity; effectClass: "inspect"; route: string[]; summary: string }[]
 
 const AVAILABLE_PATHS = [
+	"source-intake-dispatch.choose",
 	"source-intake-dispatch.command-discovery",
 	"source-intake-dispatch.discovery",
 	"source-intake-dispatch.help",
@@ -85,7 +93,7 @@ const STATIONS = {
 		failureClass: "transient",
 		exitCode: 75,
 		retryDelayMilliseconds: INPUT_RETRY_DELAY_MILLISECONDS,
-		trigger: "A file-descriptor limit was reached before input was read; no receipt was touched.",
+		trigger: "A file-descriptor limit was reached before input was read or the chooser opened; nothing was read.",
 		repairAction: "Wait for open files to be released, then retry the same command.",
 		guidance: { nextAction: "Retry the same command after the stated delay." },
 	},
@@ -103,6 +111,49 @@ const STATIONS = {
 				inspect: ["the standard input redirection of the calling command"],
 			},
 		},
+	},
+	// choose stations. Each is fixed and value-free: none names a path, file name or account.
+	noInbox: {
+		causeCode: "DOMAIN_CONFIG_MISSING",
+		outcome: "refused",
+		failureClass: "domain",
+		exitCode: 3,
+		trigger: "No local Google Drive for desktop account folder holds a My Drive/00 Inbox directory at its physical path.",
+		repairAction: "Start Google Drive for desktop with the personal account so its 00 Inbox syncs locally.",
+		guidance: { nextAction: "Ask Nathan to start Google Drive for desktop, then retry choose." },
+	},
+	cancelled: {
+		causeCode: "DOMAIN_AUTHORITY_REQUIRED",
+		outcome: "refused",
+		failureClass: "domain",
+		exitCode: 3,
+		trigger: "Nathan closed the native chooser without selecting a file.",
+		repairAction: "Only Nathan selects the item; retry choose while he is present.",
+		guidance: {
+			handoff: {
+				owner: "human",
+				reason: "The item is selected only by Nathan in the native chooser.",
+				inspect: ["whether Nathan still wants to select one 00 Inbox file now"],
+			},
+		},
+	},
+	selectionRefused: {
+		causeCode: "DOMAIN_PATH_REFUSED",
+		outcome: "refused",
+		failureClass: "domain",
+		exitCode: 3,
+		trigger: "The chooser reply is not one regular, non-hidden file directly inside a local 00 Inbox (for example a folder, a link, a nested or outside file).",
+		repairAction: "Select one ordinary file that sits directly inside 00 Inbox, not a folder, link or nested file.",
+		guidance: { nextAction: "Ask Nathan to retry choose and select one file directly inside 00 Inbox." },
+	},
+	chooserUnavailable: {
+		causeCode: "INTERNAL_PREPARATION",
+		outcome: "refused",
+		failureClass: "internal",
+		exitCode: 1,
+		trigger: "The native chooser could not open, or the local Drive folder could not be read, in this session.",
+		repairAction: "Run choose from a process in Nathan's logged-in macOS session that may show a dialog and read the local Drive folder.",
+		guidance: { nextAction: "Ask Nathan to run choose from his own terminal in the granted foreground session." },
 	},
 	serialization: {
 		causeCode: "INTERNAL_RESULT_UNCHANGED",
@@ -124,13 +175,21 @@ const STATIONS = {
 export type StationKey = keyof typeof STATIONS
 
 const COMMAND_STATIONS: Record<CommandIdentity, readonly StationKey[]> = {
+	"source-intake-dispatch.choose": ["usage", "noInbox", "cancelled", "selectionRefused", "chooserUnavailable", "inputBusy", "serialization"],
 	"source-intake-dispatch.project": ["usage", "denied", "inputInvalid", "inputBusy", "inputUnreadable", "serialization"],
 	"source-intake-dispatch.redacted": ["usage", "serialization"],
 }
 
 const SUCCESS_TRIGGERS: Record<CommandIdentity, string> = {
+	"source-intake-dispatch.choose": "Nathan selects one regular file directly inside a local 00 Inbox; its name and local account are returned.",
 	"source-intake-dispatch.project": "A matching piped grant and request yield exactly the requested granted fields from the bound receipt.",
 	"source-intake-dispatch.redacted": "The recipient is status or evaluation; the fixed redacted projection is returned.",
+}
+
+const SUCCESS_GUIDANCE: Record<CommandIdentity, string> = {
+	"source-intake-dispatch.choose": "Keep the selection in the granted foreground's private receipt only; no follow-up read or effect is implied.",
+	"source-intake-dispatch.project": "Pass the projection to its granted recipient only; no follow-up effect is implied.",
+	"source-intake-dispatch.redacted": "Pass the projection to its granted recipient only; no follow-up effect is implied.",
 }
 
 /** Stdout cannot be written. It is a lifecycle exception, not an envelope-bearing station. */
@@ -315,7 +374,9 @@ export function discoveryData() {
 		signalExits: { "130": "SIGINT", "143": "SIGTERM" },
 		effectExclusions: [
 			"Never writes a file, receipt, grant, request, Beads record, vault note or configuration.",
-			"Never reads Google Drive or any network resource.",
+			"Never reads Google Drive, file content or any network resource; choose observes only the type and parent folder of the one file Nathan selects.",
+			"Never shows a folder listing to its caller; only Nathan sees the native chooser.",
+			"Never names a selected path, file name or account in a refusal.",
 			"Never discloses a receipt value, source label, path or raw error in a refusal.",
 			"Never opens a private receipt before the grant and request match.",
 			"Never opens a caller-supplied input path; the grant and request arrive on standard input.",
@@ -360,7 +421,7 @@ export function commandDiscovery(commandIdentity: CommandIdentity) {
 				retryable: false,
 				retryDelayPolicy: { kind: "none" },
 				repairAction: null,
-				guidance: { nextAction: "Pass the projection to its granted recipient only; no follow-up effect is implied." },
+				guidance: { nextAction: SUCCESS_GUIDANCE[commandIdentity] },
 				trigger: SUCCESS_TRIGGERS[commandIdentity],
 				reachability: "required",
 				unreachableRationale: null,
@@ -372,5 +433,5 @@ export function commandDiscovery(commandIdentity: CommandIdentity) {
 }
 
 export function isCommandIdentity(value: string | undefined): value is CommandIdentity {
-	return value === "source-intake-dispatch.project" || value === "source-intake-dispatch.redacted"
+	return value === "source-intake-dispatch.choose" || value === "source-intake-dispatch.project" || value === "source-intake-dispatch.redacted"
 }

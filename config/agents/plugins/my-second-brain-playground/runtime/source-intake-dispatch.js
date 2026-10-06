@@ -14,9 +14,16 @@ var COMMANDS = [
     route: ["project"],
     summary: "Project only the granted classification metadata fields after validating a grant and request piped on standard input."
   },
-  { commandIdentity: "source-intake-dispatch.redacted", effectClass: "inspect", route: ["--redacted"], summary: "Return the fixed redacted projection for status or evaluation." }
+  { commandIdentity: "source-intake-dispatch.redacted", effectClass: "inspect", route: ["--redacted"], summary: "Return the fixed redacted projection for status or evaluation." },
+  {
+    commandIdentity: "source-intake-dispatch.choose",
+    effectClass: "inspect",
+    route: ["choose"],
+    summary: "Open the native macOS chooser so Nathan selects one file directly inside a local Google Drive 00 Inbox; return its name and local account."
+  }
 ];
 var AVAILABLE_PATHS = [
+  "source-intake-dispatch.choose",
   "source-intake-dispatch.command-discovery",
   "source-intake-dispatch.discovery",
   "source-intake-dispatch.help",
@@ -58,7 +65,7 @@ var STATIONS = {
     failureClass: "transient",
     exitCode: 75,
     retryDelayMilliseconds: INPUT_RETRY_DELAY_MILLISECONDS,
-    trigger: "A file-descriptor limit was reached before input was read; no receipt was touched.",
+    trigger: "A file-descriptor limit was reached before input was read or the chooser opened; nothing was read.",
     repairAction: "Wait for open files to be released, then retry the same command.",
     guidance: { nextAction: "Retry the same command after the stated delay." }
   },
@@ -77,6 +84,48 @@ var STATIONS = {
       }
     }
   },
+  noInbox: {
+    causeCode: "DOMAIN_CONFIG_MISSING",
+    outcome: "refused",
+    failureClass: "domain",
+    exitCode: 3,
+    trigger: "No local Google Drive for desktop account folder holds a My Drive/00 Inbox directory at its physical path.",
+    repairAction: "Start Google Drive for desktop with the personal account so its 00 Inbox syncs locally.",
+    guidance: { nextAction: "Ask Nathan to start Google Drive for desktop, then retry choose." }
+  },
+  cancelled: {
+    causeCode: "DOMAIN_AUTHORITY_REQUIRED",
+    outcome: "refused",
+    failureClass: "domain",
+    exitCode: 3,
+    trigger: "Nathan closed the native chooser without selecting a file.",
+    repairAction: "Only Nathan selects the item; retry choose while he is present.",
+    guidance: {
+      handoff: {
+        owner: "human",
+        reason: "The item is selected only by Nathan in the native chooser.",
+        inspect: ["whether Nathan still wants to select one 00 Inbox file now"]
+      }
+    }
+  },
+  selectionRefused: {
+    causeCode: "DOMAIN_PATH_REFUSED",
+    outcome: "refused",
+    failureClass: "domain",
+    exitCode: 3,
+    trigger: "The chooser reply is not one regular, non-hidden file directly inside a local 00 Inbox (for example a folder, a link, a nested or outside file).",
+    repairAction: "Select one ordinary file that sits directly inside 00 Inbox, not a folder, link or nested file.",
+    guidance: { nextAction: "Ask Nathan to retry choose and select one file directly inside 00 Inbox." }
+  },
+  chooserUnavailable: {
+    causeCode: "INTERNAL_PREPARATION",
+    outcome: "refused",
+    failureClass: "internal",
+    exitCode: 1,
+    trigger: "The native chooser could not open, or the local Drive folder could not be read, in this session.",
+    repairAction: "Run choose from a process in Nathan's logged-in macOS session that may show a dialog and read the local Drive folder.",
+    guidance: { nextAction: "Ask Nathan to run choose from his own terminal in the granted foreground session." }
+  },
   serialization: {
     causeCode: "INTERNAL_RESULT_UNCHANGED",
     outcome: "failed",
@@ -94,12 +143,19 @@ var STATIONS = {
   }
 };
 var COMMAND_STATIONS = {
+  "source-intake-dispatch.choose": ["usage", "noInbox", "cancelled", "selectionRefused", "chooserUnavailable", "inputBusy", "serialization"],
   "source-intake-dispatch.project": ["usage", "denied", "inputInvalid", "inputBusy", "inputUnreadable", "serialization"],
   "source-intake-dispatch.redacted": ["usage", "serialization"]
 };
 var SUCCESS_TRIGGERS = {
+  "source-intake-dispatch.choose": "Nathan selects one regular file directly inside a local 00 Inbox; its name and local account are returned.",
   "source-intake-dispatch.project": "A matching piped grant and request yield exactly the requested granted fields from the bound receipt.",
   "source-intake-dispatch.redacted": "The recipient is status or evaluation; the fixed redacted projection is returned."
+};
+var SUCCESS_GUIDANCE = {
+  "source-intake-dispatch.choose": "Keep the selection in the granted foreground's private receipt only; no follow-up read or effect is implied.",
+  "source-intake-dispatch.project": "Pass the projection to its granted recipient only; no follow-up effect is implied.",
+  "source-intake-dispatch.redacted": "Pass the projection to its granted recipient only; no follow-up effect is implied."
 };
 var EMISSION_FAILURE = "stdout cannot be written. Inspect the output stream before retrying.";
 function effects() {
@@ -231,7 +287,9 @@ function discoveryData() {
     signalExits: { "130": "SIGINT", "143": "SIGTERM" },
     effectExclusions: [
       "Never writes a file, receipt, grant, request, Beads record, vault note or configuration.",
-      "Never reads Google Drive or any network resource.",
+      "Never reads Google Drive, file content or any network resource; choose observes only the type and parent folder of the one file Nathan selects.",
+      "Never shows a folder listing to its caller; only Nathan sees the native chooser.",
+      "Never names a selected path, file name or account in a refusal.",
       "Never discloses a receipt value, source label, path or raw error in a refusal.",
       "Never opens a private receipt before the grant and request match.",
       "Never opens a caller-supplied input path; the grant and request arrive on standard input.",
@@ -274,7 +332,7 @@ function commandDiscovery(commandIdentity) {
         retryable: false,
         retryDelayPolicy: { kind: "none" },
         repairAction: null,
-        guidance: { nextAction: "Pass the projection to its granted recipient only; no follow-up effect is implied." },
+        guidance: { nextAction: SUCCESS_GUIDANCE[commandIdentity] },
         trigger: SUCCESS_TRIGGERS[commandIdentity],
         reachability: "required",
         unreachableRationale: null
@@ -285,11 +343,16 @@ function commandDiscovery(commandIdentity) {
   };
 }
 function isCommandIdentity(value) {
-  return value === "source-intake-dispatch.project" || value === "source-intake-dispatch.redacted";
+  return value === "source-intake-dispatch.choose" || value === "source-intake-dispatch.project" || value === "source-intake-dispatch.redacted";
 }
 
 // packages/source-intake-dispatch/src/main.ts
 import { isatty } from "tty";
+
+// packages/source-intake-dispatch/src/choose.ts
+import { lstatSync as lstatSync2, readdirSync, realpathSync as realpathSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { basename, dirname, isAbsolute as isAbsolute2, join as join2 } from "path";
 
 // packages/source-intake-dispatch/src/gate.ts
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "fs";
@@ -427,10 +490,108 @@ function runGate(text) {
   return projectReceipt(input.grant, input.request);
 }
 
+// packages/source-intake-dispatch/src/choose.ts
+var OSASCRIPT = "/usr/bin/osascript";
+var ACCOUNT_PREFIX = "GoogleDrive-";
+var INBOX_PATH = ["My Drive", "00 Inbox"];
+var PROMPT = "Choose one file in 00 Inbox for Source Intake";
+var USER_CANCELLED = "(-128)";
+var CHOOSER_SCRIPT = [
+  "on run argv",
+  "set startFolder to POSIX file (item 1 of argv) as alias",
+  "return POSIX path of (choose file with prompt (item 2 of argv) default location startFolder without invisibles and multiple selections allowed)",
+  "end run"
+];
+var chooser = null;
+function closeChooser() {
+  chooser?.kill();
+}
+var ABSENT_CODES = new Set(["ENOENT", "ENOTDIR"]);
+function probeFailure(error) {
+  if (isDescriptorLimit(error))
+    return "inputBusy";
+  return ABSENT_CODES.has(error.code ?? "") ? "absent" : "chooserUnavailable";
+}
+function probeDirectory(path) {
+  try {
+    return lstatSync2(path).isDirectory() && realpathSync2(path) === path ? "present" : "absent";
+  } catch (error) {
+    return probeFailure(error);
+  }
+}
+function localInboxes(storage) {
+  let entries;
+  try {
+    entries = readdirSync(storage);
+  } catch (error) {
+    const failure = probeFailure(error);
+    return failure === "absent" ? [] : failure;
+  }
+  const inboxes = [];
+  for (const entry of entries.filter((name) => name.startsWith(ACCOUNT_PREFIX) && name.length > ACCOUNT_PREFIX.length)) {
+    const candidate = { account: entry.slice(ACCOUNT_PREFIX.length), inbox: join2(storage, entry, ...INBOX_PATH) };
+    const probe = probeDirectory(candidate.inbox);
+    if (probe === "present")
+      inboxes.push(candidate);
+    else if (probe !== "absent")
+      return probe;
+  }
+  return inboxes.sort((left, right) => left.inbox.localeCompare(right.inbox));
+}
+async function runChooser(startFolder) {
+  try {
+    chooser = Bun.spawn([OSASCRIPT, ...CHOOSER_SCRIPT.flatMap((line) => ["-e", line]), startFolder, PROMPT], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  } catch (error) {
+    return { kind: isDescriptorLimit(error) ? "inputBusy" : "chooserUnavailable" };
+  }
+  const [exitCode, text, stderr] = await Promise.all([chooser.exited, new Response(chooser.stdout).text(), new Response(chooser.stderr).text()]);
+  chooser = null;
+  if (exitCode === 0)
+    return { kind: "reply", text };
+  return { kind: stderr.includes(USER_CANCELLED) ? "cancelled" : "chooserUnavailable" };
+}
+function acceptSelection(reply, inboxes) {
+  const path = reply.endsWith(`
+`) ? reply.slice(0, -1) : reply;
+  if (!isAbsolute2(path) || /[\0\n\r]/.test(path) || path.endsWith("/"))
+    return { kind: "selectionRefused" };
+  const fileName = basename(path);
+  const match = inboxes.find((candidate) => candidate.inbox === dirname(path));
+  if (match === undefined || fileName.startsWith("."))
+    return { kind: "selectionRefused" };
+  const probe = probeDirectory(match.inbox);
+  if (probe !== "present")
+    return { kind: probe === "absent" ? "selectionRefused" : probe };
+  try {
+    if (!lstatSync2(path).isFile())
+      return { kind: "selectionRefused" };
+  } catch {
+    return { kind: "selectionRefused" };
+  }
+  return { kind: "selected", fileName, localAccount: match.account };
+}
+async function chooseItem() {
+  const home = homedir2();
+  if (!isAbsolute2(home))
+    return { kind: "noInbox" };
+  const storage = join2(home, "Library", "CloudStorage");
+  const inboxes = localInboxes(storage);
+  if (typeof inboxes === "string")
+    return { kind: inboxes };
+  const [only, ...others] = inboxes;
+  if (only === undefined)
+    return { kind: "noInbox" };
+  const reply = await runChooser(others.length === 0 ? only.inbox : storage);
+  if (reply.kind !== "reply")
+    return { kind: reply.kind };
+  return acceptSelection(reply.text, inboxes);
+}
+
 // packages/source-intake-dispatch/src/main.ts
 var USAGE = [
   "Usage:",
   "  source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json",
+  "  source-intake-dispatch choose [--json]",
   "  source-intake-dispatch --redacted RECIPIENT [--json]",
   "  source-intake-dispatch --discover [--json] | --discover-command COMMAND_IDENTITY [--json] | --help [--json]"
 ];
@@ -444,10 +605,15 @@ var OPTIONS = [
 var REDACTED_RECIPIENTS = new Set(["status", "evaluation"]);
 var INPUT_LIMIT_BYTES = 64 * 1024;
 var MESSAGES = {
+  cancelled: "No file was selected.",
+  chooserBusy: "A file-descriptor limit was reached before the chooser opened; nothing was read.",
+  chooserUnavailable: "The native chooser is unavailable in this session.",
   denied: "Request denied. Stage Manager must verify the private grant before retrying.",
   inputBusy: "A file-descriptor limit was reached before input was read; no receipt was touched.",
   inputInvalid: "Standard input is not a valid grant and request.",
-  inputUnreadable: "Standard input cannot be read."
+  inputUnreadable: "Standard input cannot be read.",
+  noInbox: "No local Google Drive 00 Inbox was found.",
+  selectionRefused: "The selection is not one file directly inside a local 00 Inbox."
 };
 
 class UsageError extends Error {
@@ -458,13 +624,13 @@ class UsageError extends Error {
   }
 }
 function helpOutput() {
-  const data = { summary: "Project exactly granted Source Intake metadata, or a fixed redacted result.", usage: USAGE.slice(1).map((line) => line.trim()), commands: COMMANDS, options: OPTIONS };
+  const data = { summary: "Project exactly granted Source Intake metadata, let Nathan choose one local 00 Inbox file, or return a fixed redacted result.", usage: USAGE.slice(1).map((line) => line.trim()), commands: COMMANDS, options: OPTIONS };
   const human = [...USAGE, "", "Options:", ...OPTIONS.map((option) => `  ${option.name}${option.valueName === null ? "" : ` ${option.valueName}`}  ${option.summary}`)].join(`
 `);
   return { envelope: success("source-intake-dispatch.help", data, "Show help.", "Choose an invocation from the usage lines."), human };
 }
 function discoverOutput() {
-  const human = "Profile complex. Commands: project (inspect, reads standard input), --redacted RECIPIENT (inspect).";
+  const human = "Profile complex. Commands: project (inspect, reads standard input), choose (inspect, attended native chooser), --redacted RECIPIENT (inspect).";
   return { envelope: success("source-intake-dispatch.discovery", discoveryData(), "Describe commands.", "Choose a command to run."), human };
 }
 function discoverCommandOutput(selector) {
@@ -498,8 +664,8 @@ async function readInput() {
   }
   return { kind: "text", text: Buffer.concat(chunks).toString("utf8") };
 }
-function refusalOutput(identity, key) {
-  return { envelope: stationResult(identity, key, MESSAGES[key]), human: "" };
+function refusalOutput(identity, key, message = MESSAGES[key]) {
+  return { envelope: stationResult(identity, key, message), human: "" };
 }
 async function projectOutput() {
   const identity = "source-intake-dispatch.project";
@@ -518,6 +684,20 @@ async function projectOutput() {
   const human = [`Granted projection for ${outcome.opaqueItemRef}:`, ...Object.entries(outcome.projection).map(([field, value]) => `  ${field}: ${value}`)].join(`
 `);
   return { envelope, human };
+}
+async function chooseOutput() {
+  const identity = "source-intake-dispatch.choose";
+  if (descriptorLimitReached())
+    return refusalOutput(identity, "inputBusy", MESSAGES.chooserBusy);
+  const outcome = await chooseItem();
+  if (outcome.kind === "inputBusy")
+    return refusalOutput(identity, "inputBusy", MESSAGES.chooserBusy);
+  if (outcome.kind !== "selected")
+    return refusalOutput(identity, outcome.kind);
+  const { fileName, localAccount } = outcome;
+  const envelope = success(identity, { fileName, localAccount }, "Nathan selected one file in a local 00 Inbox.", "Keep the selection in the granted foreground's private receipt only.");
+  return { envelope, human: ["Selected one file in a local 00 Inbox:", `  fileName: ${fileName}`, `  localAccount: ${localAccount}`].join(`
+`) };
 }
 function optionRoute(args) {
   const [first, second, ...rest] = args;
@@ -541,6 +721,11 @@ async function dispatch(args) {
     throw new UsageError("source-intake-dispatch.dispatch", "An option is not recognised.");
   if (args.length === 0)
     throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.");
+  if (args[0] === "choose") {
+    if (args.length > 1)
+      throw new UsageError("source-intake-dispatch.choose", "choose takes no operands; Nathan selects the file in the native chooser.");
+    return chooseOutput();
+  }
   if (args[0] !== "project")
     throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.");
   if (args.length > 1)
@@ -611,7 +796,17 @@ async function main(argv) {
   }
   return emit(output, json);
 }
-process.on("SIGINT", () => process.exit(130));
-process.on("SIGTERM", () => process.exit(143));
+process.on("SIGINT", () => {
+  closeChooser();
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  closeChooser();
+  process.exit(143);
+});
+process.once("SIGHUP", () => {
+  closeChooser();
+  process.kill(process.pid, "SIGHUP");
+});
 var exitCode = await main(process.argv.slice(2));
 process.exitCode = transportFailed ? 1 : exitCode;

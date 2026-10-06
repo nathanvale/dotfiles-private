@@ -90,6 +90,7 @@ describe("help and discovery", () => {
 		expect(result.stderr).toBe("")
 		expect(result.stdout).toContain("source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json")
 		expect(result.stdout).toContain("source-intake-dispatch --redacted RECIPIENT [--json]")
+		expect(result.stdout).toContain("source-intake-dispatch choose [--json]")
 	})
 
 	test("machine help lists every option with its value name", () => {
@@ -107,12 +108,14 @@ describe("help and discovery", () => {
 			"source-intake-dispatch.command-discovery:inspect",
 			"source-intake-dispatch.project:inspect",
 			"source-intake-dispatch.redacted:inspect",
+			"source-intake-dispatch.choose:inspect",
 		])
 		expect(data.effectExclusions).toContain("Never opens a private receipt before the grant and request match.")
+		expect(data.effectExclusions).toContain("Never shows a folder listing to its caller; only Nathan sees the native chooser.")
 	})
 
 	test("human discovery is a concise line, not JSON", () => {
-		expect(invoke(fixture, ["--discover"])).toEqual({ exitCode: 0, stderr: "", stdout: "Profile complex. Commands: project (inspect, reads standard input), --redacted RECIPIENT (inspect).\n" })
+		expect(invoke(fixture, ["--discover"])).toEqual({ exitCode: 0, stderr: "", stdout: "Profile complex. Commands: project (inspect, reads standard input), choose (inspect, attended native chooser), --redacted RECIPIENT (inspect).\n" })
 	})
 
 	test("an unknown discovery selector is a usage refusal", () => {
