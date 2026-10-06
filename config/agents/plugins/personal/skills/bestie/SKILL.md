@@ -74,10 +74,16 @@ The Esther Perel-inspired profile review does not replace its meme archetype.
 
 Nathan's standing visual preferences; they override the verbatim source where they differ:
 
-- Preserve the established youthful adult cartoon appearance: smooth faces,
-  large expressive eyes, clean shading, and simplified facial contours.
-  Use supplied approved memes as character and style references. If none are
-  accessible, use this description and the source visual canon.
+- Use the flat, hand-drawn cartoon style in the
+  [visual reference guide](references/visual-style.md). Read that guide, view
+  its four bundled memes, and pass them as style references to the image tool.
+  Blend their bold ink outlines, simple expressive faces, flat warm colours
+  and subtle paper grain. This replaces the earlier large-eye, shaded look.
+- Preserve the source visual canon and supplied character details. Melanie's
+  default hairstyle is a black ponytail. A style variation changes the drawing
+  treatment while keeping hairstyle, outfits, proportions, scene and caption
+  intact, unless Nathan explicitly asks to change them. Use style references
+  for their illustration treatment, not as new facts or scene instructions.
 - Keep profile ages out of image prompts. Never add inferred age labels such
   as "mature adult couple", "middle-aged", or "in their 50s", or request
   age lines and realistic skin texture, unless Nathan explicitly asks for an
@@ -97,9 +103,11 @@ generation. Then use the active Harness's `imagegen` skill and built-in
 image tool. Pass only the context needed for the approved image, not entire
 profiles or message histories.
 Before calling the tool, check the prompt against the visual preferences
-above. Inspect the result for character appearance and complete, readable
-caption text; correct drift or missing text before presenting it as finished.
-Preview the image and caption in the conversation. Sending the result uses
+above. Generate only the requested assets and number of variations. Inspect
+character details, reference-style fidelity and complete, readable caption
+text. Report any mismatch; keep corrections within the authorized generation
+scope and stop generation immediately when Nathan says to stop. Preview the
+image and caption in the conversation. Sending the result uses
 the selected channel's confirmation workflow.
 
 If image generation is unavailable, deliver the approved image-ready prompt
