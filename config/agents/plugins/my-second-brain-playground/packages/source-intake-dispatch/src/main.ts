@@ -16,11 +16,13 @@ import {
 	success,
 } from "./contract.ts"
 import { isatty } from "node:tty"
+import { chooseItem, closeChooser } from "./choose.ts"
 import { descriptorLimitReached, isDescriptorLimit, runGate } from "./gate.ts"
 
 const USAGE = [
 	"Usage:",
 	"  source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json",
+	"  source-intake-dispatch choose [--json]",
 	"  source-intake-dispatch --redacted RECIPIENT [--json]",
 	"  source-intake-dispatch --discover [--json] | --discover-command COMMAND_IDENTITY [--json] | --help [--json]",
 ]
@@ -39,10 +41,14 @@ const INPUT_LIMIT_BYTES = 64 * 1024
 
 // Fixed, value-free messages. None names a path, receipt value, source label or raw error.
 const MESSAGES: Record<Exclude<StationKey, "usage" | "serialization">, string> = {
+	cancelled: "No file was selected.",
+	chooserUnavailable: "The native chooser is unavailable in this session.",
 	denied: "Request denied. Stage Manager must verify the private grant before retrying.",
 	inputBusy: "A file-descriptor limit was reached before input was read; no receipt was touched.",
 	inputInvalid: "Standard input is not a valid grant and request.",
 	inputUnreadable: "Standard input cannot be read.",
+	noInbox: "No local Google Drive 00 Inbox was found.",
+	selectionRefused: "The selection is not one file directly inside a local 00 Inbox.",
 }
 
 interface Output {
@@ -60,13 +66,13 @@ class UsageError extends Error {
 }
 
 function helpOutput(): Output {
-	const data = { summary: "Project exactly granted Source Intake metadata, or a fixed redacted result.", usage: USAGE.slice(1).map((line) => line.trim()), commands: COMMANDS, options: OPTIONS }
+	const data = { summary: "Project exactly granted Source Intake metadata, let Nathan choose one local 00 Inbox file, or return a fixed redacted result.", usage: USAGE.slice(1).map((line) => line.trim()), commands: COMMANDS, options: OPTIONS }
 	const human = [...USAGE, "", "Options:", ...OPTIONS.map((option) => `  ${option.name}${option.valueName === null ? "" : ` ${option.valueName}`}  ${option.summary}`)].join("\n")
 	return { envelope: success("source-intake-dispatch.help", data, "Show help.", "Choose an invocation from the usage lines."), human }
 }
 
 function discoverOutput(): Output {
-	const human = "Profile complex. Commands: project (inspect, reads standard input), --redacted RECIPIENT (inspect)."
+	const human = "Profile complex. Commands: project (inspect, reads standard input), choose (inspect, attended native chooser), --redacted RECIPIENT (inspect)."
 	return { envelope: success("source-intake-dispatch.discovery", discoveryData(), "Describe commands.", "Choose a command to run."), human }
 }
 
@@ -124,6 +130,16 @@ async function projectOutput(): Promise<Output> {
 	return { envelope, human }
 }
 
+async function chooseOutput(): Promise<Output> {
+	const identity: CommandIdentity = "source-intake-dispatch.choose"
+	if (descriptorLimitReached()) return refusalOutput(identity, "inputBusy")
+	const outcome = await chooseItem()
+	if (outcome.kind !== "selected") return refusalOutput(identity, outcome.kind)
+	const { fileName, localAccount } = outcome
+	const envelope = success(identity, { fileName, localAccount }, "Nathan selected one file in a local 00 Inbox.", "Keep the selection in the granted foreground's private receipt only.")
+	return { envelope, human: ["Selected one file in a local 00 Inbox:", `  fileName: ${fileName}`, `  localAccount: ${localAccount}`].join("\n") }
+}
+
 /** Routes selected by a leading option, or null when the first argument is not a route option. */
 function optionRoute(args: readonly string[]): Output | null {
 	const [first, second, ...rest] = args
@@ -141,6 +157,10 @@ async function dispatch(args: readonly string[]): Promise<Output> {
 	if (routed !== null) return routed
 	if (args.some((arg) => arg.startsWith("-"))) throw new UsageError("source-intake-dispatch.dispatch", "An option is not recognised.")
 	if (args.length === 0) throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.")
+	if (args[0] === "choose") {
+		if (args.length > 1) throw new UsageError("source-intake-dispatch.choose", "choose takes no operands; Nathan selects the file in the native chooser.")
+		return chooseOutput()
+	}
 	if (args[0] !== "project") throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.")
 	if (args.length > 1) throw new UsageError("source-intake-dispatch.project", "project takes no operands; pipe the grant and request on standard input.")
 	return projectOutput()
@@ -218,9 +238,16 @@ async function main(argv: readonly string[]): Promise<number> {
 	return emit(output, json)
 }
 
-// Contract Core bounded stop. The command keeps no diagnostics to flush, so a signal exits at once and writes nothing.
-process.on("SIGINT", () => process.exit(130))
-process.on("SIGTERM", () => process.exit(143))
+// Contract Core bounded stop. The command keeps no diagnostics to flush, so a signal closes any open chooser, exits at
+// once and writes nothing.
+process.on("SIGINT", () => {
+	closeChooser()
+	process.exit(130)
+})
+process.on("SIGTERM", () => {
+	closeChooser()
+	process.exit(143)
+})
 
 const exitCode = await main(process.argv.slice(2))
 process.exitCode = transportFailed ? 1 : exitCode

@@ -72,7 +72,10 @@ another, so the Classifier grant never covers this foreground.
   foreground's model, its purpose, the fields disclosed to it, and each source
   read it may make. Require an exact account alias mapped to the account or
   drive outside Git, and the original file ID; keep that grant and its values
-  in the private receipt.
+  in the private receipt. Each newly selected item gets a freshly minted opaque
+  ref and its own grants; a Gate recorded for another item never transfers.
+  For a native selection, the grant names `source-intake-dispatch choose` as a
+  source read and the returned file name and local account as disclosed fields.
 - **Classifier grant.** Before classification, Stage Manager verifies Nathan's
   recorded grant for the exact item, provider `luna`, classification purpose,
   and every metadata field in the dispatch; this grant names fields and paths,
@@ -87,6 +90,16 @@ for step 3. A missing Foreground grant stops the run before any source read;
 hand back `await Nathan's decision` in redacted state.
 
 ## 2. Foreground: observe and keep a private receipt
+
+**Native selection.** When the Foreground grant names `choose`, run
+`source-intake-dispatch choose --json` with Nathan present, after the grant is
+recorded; he picks the one file in the native chooser, which only he sees. Its
+[contract](../../packages/source-intake-dispatch/README.md#choose) returns only
+the file name and local account. Record both in the private receipt, map the
+local account to the exact account alias, then bind the original file ID with
+the granted exact-name query inside `00 Inbox`. A refusal or cancel means no
+selection: retry only with Nathan. Its output stays in this foreground,
+outside Stage Manager, Beads, and thread reports.
 
 Follow the installed `gog-drive` skill and its shared `gog` instructions.
 Discover current syntax with `gog drive <command> --help` and

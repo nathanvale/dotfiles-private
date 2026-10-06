@@ -2,12 +2,14 @@
 
 Project a granted private receipt into a delegated classifier input without
 passing the receipt path or its other records to that classifier. This is a
-supported-path guard, not filesystem isolation.
+supported-path guard, not filesystem isolation. `choose` lets Nathan select the
+one item himself in the native macOS chooser.
 
 ## Command
 
 ```sh
 source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json
+source-intake-dispatch choose [--json]
 source-intake-dispatch --redacted status [--json]
 source-intake-dispatch --redacted evaluation [--json]
 source-intake-dispatch --help | --discover | --discover-command COMMAND_IDENTITY [--json]
@@ -24,6 +26,29 @@ input, and takes no operands. It waits until the caller closes standard input;
 SIGINT exits 130 and SIGTERM exits 143 while it waits. Empty input is invalid
 input. A terminal on standard input is refused as usage; the command never
 prompts. No other command reads standard input.
+
+## choose
+
+`choose` opens the native macOS chooser (`osascript` on `PATH`) for Nathan to
+select exactly one file. It starts at the local Google Drive for desktop
+`00 Inbox`, or at `CloudStorage` when several accounts have one:
+
+```text
+$HOME/Library/CloudStorage/GoogleDrive-<account>/My Drive/00 Inbox
+```
+
+It accepts only a regular, non-hidden file whose parent is exactly one of those
+inboxes, each at its own physical path. On success `data` is
+`{fileName, localAccount}`: the file's name and the account label from its
+Drive for desktop folder. Nothing else crosses to the caller.
+
+- Run it only from the granted foreground, after Nathan's Foreground grant
+  names this selection as a source read, with Nathan present. The command
+  cannot verify that grant, and its success output is item detail.
+- It reads no file content, writes nothing, takes no operands and never reads
+  standard input. The folder listing is visible only to Nathan in the dialog.
+- Every refusal is fixed and value-free: it never names a path, file name or
+  account. A signal closes an open dialog before the command exits.
 
 ## Grant, request and receipt
 
@@ -108,11 +133,15 @@ the receipt.
 
 | Exit | Cause | When |
 | --- | --- | --- |
-| 0 | `SUCCESS_UNCHANGED` | The projection holds exactly the requested granted fields; `--redacted` returns `{"recipient":"status","projection":{"receipt":"[REDACTED]"}}` (or `evaluation`). |
-| 2 | `USAGE_INVALID_INVOCATION` | An operand after `project`, a terminal on standard input, an unknown option, or an unknown recipient. |
+| 0 | `SUCCESS_UNCHANGED` | The projection holds exactly the requested granted fields; `--redacted` returns `{"recipient":"status","projection":{"receipt":"[REDACTED]"}}` (or `evaluation`); `choose` returns the selected file's name and local account. |
+| 2 | `USAGE_INVALID_INVOCATION` | An operand after `project` or `choose`, a terminal on standard input, an unknown option, or an unknown recipient. |
 | 3 | `DOMAIN_PRECONDITION_UNMET` | The fixed denial below. |
 | 4 | `SCHEMA_INVALID_INPUT` | Standard input is empty, not JSON, over 64 KiB, has other keys, or has a malformed value. |
-| 75 | `TRANSIENT_NOT_STARTED` | A file-descriptor limit was reached before input was read; retry after 1000 ms. |
+| 3 | `DOMAIN_CONFIG_MISSING` | `choose`: no local 00 Inbox exists; no dialog opened. |
+| 3 | `DOMAIN_AUTHORITY_REQUIRED` | `choose`: Nathan cancelled the dialog; hand back to him. |
+| 3 | `DOMAIN_PATH_REFUSED` | `choose`: the selection is a folder, link, hidden, nested or outside file. |
+| 75 | `TRANSIENT_NOT_STARTED` | A file-descriptor limit was reached before input was read or the chooser opened; retry after 1000 ms. |
+| 1 | `INTERNAL_PREPARATION` | `choose`: the dialog cannot open, or the local Drive folder cannot be read, in this session. |
 | 1 | `INTERNAL_UNEXPECTED` | Standard input cannot be read, for example a directory. |
 | 1 | `INTERNAL_RESULT_UNCHANGED` | An unexpected failure, or the result failed envelope validation. |
 
