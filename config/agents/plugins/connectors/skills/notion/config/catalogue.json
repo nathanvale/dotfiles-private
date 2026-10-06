@@ -1,5 +1,5 @@
 {
-	"qualifiedOn": "2026-10-05",
+	"qualifiedOn": "2026-10-06",
 	"operations": [
 		{
 			"name": "notion-search",
@@ -89,6 +89,13 @@
 			"required": [
 				"page_or_database_ids",
 				"new_parent"
+			]
+		},
+		{
+			"name": "notion-restore-pages",
+			"effect": "write",
+			"required": [
+				"page_ids"
 			]
 		},
 		{

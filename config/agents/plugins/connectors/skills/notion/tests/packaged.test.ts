@@ -10,16 +10,16 @@ import { notionCaller, type Caller } from "../scripts/transport.ts";
 import { adjudicate, applyWrite, previewWrite } from "../scripts/writes.ts";
 import { notionMachine } from "./fixtures/notion-machine.ts";
 
-// Independent live-schema oracle observed on 5 October 2026. It is deliberately
+// Independent live-schema oracle observed on 6 October 2026. It is deliberately
 // not imported from the connector catalogue or registry under test.
 const READS = ["notion-search", "notion-ai-search", "notion-get-tool-access", "notion-fetch", "notion-download-attachment", "notion-download-skill", "notion-get-comments", "notion-get-async-task", "notion-get-teams", "notion-get-users", "notion-query-data-sources", "notion-query-multiple-data-sources", "notion-query-meeting-notes", "notion-list-private-pages", "notion-list-shared-pages", "notion-list-favorite-pages", "notion-list-recent-pages", "notion-search-agents", "notion-search-sessions", "notion-query-sessions", "notion-get-session-status", "notion-wait-session", "notion-list-session-events", "notion-read-session-event", "notion-show-advanced-analysis-next-steps", "notion-check-mcp-next-steps"];
-const WRITES = ["notion-create-attachment", "notion-create-file-upload", "notion-create-pages", "notion-update-page", "notion-convert-page-to-skill", "notion-upload-skill", "notion-move-pages", "notion-duplicate-page", "notion-create-database", "notion-create-folder", "notion-update-folder", "notion-update-data-source", "notion-create-comment", "notion-spawn-session", "notion-stop-session", "notion-send-message-to-session", "notion-create-view", "notion-update-view"];
+const WRITES = ["notion-create-attachment", "notion-create-file-upload", "notion-create-pages", "notion-update-page", "notion-convert-page-to-skill", "notion-upload-skill", "notion-move-pages", "notion-restore-pages", "notion-duplicate-page", "notion-create-database", "notion-create-folder", "notion-update-folder", "notion-update-data-source", "notion-create-comment", "notion-spawn-session", "notion-stop-session", "notion-send-message-to-session", "notion-create-view", "notion-update-view"];
 const TOOLS = [...READS, ...WRITES].sort();
 const SELECT = ["--select", "account=personal"];
 const input = (value: unknown) => ["--input", JSON.stringify(value)];
 const write = (value = "Requested value") => ({ page_id: "page-1", command: "replace_content", new_str: value, _verify: { before: { tool: "notion-fetch", args: { id: "page-1" } }, after: { tool: "notion-fetch", args: { id: "page-1" } }, contains: [value] } });
 
-test("packaged Notion lists the complete 44-tool route and refuses an unjournaled write before creating state", async () => {
+test("packaged Notion lists the complete 45-tool route and refuses an unjournaled write before creating state", async () => {
 	const bundle = createBundle();const home = path.join(bundle.root, "home");mkdirSync(home);
 	cpSync(path.join(PLUGIN_ROOT, "skills/notion/config"), path.join(bundle.skillsRoot, "notion/config"), { recursive: true });
 	const run = (argv: string[]) => runBundle(bundle, argv, { home, extraEnv: { XDG_STATE_HOME: path.join(bundle.root, "state") } });
@@ -27,12 +27,14 @@ test("packaged Notion lists the complete 44-tool route and refuses an unjournale
 		const shown = await run(["config", "show", "notion", "--resolved", "--json", ...SELECT]);
 		expect(shown.code).toBe(0);expect(shown.stderr).toBe("");
 		const registry = JSON.parse(readFileSync(path.join(bundle.skillsRoot, "notion/config/mcporter.json"), "utf8"));
-		expect([READS.length, WRITES.length, TOOLS.length]).toEqual([26, 18, 44]);
+		expect([READS.length, WRITES.length, TOOLS.length]).toEqual([26, 19, 45]);
 		expect(registry.imports).toEqual([]);expect(registry.mcpServers["notion-connectors"].allowedTools.sort()).toEqual(TOOLS);
 		for (const operation of WRITES) {
 			const result = await run(["run", "notion", ...SELECT, operation, ...input({ secret: "SENTINEL_REFUSAL_VALUE" })]);
 			expect([result.code, result.stderr]).toEqual([2, ""]);expect(result.stdout).not.toContain("SENTINEL_REFUSAL_VALUE");expect(JSON.parse(result.stdout).result.data.connectorCause).toBe("write-phase-required");
 		}
+		const missingIds = await run(["run", "notion", ...SELECT, "notion-restore-pages", ...input({ _verify: write()._verify }), "--preview"]);
+		expect([missingIds.code, missingIds.stderr, JSON.parse(missingIds.stdout).result.data.connectorCause]).toEqual([4, "", "input-invalid"]);
 		expect(existsSync(path.join(bundle.root, "state"))).toBe(false);
 		const status = await run(["auth", "status", "notion", ...SELECT]);expect(JSON.parse(status.stdout).result.data).toMatchObject({ account: "personal", grant: "absent" });
 		for (const flags of [[], ["--no-browser", "--reset"]]) {

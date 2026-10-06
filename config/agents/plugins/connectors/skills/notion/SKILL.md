@@ -33,8 +33,8 @@ Status checks file presence only; a present index does not prove authentication.
 with missing tools, extra tools, and changes to top-level required argument keys.
 A matching comparison covers those fields only. Plan and permission access stay
 `not-inspected`; use `notion-get-tool-access` to observe them. The
-[qualified catalogue](config/catalogue.json) names all 44 tools observed on
-5 October 2026. The provider owns current availability and exact arguments;
+[qualified catalogue](config/catalogue.json) names all 45 tools observed on
+6 October 2026. The provider owns current availability and exact arguments;
 inspect the schema before calling an unfamiliar tool. Report an unavailable
 or newly advertised tool as a schema gap; update this connector rather than
 using an unguarded alternate route.
@@ -197,10 +197,12 @@ ID. Distinguish configured, fixture-tested, schema-qualified, authenticated,
 live-read-proven, and live-write-proven. Before this candidate PR can merge,
 qualify the new account route through attended login, live schema comparison,
 a scoped read/transcript retrieval, and controlled scratch create/edit/read-back.
-Fresh account-route login, a live 44-tool schema comparison, search, and Notion
-document fetch have passed. Transcript retrieval and controlled scratch writes
-remain pending. A schema listing through an existing home connection does not
-prove the new account route.
+Fresh attended account-route login, search, document fetch, and a nonempty raw
+meeting transcript read passed on the rebuilt candidate on 6 October 2026.
+The fresh live schema comparison matched all 45 admitted tools, including
+`notion-restore-pages`, with no missing tools, extra tools, or required-key drift.
+Controlled scratch create/edit/read-back trials remain pending. A schema listing
+through an existing home connection does not prove the new account route.
 
 References: [Notion MCP tools](https://developers.notion.com/guides/mcp/mcp-supported-tools),
 [connection setup](https://developers.notion.com/guides/mcp/get-started-with-mcp).

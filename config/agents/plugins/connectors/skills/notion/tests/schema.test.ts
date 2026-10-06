@@ -15,7 +15,7 @@ test.skipIf(!official)("packaged schema reports full discovery and drift without
 		const data = result.envelope.result.data as { live: { tools: { name: string }[] }; comparison: { extraTools: string[]; missingTools: string[]; requiredKeyDrift: unknown[]; status: string }; availability: unknown };
 		expect(data.live.tools.map((tool: { name: string }) => tool.name)).toEqual(["notion-fetch", "notion-fixture-new"]);
 		expect(data.comparison.extraTools).toEqual(["notion-fixture-new"]);
-		expect(data.comparison.missingTools).toHaveLength(43);
+		expect(data.comparison.missingTools).toHaveLength(44);
 		expect(data.comparison.missingTools).toContain("notion-update-page");
 		expect(data.comparison.requiredKeyDrift).toEqual([{ tool: "notion-fetch", added: [], removed: ["id"], declared: ["id"], live: [] }]);
 		expect(data.comparison.status).toBe("drifted");
@@ -26,7 +26,7 @@ test.skipIf(!official)("packaged schema reports full discovery and drift without
 		const cache = path.join(machine.state, "connectors/notion-mcporter/personal/cache");
 		expect(readdirSync(cache).filter((name) => name.startsWith("schema-"))).toEqual([]);
 		const registry = JSON.parse(readFileSync(path.join(machine.root, "plugin/skills/notion/config/mcporter.json"), "utf8"));
-		expect(registry.mcpServers["notion-connectors"].allowedTools).toHaveLength(44);
+		expect(registry.mcpServers["notion-connectors"].allowedTools).toHaveLength(45);
 		expect(existsSync(path.join(machine.home, ".mcporter/credentials.json"))).toBe(false);
 		const refused = await machine.run(["run", "notion", "--select", "account=personal", "notion-fixture-new", "--input", "{}"]);
 		expect([refused.code, refused.stderr, refused.envelope.result.data?.connectorCause]).toEqual([2, "", "operation-not-allowed"]);

@@ -10,8 +10,9 @@ Nathan requested a new Notion connector in Connectors, including editing,
 the complete MCP tool set, and meeting transcripts. The supplied laptop
 handoff demonstrated hosted Notion through MCPorter; its credentials, corporate
 IDs, and project workflows belong to their original machine and private owners.
-Live schema discovery on 5 October 2026 advertised 44 tools for the existing
-home connection. Tool availability remains workspace- and permission-dependent.
+Live schema discovery on 6 October 2026 advertised 45 tools through the new
+account route, including `notion-restore-pages`. Tool availability remains
+workspace- and permission-dependent.
 
 ## Decision Drivers
 
@@ -31,8 +32,8 @@ home connection. Tool availability remains workspace- and permission-dependent.
 
 The candidate adds `skills/notion` behind the existing Front Door, following
 Canva's account-isolated native OAuth route and Figma's explicit verification
-approach for opaque writes. It admits the 44 exact live-discovered tool names,
-classifies 26 reads and 18 writes, and declares `imports: []`. Registry identity,
+approach for opaque writes. It admits the 45 exact live-discovered tool names,
+classifies 26 reads and 19 writes, and declares `imports: []`. Registry identity,
 endpoint, OAuth client, and the exact catalogue are checked before transport.
 
 Notion's evolving write schemas make service-specific field translation costly.
@@ -146,15 +147,20 @@ write refusal before effects, one-use previews, verified read-back, unknown
 outcome blocking, terminal unchanged settlement, removals, handle preparation,
 schema drift and local refusal boundaries, and async recovery. These fixtures
 qualify local routing and verification behavior; they do not establish real
-Notion output shapes or complete semantic proof for all 44 operations.
+Notion output shapes or complete semantic proof for all 45 operations.
 Production endpoint tests and source-substituted loopback tests remain distinct
 from authenticated hosted effects.
 
 Nathan requires live qualification before this candidate PR merges: fresh
 attended login on the new account route, live schema comparison, a scoped
 read/transcript retrieval, and controlled scratch create/edit/read-back trials.
-Fresh account-route OAuth, live 44-tool schema comparison, search, and Notion
-document fetch have passed. Transcript retrieval and controlled scratch write
+Fresh attended account-route OAuth, search, document fetch, and nonempty raw
+meeting transcript retrieval passed on the rebuilt candidate on 6 October 2026.
+The fresh live schema comparison matched all 45 admitted tools with no missing
+tools, extra tools, or required-key drift. `notion-restore-pages` is admitted as a
+write with required `page_ids` through the existing verification contract. Two
+intermittent provider-call failures preceded the successful schema comparison;
+no replacement login was needed. Controlled scratch create/edit/read-back
 trials remain pending; source and fixture checks do not mark them done.
 Revisit typed operation verifiers when recurring workflows expose ambiguous
 text evidence.

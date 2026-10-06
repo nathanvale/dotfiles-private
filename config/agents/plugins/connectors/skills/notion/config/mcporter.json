@@ -21,6 +21,7 @@
 				"notion-upload-skill",
 				"notion-download-skill",
 				"notion-move-pages",
+				"notion-restore-pages",
 				"notion-duplicate-page",
 				"notion-create-database",
 				"notion-create-folder",
