@@ -112,8 +112,12 @@ async function readInput(): Promise<InputRead> {
 	return { kind: "text", text: Buffer.concat(chunks).toString("utf8") }
 }
 
+// choose reads no standard input, so its busy refusal names the chooser instead of input.
+const CHOOSE_BUSY = "A file-descriptor limit was reached before the chooser opened; nothing was read."
+
 function refusalOutput(identity: CommandIdentity, key: keyof typeof MESSAGES): Output {
-	return { envelope: stationResult(identity, key, MESSAGES[key]), human: "" }
+	const message = identity === "source-intake-dispatch.choose" && key === "inputBusy" ? CHOOSE_BUSY : MESSAGES[key]
+	return { envelope: stationResult(identity, key, message), human: "" }
 }
 
 async function projectOutput(): Promise<Output> {
@@ -247,6 +251,12 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
 	closeChooser()
 	process.exit(143)
+})
+// A hangup (a closed terminal or pane) has no Contract Core exit. It closes any open chooser, then ends the process by
+// the default SIGHUP action, as it would without this handler.
+process.once("SIGHUP", () => {
+	closeChooser()
+	process.kill(process.pid, "SIGHUP")
 })
 
 const exitCode = await main(process.argv.slice(2))

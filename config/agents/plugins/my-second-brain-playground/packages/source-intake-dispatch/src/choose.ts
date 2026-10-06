@@ -10,6 +10,14 @@ export type ChooseOutcome =
 	| { kind: "selected"; fileName: string; localAccount: string }
 	| { kind: "cancelled" | "chooserUnavailable" | "inputBusy" | "noInbox" | "selectionRefused" }
 
+/** One local Google Drive for desktop account folder and its 00 Inbox, both at their own physical paths. */
+interface LocalInbox {
+	account: string
+	inbox: string
+}
+
+// The system osascript, by absolute path: no PATH entry or environment value can substitute another chooser.
+const OSASCRIPT = "/usr/bin/osascript"
 const ACCOUNT_PREFIX = "GoogleDrive-"
 const INBOX_PATH = ["My Drive", "00 Inbox"] as const
 const PROMPT = "Choose one file in 00 Inbox for Source Intake"
@@ -40,10 +48,10 @@ function isPhysicalDirectory(path: string): boolean {
 }
 
 /**
- * Every local 00 Inbox under HOME/Library/CloudStorage, sorted. HOME is trusted configuration, as for the receipt root.
- * A missing CloudStorage folder means no inbox; any other read failure means this session cannot see it.
+ * Every local 00 Inbox under HOME/Library/CloudStorage, sorted by path. HOME is trusted configuration, as for the
+ * receipt root. A missing CloudStorage folder means no inbox; any other read failure means this session cannot see it.
  */
-function localInboxes(storage: string): string[] | "unavailable" {
+function localInboxes(storage: string): LocalInbox[] | "unavailable" {
 	let entries: string[]
 	try {
 		entries = readdirSync(storage)
@@ -52,17 +60,17 @@ function localInboxes(storage: string): string[] | "unavailable" {
 	}
 	return entries
 		.filter((entry) => entry.startsWith(ACCOUNT_PREFIX) && entry.length > ACCOUNT_PREFIX.length)
-		.map((entry) => join(storage, entry, ...INBOX_PATH))
-		.filter(isPhysicalDirectory)
-		.sort()
+		.map((entry) => ({ account: entry.slice(ACCOUNT_PREFIX.length), inbox: join(storage, entry, ...INBOX_PATH) }))
+		.filter((candidate) => isPhysicalDirectory(candidate.inbox))
+		.sort((left, right) => left.inbox.localeCompare(right.inbox))
 }
 
 type ChooserReply = { kind: "reply"; text: string } | { kind: "cancelled" | "chooserUnavailable" | "inputBusy" }
 
-/** Runs the native chooser through osascript on PATH; its stderr is classified, never echoed. */
+/** Runs the native chooser; its stderr is classified, never echoed. */
 async function runChooser(startFolder: string): Promise<ChooserReply> {
 	try {
-		chooser = Bun.spawn(["osascript", ...CHOOSER_SCRIPT.flatMap((line) => ["-e", line]), startFolder, PROMPT], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+		chooser = Bun.spawn([OSASCRIPT, ...CHOOSER_SCRIPT.flatMap((line) => ["-e", line]), startFolder, PROMPT], { stdin: "ignore", stdout: "pipe", stderr: "pipe" })
 	} catch (error) {
 		return { kind: isDescriptorLimit(error) ? "inputBusy" : "chooserUnavailable" }
 	}
@@ -73,19 +81,18 @@ async function runChooser(startFolder: string): Promise<ChooserReply> {
 }
 
 /** The reply must name one regular, non-hidden file whose parent is exactly one of the discovered inboxes. */
-function acceptSelection(reply: string, inboxes: readonly string[]): ChooseOutcome {
+function acceptSelection(reply: string, inboxes: readonly LocalInbox[]): ChooseOutcome {
 	const path = reply.endsWith("\n") ? reply.slice(0, -1) : reply
 	if (!isAbsolute(path) || /[\0\n\r]/.test(path) || path.endsWith("/")) return { kind: "selectionRefused" }
-	const inbox = dirname(path)
 	const fileName = basename(path)
-	if (!inboxes.includes(inbox) || fileName.startsWith(".") || !isPhysicalDirectory(inbox)) return { kind: "selectionRefused" }
+	const match = inboxes.find((candidate) => candidate.inbox === dirname(path))
+	if (match === undefined || fileName.startsWith(".") || !isPhysicalDirectory(match.inbox)) return { kind: "selectionRefused" }
 	try {
 		if (!lstatSync(path).isFile()) return { kind: "selectionRefused" }
 	} catch {
 		return { kind: "selectionRefused" }
 	}
-	const localAccount = basename(dirname(dirname(inbox))).slice(ACCOUNT_PREFIX.length)
-	return { kind: "selected", fileName, localAccount }
+	return { kind: "selected", fileName, localAccount: match.account }
 }
 
 /**
@@ -100,7 +107,7 @@ export async function chooseItem(): Promise<ChooseOutcome> {
 	if (inboxes === "unavailable") return { kind: "chooserUnavailable" }
 	const [only, ...others] = inboxes
 	if (only === undefined) return { kind: "noInbox" }
-	const reply = await runChooser(others.length === 0 ? only : storage)
+	const reply = await runChooser(others.length === 0 ? only.inbox : storage)
 	if (reply.kind !== "reply") return { kind: reply.kind }
 	return acceptSelection(reply.text, inboxes)
 }

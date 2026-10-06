@@ -1,10 +1,12 @@
 #!/bin/sh
-# Test-only stand-in for macOS osascript, found first on PATH. It never shows a dialog. It records its arguments
-# (one per line) and its pid, then acts on FAKE_CHOOSER_MODE: reply prints FAKE_CHOOSER_REPLY exactly, cancel and
-# fail exit 1 with an AppleScript-shaped error, hang waits until it is killed.
+# Test-only stand-in for /usr/bin/osascript, reached only through the chooser-redirect.ts preload. It never shows a
+# dialog. It records its arguments (one per line) and then its pid, renamed into place so a reader never sees a
+# partial pid. It then acts on FAKE_CHOOSER_MODE: reply prints FAKE_CHOOSER_REPLY exactly, cancel and fail exit 1
+# with an AppleScript-shaped error, hang waits until it is killed.
 set -eu
 printf '%s\n' "$@" > "$FAKE_CHOOSER_LOG"
-printf '%s\n' "$$" > "$FAKE_CHOOSER_LOG.pid"
+printf '%s\n' "$$" > "$FAKE_CHOOSER_LOG.pid.partial"
+mv "$FAKE_CHOOSER_LOG.pid.partial" "$FAKE_CHOOSER_LOG.pid"
 case "$FAKE_CHOOSER_MODE" in
 reply)
 	printf '%s' "$FAKE_CHOOSER_REPLY"

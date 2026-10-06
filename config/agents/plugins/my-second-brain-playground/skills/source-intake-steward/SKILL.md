@@ -74,8 +74,17 @@ another, so the Classifier grant never covers this foreground.
   drive outside Git, and the original file ID; keep that grant and its values
   in the private receipt. Each newly selected item gets a freshly minted opaque
   ref and its own grants; a Gate recorded for another item never transfers.
-  For a native selection, the grant names `source-intake-dispatch choose` as a
-  source read and the returned file name and local account as disclosed fields.
+- **Selection grant.** When Nathan picks the item himself, record a single-use
+  Foreground grant before the pick. It covers only the one file Nathan selects
+  in one `source-intake-dispatch choose` run for that fresh ref. It names
+  `choose` as a source read and discloses the file name and the raw local
+  account email. Any further `choose` run, including after a cancel or
+  refusal, needs a new grant. The grant reaches the exact item only when step
+  2 binds the account alias and original file ID.
+- **Selection decision.** The decision log ("Initial Drive inbox review
+  authority") has the Steward propose the exact item; a native selection has
+  Nathan pick it. Run `choose` only when the fresh Gate records Nathan's
+  decision to select the item himself.
 - **Classifier grant.** Before classification, Stage Manager verifies Nathan's
   recorded grant for the exact item, provider `luna`, classification purpose,
   and every metadata field in the dispatch; this grant names fields and paths,
@@ -91,15 +100,23 @@ hand back `await Nathan's decision` in redacted state.
 
 ## 2. Foreground: observe and keep a private receipt
 
-**Native selection.** When the Foreground grant names `choose`, run
-`source-intake-dispatch choose --json` with Nathan present, after the grant is
-recorded; he picks the one file in the native chooser, which only he sees. Its
-[contract](../../packages/source-intake-dispatch/README.md#choose) returns only
-the file name and local account. Record both in the private receipt, map the
-local account to the exact account alias, then bind the original file ID with
-the granted exact-name query inside `00 Inbox`. A refusal or cancel means no
-selection: retry only with Nathan. Its output stays in this foreground,
-outside Stage Manager, Beads, and thread reports.
+**Native selection.** Under a recorded **Selection grant** and **Selection
+decision**, bind the item before any other source read:
+
+1. Run `source-intake-dispatch choose --json` once, with Nathan present. He
+   picks the file in a dialog only he sees; the
+   [contract](../../packages/source-intake-dispatch/README.md#choose) defines
+   the result. Record it in the private receipt.
+2. Map the local account email to the exact account alias with the granted
+   alias read.
+3. Run only the granted bind queries under that alias: the `00 Inbox` folder
+   query, then the exact-name query for that file name inside it.
+4. Exactly one match at each query binds the original file ID in the receipt.
+   Zero or several matches bind nothing: stop with no further read or effect,
+   leave the item in `00 Inbox`, and put the decision question to Nathan here.
+   A Google-native file (local `.gdoc`) or a same-name duplicate ends this way.
+5. Keep every result in this foreground, outside Stage Manager, Beads, and
+   thread reports.
 
 Follow the installed `gog-drive` skill and its shared `gog` instructions.
 Discover current syntax with `gog drive <command> --help` and

@@ -491,6 +491,7 @@ function runGate(text) {
 }
 
 // packages/source-intake-dispatch/src/choose.ts
+var OSASCRIPT = "/usr/bin/osascript";
 var ACCOUNT_PREFIX = "GoogleDrive-";
 var INBOX_PATH = ["My Drive", "00 Inbox"];
 var PROMPT = "Choose one file in 00 Inbox for Source Intake";
@@ -519,11 +520,11 @@ function localInboxes(storage) {
   } catch (error) {
     return error.code === "ENOENT" ? [] : "unavailable";
   }
-  return entries.filter((entry) => entry.startsWith(ACCOUNT_PREFIX) && entry.length > ACCOUNT_PREFIX.length).map((entry) => join2(storage, entry, ...INBOX_PATH)).filter(isPhysicalDirectory).sort();
+  return entries.filter((entry) => entry.startsWith(ACCOUNT_PREFIX) && entry.length > ACCOUNT_PREFIX.length).map((entry) => ({ account: entry.slice(ACCOUNT_PREFIX.length), inbox: join2(storage, entry, ...INBOX_PATH) })).filter((candidate) => isPhysicalDirectory(candidate.inbox)).sort((left, right) => left.inbox.localeCompare(right.inbox));
 }
 async function runChooser(startFolder) {
   try {
-    chooser = Bun.spawn(["osascript", ...CHOOSER_SCRIPT.flatMap((line) => ["-e", line]), startFolder, PROMPT], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    chooser = Bun.spawn([OSASCRIPT, ...CHOOSER_SCRIPT.flatMap((line) => ["-e", line]), startFolder, PROMPT], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   } catch (error) {
     return { kind: isDescriptorLimit(error) ? "inputBusy" : "chooserUnavailable" };
   }
@@ -538,9 +539,9 @@ function acceptSelection(reply, inboxes) {
 `) ? reply.slice(0, -1) : reply;
   if (!isAbsolute2(path) || /[\0\n\r]/.test(path) || path.endsWith("/"))
     return { kind: "selectionRefused" };
-  const inbox = dirname(path);
   const fileName = basename(path);
-  if (!inboxes.includes(inbox) || fileName.startsWith(".") || !isPhysicalDirectory(inbox))
+  const match = inboxes.find((candidate) => candidate.inbox === dirname(path));
+  if (match === undefined || fileName.startsWith(".") || !isPhysicalDirectory(match.inbox))
     return { kind: "selectionRefused" };
   try {
     if (!lstatSync2(path).isFile())
@@ -548,8 +549,7 @@ function acceptSelection(reply, inboxes) {
   } catch {
     return { kind: "selectionRefused" };
   }
-  const localAccount = basename(dirname(dirname(inbox))).slice(ACCOUNT_PREFIX.length);
-  return { kind: "selected", fileName, localAccount };
+  return { kind: "selected", fileName, localAccount: match.account };
 }
 async function chooseItem() {
   const home = homedir2();
@@ -562,7 +562,7 @@ async function chooseItem() {
   const [only, ...others] = inboxes;
   if (only === undefined)
     return { kind: "noInbox" };
-  const reply = await runChooser(others.length === 0 ? only : storage);
+  const reply = await runChooser(others.length === 0 ? only.inbox : storage);
   if (reply.kind !== "reply")
     return { kind: reply.kind };
   return acceptSelection(reply.text, inboxes);
@@ -644,8 +644,10 @@ async function readInput() {
   }
   return { kind: "text", text: Buffer.concat(chunks).toString("utf8") };
 }
+var CHOOSE_BUSY = "A file-descriptor limit was reached before the chooser opened; nothing was read.";
 function refusalOutput(identity, key) {
-  return { envelope: stationResult(identity, key, MESSAGES[key]), human: "" };
+  const message = identity === "source-intake-dispatch.choose" && key === "inputBusy" ? CHOOSE_BUSY : MESSAGES[key];
+  return { envelope: stationResult(identity, key, message), human: "" };
 }
 async function projectOutput() {
   const identity = "source-intake-dispatch.project";
@@ -781,6 +783,10 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   closeChooser();
   process.exit(143);
+});
+process.once("SIGHUP", () => {
+  closeChooser();
+  process.kill(process.pid, "SIGHUP");
 });
 var exitCode = await main(process.argv.slice(2));
 process.exitCode = transportFailed ? 1 : exitCode;
