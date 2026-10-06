@@ -1,25 +1,80 @@
 ---
 name: figma
-description: Connect to Figma's hosted MCP through the Connectors plugin for attended OAuth and identity discovery. Use only to connect, reauthorize, or verify identity for the MCPorter Figma route; not for design reads, canvas work, or the native Figma MCP.
+description: Read and write Figma designs through Figma's hosted MCP on the Connectors plugin's packaged route, with attended OAuth. Use for design context, screenshots, variables, metadata, assets, libraries, Code Connect reads and mappings, use_figma canvas edits, image uploads, new files and FigJam diagrams, generative plugins and shaders, Weave tool runs, or connecting this route; not for the native Figma MCP or Figma's own plugin skills.
 ---
 
 # Figma hosted MCP
 
-Use the shared route at `<plugin-root>/bin/provider-route.ts` with the `figma` skill name. This route uses MCPorter's own OAuth cache. It is separate from Codex or Claude's Figma MCP session.
+One packaged route to Figma's hosted MCP (`https://mcp.figma.com/mcp`). MCPorter holds the OAuth grant in Figma's own vault root under Connectors state; the route never prints it. Keep native Harness MCP tools, raw MCPorter calls, and Figma REST requests outside this route.
 
-1. Check `mcporter --version`. The qualified local route used MCPorter 0.14.0.
-2. For a new session, ask Nathan to complete the browser consent opened by `bun <plugin-root>/bin/provider-route.ts figma -- auth`. Run this attended command only when Nathan requests connection or reauthorization.
-3. Discover the admitted identity tool with `bun <plugin-root>/bin/provider-route.ts figma -- list --schema --json --timeout 15000`. The route uses cached credentials and does not start browser login on a read.
-4. When Nathan requests identity verification, use `bun <plugin-root>/bin/provider-route.ts figma -- call whoami --output json`. Compare the returned principal with the intended account before any later design-read workflow. The registry admits no design-content tools in this connection slice.
+Resolve the front door from this skill directory: no global `connectors` command, no dotfiles path.
 
-When Nathan requests a fresh grant, run `bun <plugin-root>/bin/provider-route.ts figma -- auth --reset` with attended consent. MCPorter clears this route's local cached grant before reauthorization. This does not prove Figma revoked the old grant.
+```sh
+SKILL_DIR="<directory containing this SKILL.md>"
+CONNECTORS="$SKILL_DIR/../../bin/connectors"
+```
 
-## Auth output
+Each command prints one JSON envelope on stdout. Read `result.outcome`, `result.causeCode`, and `result.repairAction`. On success Figma's reply is in `result.data`; on a refusal `result.data.connectorCause` names the Figma cause.
 
-- Use `--no-browser` for an attended handoff when the execution host cannot open a browser Nathan can use.
-- Expect MCPorter to print an authorization URL or loopback redirect during auth. Agent-captured terminal output may retain those values.
-- Keep auth output out of chat and additional logs. A captured terminal transcript remains possible.
+## Connect
 
-The fixed endpoint is `https://mcp.figma.com/mcp`. The local OAuth registration identifies MCPorter to Figma as `Claude Code` because MCPorter's own name received a registration refusal in the local test. This is an interoperability workaround, not approval of a Connectors client identity. Report authentication, live schema, and live content reads as separate evidence.
+1. `"$CONNECTORS" auth status figma` reports whether MCPorter's vault exists. A present vault may hold no grant.
+2. Ask Nathan to run `"$CONNECTORS" auth login figma` in his own terminal (`--no-browser` when the host cannot open his browser; `--reset` for a fresh grant). An agent cannot complete browser consent.
+3. `"$CONNECTORS" run figma whoami` names the principal and plans. Compare it with the intended account before the first design read or write.
 
-On an auth refusal, report the failure and the next attended step. Do not retry registration automatically, switch client names, use a personal access token, or infer MCP behavior from Figma REST APIs. The existing personal Figma skill owns broader design and canvas workflows; this skill owns only the plugin route.
+The registration identifies MCPorter to Figma as `Claude Code` because MCPorter's own name was refused. This is a local interoperability workaround, not approval of a Connectors client. `--reset` clears only the local grant.
+
+## Reads
+
+`"$CONNECTORS" schema figma` lists every admitted tool with its live input schema in `result.data.schema.tools`. Take argument names from it. A Figma URL's `node-id=1-2` becomes `nodeId` `1:2`.
+
+```sh
+"$CONNECTORS" run figma get_design_context --input '{"fileKey":"<key>","nodeId":"1:2"}'
+```
+
+The reads are `whoami`, `get_metadata`, `get_design_context`, `get_screenshot`, `get_variable_defs`, `download_assets`, `get_motion_context`, `get_figjam`, `get_libraries`, `search_design_system`, `get_code_connect_map`, `get_code_connect_suggestions`, `get_context_for_code_connect`, `list_generative_plugins`, `get_generative_plugin`, `list_shaders`, `get_shader`, `list_file_shaders`, `weave_list_tools`, `weave_get_tool_inputs`, and `weave_get_tool_run_output`.
+
+Figma rate-limits reads by seat: a View or Collab seat gets a few per month, and `whoami` is exempt. Stop at the first rate-limit or access error and report it with the file and node.
+
+## Writes
+
+A write changes Nathan's Figma account. Run one only when Nathan asked for that change. Each is two commands with the identical `--input`:
+
+1. `"$CONNECTORS" run figma <tool> --input '<json>' --preview` reads the object and records `result.data.previewId`. Nothing is sent. A preview lasts 15 minutes and applies at most once.
+2. `"$CONNECTORS" run figma <tool> --input '<json>' --apply <previewId>` sends it once and reads the object back.
+
+| Tool | Read-back that proves it |
+| --- | --- |
+| `add_code_connect_map`, `send_code_connect_mappings` | `get_code_connect_map` on `fileKey` and `nodeId` shows each `componentName` and `source` |
+| `create_generative_plugin`, `create_shader` | One new id with the requested `name` in the library list; names must be new |
+| `update_generative_plugin`, `update_shader` | The object's `version` moved |
+| `create_new_file` | The reply's file key reads back; `planKey` must be one of `whoami`'s plans |
+| `generate_diagram` | The reply's board reads back; into an existing `fileKey`, its `name` appears there |
+| `use_figma` | Your `verify` read shows every `contains` value (below) |
+| `upload_assets` | New frames appear on `currentPageId`, or every target in `nodeIds` changed (below) |
+| `weave_cancel_tool_run` | Every named run reports `CANCELED` |
+| `weave_run_tool` | The runs the reply names read back (Weave costs below) |
+
+`use_figma` runs arbitrary Plugin API code, so its input adds `"verify": {"tool": "get_metadata" | "get_design_context" | "get_variable_defs", "nodeId": "<existing node>", "contains": ["<value the code will make visible>"]}`. The route strips `verify` before sending. Choose a node and values the change will certainly show; a change it cannot show stays unknown and blocks the file.
+
+`upload_assets` takes local files, never upload URLs: `{"fileKey": "<key>", "assets": [{"path": "<absolute path>", "contentType": "image/png"}], "currentPageId": "<page>"}` places new frames on that page; `"nodeIds": ["<node>", ...]` (one per raster asset, no SVG) sets fills instead. PNG, JPEG, GIF, WebP, and SVG up to 10 MB each, at most 60. The route stages the exact bytes at preview and posts them itself; an apply refuses if a file changed. Figma's upload URLs never appear in its output.
+
+### Weave costs
+
+A Weave run spends Nathan's paid Weave credits. A free tool runs at once.
+
+1. Apply the run without `acknowledgedCost`. Figma quotes and spends nothing: the cause is `cost-confirmation-required`, with the cost in `result.data.quote.cost` and its `costDisclosure` in the reply.
+2. Show Nathan the cost and the disclosure, and ask for an explicit approve or cancel.
+3. Only on approval, preview and apply again with `acknowledgedCost` set to that exact cost from an unused quote within 15 minutes. Each quote authorizes at most one approved apply attempt; get a fresh quote for another run. A mismatched, expired, or used quote refuses as `cost-not-quoted`.
+
+### Outcomes
+
+- `SUCCESS_RUN_APPLIED`: the read-back found the change.
+- `DOMAIN_RUN_FAILED_RECORDED`: Figma refused and the object is unchanged (`provider-refused`), or a Weave quote or input request spent nothing.
+- `DOMAIN_RUN_EFFECT_UNKNOWN`: the write may have happened. Never retry it. Its object stays blocked. Run `"$CONNECTORS" recover figma --run <runId>`, then `recover figma --run <runId> --adjudicate --input <identical json>`, which settles only when a read-back finds the change or, after a reply, proves the object unchanged.
+
+`"$CONNECTORS" recover figma` lists unresolved receipts. `recover figma --run <runId|previewId> --unlock` releases a lock only after its holder has exited.
+
+## Not admitted
+
+`generate_figma_design` and `weave_upload_asset` refuse as `operation-not-allowed` until their open contract changes land; read [ADR 0005](../../docs/adr/0005-admit-figma-catalog-by-effect-class.md). Report the refusal; the route has no fallback.

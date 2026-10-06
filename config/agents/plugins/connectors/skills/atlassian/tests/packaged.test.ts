@@ -770,7 +770,7 @@ describe("packaged connector listing", () => {
 	test("list admits the Atlassian manifest beside the other packaged connectors", async () => {
 		fresh();
 		const envelope = parse((await fixture.frontDoor(["list"])).stdout).result;
-		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "firecrawl", "mermaid"]);
+		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid", "notion"]);
 	});
 });
 

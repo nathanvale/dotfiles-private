@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "figma",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {},
+	"requirements": ["mcporter"],
+	"adapter": "figma",
+	"credentials": null
+}

@@ -1,0 +1,307 @@
+{
+	"qualifiedOn": "2026-10-06",
+	"operations": [
+		{
+			"name": "notion-search",
+			"effect": "read",
+			"required": [
+				"query"
+			]
+		},
+		{
+			"name": "notion-ai-search",
+			"effect": "read",
+			"required": [
+				"query"
+			]
+		},
+		{
+			"name": "notion-get-tool-access",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-fetch",
+			"effect": "read",
+			"required": [
+				"id"
+			]
+		},
+		{
+			"name": "notion-create-attachment",
+			"effect": "write",
+			"required": []
+		},
+		{
+			"name": "notion-create-file-upload",
+			"effect": "write",
+			"required": [
+				"filename"
+			]
+		},
+		{
+			"name": "notion-download-attachment",
+			"effect": "read",
+			"required": [
+				"file_upload_id"
+			]
+		},
+		{
+			"name": "notion-create-pages",
+			"effect": "write",
+			"required": [
+				"pages"
+			]
+		},
+		{
+			"name": "notion-update-page",
+			"effect": "write",
+			"required": [
+				"page_id",
+				"command"
+			]
+		},
+		{
+			"name": "notion-convert-page-to-skill",
+			"effect": "write",
+			"required": [
+				"page_url"
+			]
+		},
+		{
+			"name": "notion-upload-skill",
+			"effect": "write",
+			"required": [
+				"action",
+				"page_id"
+			]
+		},
+		{
+			"name": "notion-download-skill",
+			"effect": "read",
+			"required": [
+				"id"
+			]
+		},
+		{
+			"name": "notion-move-pages",
+			"effect": "write",
+			"required": [
+				"page_or_database_ids",
+				"new_parent"
+			]
+		},
+		{
+			"name": "notion-restore-pages",
+			"effect": "write",
+			"required": [
+				"page_ids"
+			]
+		},
+		{
+			"name": "notion-duplicate-page",
+			"effect": "write",
+			"required": [
+				"page_id"
+			]
+		},
+		{
+			"name": "notion-create-database",
+			"effect": "write",
+			"required": []
+		},
+		{
+			"name": "notion-create-folder",
+			"effect": "write",
+			"required": [
+				"parent",
+				"title"
+			]
+		},
+		{
+			"name": "notion-update-folder",
+			"effect": "write",
+			"required": [
+				"folder_id",
+				"command"
+			]
+		},
+		{
+			"name": "notion-update-data-source",
+			"effect": "write",
+			"required": [
+				"data_source_id"
+			]
+		},
+		{
+			"name": "notion-create-comment",
+			"effect": "write",
+			"required": [
+				"page_id"
+			]
+		},
+		{
+			"name": "notion-get-comments",
+			"effect": "read",
+			"required": [
+				"page_id"
+			]
+		},
+		{
+			"name": "notion-get-async-task",
+			"effect": "read",
+			"required": [
+				"task_id"
+			]
+		},
+		{
+			"name": "notion-get-teams",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-get-users",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-query-data-sources",
+			"effect": "read",
+			"required": [
+				"data"
+			]
+		},
+		{
+			"name": "notion-query-multiple-data-sources",
+			"effect": "read",
+			"required": [
+				"query",
+				"data_source_urls"
+			]
+		},
+		{
+			"name": "notion-query-meeting-notes",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-list-private-pages",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-list-shared-pages",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-list-favorite-pages",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-list-recent-pages",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-search-agents",
+			"effect": "read",
+			"required": [
+				"scope"
+			]
+		},
+		{
+			"name": "notion-search-sessions",
+			"effect": "read",
+			"required": [
+				"question"
+			]
+		},
+		{
+			"name": "notion-query-sessions",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-spawn-session",
+			"effect": "write",
+			"required": [
+				"agent_url",
+				"initial_message"
+			]
+		},
+		{
+			"name": "notion-get-session-status",
+			"effect": "read",
+			"required": [
+				"session_url"
+			]
+		},
+		{
+			"name": "notion-wait-session",
+			"effect": "read",
+			"required": [
+				"session_url",
+				"seconds"
+			]
+		},
+		{
+			"name": "notion-stop-session",
+			"effect": "write",
+			"required": [
+				"session_url"
+			]
+		},
+		{
+			"name": "notion-send-message-to-session",
+			"effect": "write",
+			"required": [
+				"session_url",
+				"message"
+			]
+		},
+		{
+			"name": "notion-list-session-events",
+			"effect": "read",
+			"required": [
+				"session_url",
+				"count"
+			]
+		},
+		{
+			"name": "notion-read-session-event",
+			"effect": "read",
+			"required": [
+				"session_url",
+				"sequence"
+			]
+		},
+		{
+			"name": "notion-create-view",
+			"effect": "write",
+			"required": [
+				"data_source_id",
+				"name",
+				"type"
+			]
+		},
+		{
+			"name": "notion-update-view",
+			"effect": "write",
+			"required": [
+				"view_id"
+			]
+		},
+		{
+			"name": "notion-show-advanced-analysis-next-steps",
+			"effect": "read",
+			"required": []
+		},
+		{
+			"name": "notion-check-mcp-next-steps",
+			"effect": "read",
+			"required": []
+		}
+	]
+}

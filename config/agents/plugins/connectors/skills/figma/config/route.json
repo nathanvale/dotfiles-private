@@ -1,4 +1,5 @@
 {
 	"defaultProvider": "figma-connectors",
-	"oauth": "mcporter"
+	"oauth": "mcporter",
+	"dispatcherOwned": true
 }

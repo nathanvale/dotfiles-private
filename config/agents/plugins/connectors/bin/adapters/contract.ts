@@ -137,9 +137,9 @@ export type RecordedEffect = "write-preview" | "write-adjudication" | "write-unl
 // failed-after-record: the write receipt completed and the Provider is proven
 // unchanged.
 export type Executed =
-	| { readonly kind: "success"; readonly data: Record<string, unknown> }
+	| { readonly kind: "success"; readonly data: Record<string, unknown>; readonly localEffects?: readonly LocalEffect[] }
 	| { readonly kind: "refused"; readonly refusal: AdapterRefusal }
-	| { readonly kind: "failed"; readonly connectorCause: string; readonly repair: string }
+	| { readonly kind: "failed"; readonly connectorCause: string; readonly repair: string; readonly localEffects?: readonly LocalEffect[] }
 	| { readonly kind: "recorded"; readonly effect: RecordedEffect; readonly data: Record<string, unknown> }
 	| { readonly kind: "applied"; readonly data: Record<string, unknown> }
 	| { readonly kind: "effect-unknown"; readonly data: Record<string, unknown>; readonly repair: string }
