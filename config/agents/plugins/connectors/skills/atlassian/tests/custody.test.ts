@@ -48,7 +48,7 @@ async function child(context: string, extra: Record<string, string> = {}, argv: 
 describe("bindCredential", () => {
 	test("performs one complete read of the configured item through the custody child and returns only the typed nonsecret binding", () => {
 		writeItem(itemJson({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: "https://Example.atlassian.net/" }, 42, CONFLUENCE_ITEM_ID), CONFLUENCE_ITEM_ID);
-		const result = bindCredential("example", "confluence", CONFLUENCE_ITEM_ID, env());
+		const result = bindCredential("example", "confluence", CONFLUENCE_ITEM_ID, env(), CHILD);
 		expect(result).toEqual({ ok: true, binding: { principal: PRINCIPAL, itemVersion: "onepassword-item-version:42", origin: ORIGIN, item: CONFLUENCE_ITEM_ID } });
 		expect(JSON.stringify(result)).not.toContain(PROVIDER_TOKEN);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([{ argv: opRead(CONFLUENCE_ITEM_ID), envKeys: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN", "PATH"], serviceTokenMatches: true }]);
@@ -57,13 +57,13 @@ describe("bindCredential", () => {
 	// The item is the configured ID alone; no title is derived from the tenant.
 	test("reads only the configured item ID, never a title derived from the tenant", () => {
 		writeItem(itemJson({ username: PRINCIPAL, credential: "x", site_url: ORIGIN }, 1));
-		expect(bindCredential("example-team", "jira", JIRA_ITEM_ID, env()).ok).toBe(true);
+		expect(bindCredential("example-team", "jira", JIRA_ITEM_ID, env(), CHILD).ok).toBe(true);
 		expect(opReads()).toEqual([opRead(JIRA_ITEM_ID)]);
 	});
 
 	test("an item whose returned id is not the configured one is refused, never bound", () => {
 		writeItem(itemJson({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN }, 1, CONFLUENCE_ITEM_ID));
-		expect(bindCredential("example", "jira", JIRA_ITEM_ID, env())).toEqual({ ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL });
+		expect(bindCredential("example", "jira", JIRA_ITEM_ID, env(), CHILD)).toEqual({ ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL });
 		expect(opReads()).toEqual([opRead(JIRA_ITEM_ID)]);
 	});
 
@@ -74,7 +74,7 @@ describe("bindCredential", () => {
 			...[MANAGEMENT_URL, "https://example.example.com", "https://user@example.atlassian.net", "https://example.atlassian.net/wiki", "https://example.atlassian.net?x=1", "https://example.atlassian.net#frag", "https://example.atlassian.net:8443", "http://example.atlassian.net"].map((url) => itemJson({ username: PRINCIPAL, site_url: url, url: ORIGIN }, 1)),
 		]) {
 			writeItem(item);
-			expect(bindCredential("example", "jira", JIRA_ITEM_ID, env())).toEqual({ ok: false, cause: "site-unresolved", detail: SITE_DETAIL });
+			expect(bindCredential("example", "jira", JIRA_ITEM_ID, env(), CHILD)).toEqual({ ok: false, cause: "site-unresolved", detail: SITE_DETAIL });
 		}
 	});
 
@@ -89,12 +89,12 @@ describe("bindCredential", () => {
 		];
 		for (const [label, item] of cases) {
 			writeItem(item);
-			expect([label, bindCredential("example", "jira", JIRA_ITEM_ID, env())]).toEqual([label, { ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL }]);
+			expect([label, bindCredential("example", "jira", JIRA_ITEM_ID, env(), CHILD)]).toEqual([label, { ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL }]);
 		}
 	});
 
 	test("an absent item is a handoff to its owner that names the configured item ID and never its value", () => {
-		const result = bindCredential("example", "jira", JIRA_ITEM_ID, env());
+		const result = bindCredential("example", "jira", JIRA_ITEM_ID, env(), CHILD);
 		expect(result).toEqual({
 			ok: false,
 			cause: "refused-credential-unconfigured",
@@ -105,7 +105,7 @@ describe("bindCredential", () => {
 
 	test("a missing plugin-owned op is the setup repair and names no path", () => {
 		rmSync(path.join(fixture.opDirectory, "op-selected"));
-		const result = bindCredential("example", "jira", JIRA_ITEM_ID, env());
+		const result = bindCredential("example", "jira", JIRA_ITEM_ID, env(), CHILD);
 		expect(result).toEqual({ ok: false, cause: "refused-precondition", detail: OP_DETAIL });
 		expect(JSON.stringify(result)).not.toContain(fixture.root);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
@@ -134,7 +134,7 @@ describe("custody child process", () => {
 		const absentHome = path.join(fixture.root, "absent", "home");
 		const result = await child(JIRA_CONTEXT, { HOME: absentHome });
 		expect([result.code, result.stdout, result.stderr]).toEqual([1, "", "connectors-internal-role:error:unhandled\n"]);
-		expect(bindCredential("example", "jira", JIRA_ITEM_ID, { ...env(), HOME: absentHome })).toEqual({ ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL });
+		expect(bindCredential("example", "jira", JIRA_ITEM_ID, { ...env(), HOME: absentHome }, CHILD)).toEqual({ ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL });
 		expect(opReads()).toEqual([]);
 	});
 

@@ -65,7 +65,7 @@ A Weave run spends Nathan's paid Weave credits. A free tool runs at once.
 
 1. Apply the run without `acknowledgedCost`. Figma quotes and spends nothing: the cause is `cost-confirmation-required`, with the cost in `result.data.quote.cost` and its `costDisclosure` in the reply.
 2. Show Nathan the cost and the disclosure, and ask for an explicit approve or cancel.
-3. Only on approval, preview and apply again with `acknowledgedCost` set to that exact cost within 15 minutes. Any other cost refuses as `cost-not-quoted`.
+3. Only on approval, preview and apply again with `acknowledgedCost` set to that exact cost from an unused quote within 15 minutes. Each quote authorizes at most one approved apply attempt; get a fresh quote for another run. A mismatched, expired, or used quote refuses as `cost-not-quoted`.
 
 ### Outcomes
 

@@ -543,7 +543,7 @@ describe("compiled front door: per-Skill resolution (Q11a)", () => {
 	// Independent oracle: the shipped Skills whose SKILL.md reaches the front
 	// door, and the exact line each declares to resolve it from its own
 	// directory (no global command, no dotfiles path).
-	const FRONT_DOOR_SKILLS = ["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid"];
+	const FRONT_DOOR_SKILLS = ["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid", "notion"];
 	const RELATIVE = "../../bin/connectors";
 	const INVOCATION = `CONNECTORS="$SKILL_DIR/${RELATIVE}"`;
 

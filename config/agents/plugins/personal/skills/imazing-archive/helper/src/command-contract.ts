@@ -54,7 +54,7 @@ export const COMMANDS = [
     commandIdentity: "imazing-archive.status",
     effectClass: "inspect",
     route: ["status"],
-    summary: "Count archive records, unresolved links, and pending images.",
+    summary: "Count archive items, held messages, message-to-attachment associations, decisions, and pending images.",
   },
 ] as const;
 

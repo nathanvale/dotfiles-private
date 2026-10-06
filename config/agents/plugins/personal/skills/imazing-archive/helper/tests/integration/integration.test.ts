@@ -91,6 +91,7 @@ test("help and discovery expose the supported routes", async () => {
   expect(help.exitCode).toBe(0);
   expect(help.stderr).toBe("");
   expect(help.stdout).toContain("imazing-archive import --archive DIR --csv FILE --attachments DIR (--preview | --plan DIGEST)");
+  expect(help.stdout).toContain("TYPE is one of photo, screenshot, screenshot_with_meme, meme, document, gif, sticker, url, other, unknown.");
   const discovery = invoke(env, "--discover", "--json");
   expect(discovery.json().result.data.commands.map((command: { commandIdentity: string }) => command.commandIdentity)).toContain("imazing-archive.import");
 });
@@ -165,6 +166,9 @@ test("import, decide, and repeat imports of both variants preserve decisions and
 
   const repeat = importExport(env, archive, newCsv, newRoot);
   expect(repeat.preview.data.planned.observations).toBe(0);
+  // A preview that plans nothing offers no apply step.
+  expect(first.preview.nextAction).toContain("--plan");
+  expect(repeat.preview.nextAction).toBe("Nothing to apply; review the receipt's unresolved lists.");
   expect(repeat.apply).toMatchObject({ causeCode: "SUCCESS_UNCHANGED", transactionState: "unchanged" });
   expect(await snapshot(archive, RECORD_FILES)).toEqual(afterDecision);
   expect((await readdir(join(archive, "imports"))).length).toBe(1);
@@ -195,6 +199,82 @@ test("import, decide, and repeat imports of both variants preserve decisions and
   expect(finalMessages).toHaveLength(16);
 });
 
+test("an attachments root holding the export's files three folders down reports deeperFiles and warns", async () => {
+  const { archive, env, root } = await workspace("deep-root");
+  const exports = join(root, "exports");
+  const csv = await writeNewExport(join(exports, "one", "two", "three"));
+  const source = ["import", "--archive", archive, "--csv", csv, "--attachments", exports, "--preview"];
+  const preview = invoke(env, ...source, "--json").json().result.data;
+  // The CSV and its eleven exported files all sit three or four folders down.
+  expect(preview).toMatchObject({ attachmentRowResolution: { ambiguous: 0, missing: 8, resolved: 0 }, chatFiles: 0, deeperFiles: 12 });
+  const receipt = JSON.parse(await readFile(preview.receiptPath, "utf8"));
+  expect(receipt.attachmentsRoot).toMatchObject({ chatFiles: 0, deeperFiles: 12, totalFiles: 0 });
+  const human = invoke(env, ...source);
+  expect(human.exitCode).toBe(0);
+  expect(human.stdout).toContain("Warning: no file for this chat sits within two folders of the attachments root");
+  expect(human.stdout).toContain("Warning: 12 files sit more than two folders below the attachments root");
+  const direct = join(exports, "one", "two", "three");
+  const right = invoke(env, "import", "--archive", archive, "--csv", csv, "--attachments", direct, "--preview");
+  expect(right.stdout).not.toContain("Warning");
+});
+
+test("status prints its counts in human output and the same counts under --json", async () => {
+  const { archive, env, root } = await workspace("status-human");
+  const old = await writeOldExport(join(root, "old"));
+  importExport(env, archive, old.csv, old.attachments);
+  const human = invoke(env, "status", "--archive", archive);
+  expect(human.exitCode).toBe(0);
+  expect(human.stderr).toBe("");
+  // Independent oracle: the old fixture mints nine items, holds its two
+  // identical "ha" rows, resolves its three files to three blobs, and has no
+  // file for its IMG_0001.PNG row.
+  expect(human.stdout).toBe([
+    "Archive inspected.",
+    "ambiguousItems: 0",
+    "associations: ambiguous 0, missing 1, resolved 3",
+    "beforeStart: 0",
+    "blobs: 3",
+    "decisions: 0",
+    "exports: 1",
+    "heldMessages: 2",
+    "items: 9",
+    "pendingImages: 3",
+    "recovery: none",
+    "startDate: 2023-10-15",
+    "Next: No follow-up is required.",
+    "",
+  ].join("\n"));
+  expect(invoke(env, "status", "--archive", archive, "--json").json().result.data).toEqual({
+    ambiguousItems: 0,
+    associations: { ambiguous: 0, missing: 1, resolved: 3 },
+    beforeStart: 0,
+    blobs: 3,
+    decisions: 0,
+    exports: 1,
+    heldMessages: 2,
+    items: 9,
+    pendingImages: 3,
+    recovery: "none",
+    startDate: "2023-10-15",
+  });
+});
+
+test("decide accepts the classifier's meme, screenshot_with_meme, and document image types", async () => {
+  const { archive, env, root } = await workspace("image-types");
+  const newRoot = join(root, "new");
+  importExport(env, archive, await writeNewExport(newRoot), newRoot);
+  const images = (await csvRows(join(archive, "derived/messages.csv"))).filter((row) => row.attachment_status === "resolved");
+  const types = ["meme", "screenshot_with_meme", "document"];
+  for (const [index, imageType] of types.entries()) {
+    const decided = invoke(env, "decide", "--archive", archive, "--item", images[index]?.item_key ?? "", "--image-type", imageType, "--contains-meme", "unknown", "--json");
+    expect(decided.json().result.causeCode).toBe("SUCCESS_COMPLETED");
+  }
+  const after = await csvRows(join(archive, "derived/messages.csv"));
+  expect(types.map((_type, index) => after.find((row) => row.item_key === images[index]?.item_key)?.image_type)).toEqual(types);
+  const refused = invoke(env, "decide", "--archive", archive, "--item", images[0]?.item_key ?? "", "--image-type", "selfie", "--json");
+  expect(refused.json().result.causeCode).toBe("SCHEMA_INVALID_INPUT");
+});
+
 test("an old export imported first links later Message IDs by unique fingerprint only", async () => {
   const { archive, env, root } = await workspace("reverse");
   const newRoot = join(root, "new");
@@ -215,9 +295,13 @@ test("an old export imported first links later Message IDs by unique fingerprint
   expect(second.apply.data.planned.associations).toEqual({ ambiguous: 1, missing: 0, resolved: 5 });
   // Both sides of each unresolved link name each other; nothing merges.
   const messages = await csvRows(join(archive, "derived/messages.csv"));
-  const flagged = messages.filter((row) => row.ambiguous_with !== "[]");
+  // An item with no unresolved link has an empty cell, never "[]".
+  const flagged = messages.filter((row) => row.ambiguous_with !== "");
   expect(flagged.filter((row) => row.attachment_name === "IMG_0001.PNG")).toHaveLength(3);
   expect(flagged).toHaveLength(3);
+  for (const row of flagged) {
+    expect(JSON.parse(row.ambiguous_with ?? "").length).toBeGreaterThan(0);
+  }
 });
 
 test("a rerun retries unresolved attachments for rows it has already seen", async () => {
@@ -420,10 +504,13 @@ test.each([
   if (tamper === "records") await dropLastLine(join(archive, "records/items.jsonl"));
   const recovered = invoke(env, "recover", "--archive", archive, "--json");
   expect(recovered.exitCode).toBe(exitCode);
+  const { expectedValueHash, runId } = JSON.parse(intent ?? "");
   if (state === "completed") {
-    expect(recovered.json().result.data).toEqual({ pendingEffect: "effect.import", state: "completed" });
+    expect(recovered.json().result.data).toEqual({ expectedValueHash, pendingEffect: "effect.import", runId, state: "completed" });
   } else {
     expect(recovered.json().result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_UNPROVABLE", handoff: { owner: "operator" } });
+    // Failure data stays null, so the handoff names the intent to reconcile.
+    expect(recovered.json().result.handoff.reason).toContain(`runId ${runId}, expectedValueHash ${expectedValueHash}`);
   }
   expect((await readFile(journal, "utf8")).trim().split("\n")).toHaveLength(1);
 });
@@ -494,7 +581,10 @@ test("a decision whose derived output is obstructed returns an unknown effect th
   expect((await readFile(join(archive, "records/decisions.jsonl"), "utf8")).trim().split("\n")).toHaveLength(1);
   const proven = invoke(env, "recover", "--archive", archive, "--json");
   expect(proven.exitCode).toBe(0);
-  expect(proven.json().result.data).toEqual({ pendingEffect: "effect.decision", state: "completed" });
+  const [intent = ""] = (await readFile(join(archive, "archive.journal.jsonl"), "utf8")).trim().split("\n").slice(-1);
+  const { expectedValueHash, runId } = JSON.parse(intent);
+  expect(JSON.parse(intent).phase).toBe("intent");
+  expect(proven.json().result.data).toEqual({ expectedValueHash, pendingEffect: "effect.decision", runId, state: "completed" });
   await writeFile(join(archive, "records/decisions.jsonl"), "");
   const unproven = invoke(env, "recover", "--archive", archive, "--json");
   expect(unproven.exitCode).toBe(3);

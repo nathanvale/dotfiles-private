@@ -1,0 +1,8 @@
+{
+	"defaultProvider": "notion-connectors",
+	"selectors": {
+		"account": "NOTION_ACCOUNT"
+	},
+	"oauth": "mcporter",
+	"dispatcherOwned": true
+}

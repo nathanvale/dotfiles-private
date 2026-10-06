@@ -1,6 +1,6 @@
 {
   "name": "connectors",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Nathan's service connectors for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -12,13 +12,14 @@
     "figma",
     "jira",
     "confluence",
+    "notion",
     "mcporter"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Connectors",
     "shortDescription": "Work with connected services",
-    "longDescription": "Service connectors shared by Codex and Claude Code, with Atlassian, Canva, and Mermaid routes and a packaged Figma MCP route with journaled writes.",
+    "longDescription": "Service connectors shared by Codex and Claude Code, including the complete Notion MCP tool set, raw meeting transcripts, account-isolated OAuth, and journaled writes.",
     "developerName": "Nathan Vale",
     "category": "Productivity",
     "capabilities": [

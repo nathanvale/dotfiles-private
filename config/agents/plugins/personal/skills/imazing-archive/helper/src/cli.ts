@@ -16,8 +16,8 @@ import {
   writerBusy,
 } from "./engine.ts";
 import { JournalIntegrityError } from "./journal.ts";
-import { type ArchiveState, DEFAULT_START_DATE, type OperationResult } from "./model.ts";
-import { type PlannedImport, planIsEmpty } from "./planner.ts";
+import { type ArchiveState, DEFAULT_START_DATE, IMAGE_TYPES, type OperationResult } from "./model.ts";
+import { planIsEmpty } from "./planner.ts";
 import { systemProcessLifecycle } from "./process-lifecycle.ts";
 import {
   type ApplyOutcome,
@@ -36,6 +36,7 @@ import {
   isNewArchive,
   loadArchive,
   PreconditionError,
+  type PreparedImport,
   prepareImport,
   receiptFor,
   recordDecision,
@@ -59,9 +60,10 @@ ${USAGE.map((line) => `  ${line}`).join("\n")}
 Commands:
   import   Preview, then apply with the previewed plan digest, one iMazing CSV export.
            Rows dated before --start-date (default ${DEFAULT_START_DATE}, fixed at creation) are left out.
-  status   Count archive records, unresolved links, and pending images.
+  status   Count archive items, held messages, message-to-attachment associations, decisions, and pending images.
   recover  Inspect an interrupted import without replaying it.
   decide   Record image type, meme, review, or album decisions for one item.
+           TYPE is one of ${IMAGE_TYPES.join(", ")}.
 
 Discovery:
   imazing-archive --discover
@@ -94,10 +96,22 @@ async function waitForLifecycleTest(): Promise<void> {
   }
 }
 
+/** One `key: value` line per field; a nested object joins its own pairs. */
+function countLines(data: object): string[] {
+  return Object.entries(data).map(([key, value]) =>
+    typeof value === "object" && value !== null
+      ? `${key}: ${Object.entries(value).map(([name, count]) => `${name} ${String(count)}`).join(", ")}`
+      : `${key}: ${String(value)}`,
+  );
+}
+
 function humanLines(result: ReturnType<typeof envelope>): string {
   const lines = [result.message];
   const data = result.result.data;
   if (typeof data === "object" && data !== null) {
+    if (result.result.commandIdentity === "imazing-archive.status") {
+      lines.push(...countLines(data));
+    }
     for (const key of ["planDigest", "receiptPath"] as const) {
       if (key in data) lines.push(`${key}: ${String(data[key as keyof typeof data])}`);
     }
@@ -193,16 +207,36 @@ async function recover(args: string[]): Promise<OperationResult> {
     observation.state === "completed"
       ? "The interrupted write's durable effects read back complete; it was not replayed."
       : "No interrupted import needs recovery.",
-    { pendingEffect: observation.effectId, state: observation.state },
+    {
+      expectedValueHash: observation.intent?.expectedValueHash ?? null,
+      pendingEffect: observation.effectId,
+      runId: observation.intent?.runId ?? null,
+      state: observation.state,
+    },
   );
 }
 
-function publicSummary(planned: PlannedImport, receiptPath: string) {
-  const { lists, ...counts } = planned.summary;
+function publicSummary(prepared: PreparedImport, receiptPath: string) {
+  const { lists, ...counts } = prepared.summary;
   const listSizes = Object.fromEntries(
     Object.entries(lists).map(([name, values]) => [name, values.length]),
   );
-  return { ...counts, listSizes, planDigest: planned.digest, receiptPath };
+  const { deeperFiles } = prepared.scan;
+  return { ...counts, deeperFiles, listSizes, planDigest: prepared.digest, receiptPath };
+}
+
+/** A warning when the attachments root looks wrong; empty when it looks right. */
+function rootWarning(prepared: PreparedImport): string {
+  const { chatFiles, attachmentRows } = prepared.summary;
+  const { deeperFiles } = prepared.scan;
+  const warnings: string[] = [];
+  if (chatFiles === 0 && attachmentRows > 0) {
+    warnings.push("Warning: no file for this chat sits within two folders of the attachments root, so no attachment can resolve; the root is likely wrong.");
+  }
+  if (deeperFiles > 0) {
+    warnings.push(`Warning: ${deeperFiles} files sit more than two folders below the attachments root and were not searched; if they are this export's files, pass the folder that holds them.`);
+  }
+  return warnings.map((warning) => ` ${warning}`).join("");
 }
 
 function importSource(args: string[]): {
@@ -256,11 +290,11 @@ function appliedResult(outcome: ApplyOutcome): OperationResult {
   const identity = "imazing-archive.import";
   switch (outcome.status) {
     case "applied":
-      return succeeded(identity, "Export imported.", { ...publicSummary(outcome.prepared, outcome.receiptPath), runId: outcome.runId }, IMPORT_EFFECT, "Review the receipt's missing and ambiguous lists.");
+      return succeeded(identity, `Export imported.${rootWarning(outcome.prepared)}`, { ...publicSummary(outcome.prepared, outcome.receiptPath), runId: outcome.runId }, IMPORT_EFFECT, "Review the receipt's missing and ambiguous lists.");
     case "empty":
-      return succeeded(identity, "No rows fall on or after the start date; nothing was imported.", publicSummary(outcome.prepared, outcome.receiptPath));
+      return succeeded(identity, `No rows fall on or after the start date; nothing was imported.${rootWarning(outcome.prepared)}`, publicSummary(outcome.prepared, outcome.receiptPath));
     case "unchanged":
-      return succeeded(identity, "Export already imported; nothing changed.", publicSummary(outcome.prepared, outcome.receiptPath));
+      return succeeded(identity, `Export already imported; nothing changed.${rootWarning(outcome.prepared)}`, publicSummary(outcome.prepared, outcome.receiptPath));
     case "stale":
       return refused(identity, "DOMAIN_PREVIEW_STALE", "The archive or sources changed since the preview.", "Run --preview again and review the new plan.");
     case "blocked":
@@ -272,7 +306,7 @@ function appliedResult(outcome: ApplyOutcome): OperationResult {
   }
 }
 
-async function previewMessage(archive: string, prepared: PlannedImport, state: ArchiveState): Promise<string> {
+async function previewMessage(archive: string, prepared: PreparedImport, state: ArchiveState): Promise<string> {
   if (!planIsEmpty(prepared.plan)) return "Preview: nothing was written to the archive.";
   return (await isNewArchive(archive, state))
     ? "No rows fall on or after the start date; nothing was imported."
@@ -290,10 +324,12 @@ async function importCommand(args: string[]): Promise<OperationResult> {
   const receiptPath = await writeReceipt(receiptFor(source, prepared, "preview"));
   return succeeded(
     "imazing-archive.import",
-    await previewMessage(source.archive, prepared, state),
+    `${await previewMessage(source.archive, prepared, state)}${rootWarning(prepared)}`,
     publicSummary(prepared, receiptPath),
     null,
-    `Review the receipt, then rerun with --plan ${prepared.digest} to apply.`,
+    planIsEmpty(prepared.plan)
+      ? "Nothing to apply; review the receipt's unresolved lists."
+      : `Review the receipt, then rerun with --plan ${prepared.digest} to apply.`,
   );
 }
 

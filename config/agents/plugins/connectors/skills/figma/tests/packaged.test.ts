@@ -18,10 +18,12 @@
 // - unknown effects: an unreplied write blocks its object and settles only on
 //   found evidence; a partial-view write is never settled unchanged.
 import { expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { FIGMA_ENDPOINT } from "../scripts/endpoint.ts";
-import { createBundle, runBundle } from "../../../tests/harness.ts";
+import { createBundle, runBundle, runInteractiveBundle } from "../../../tests/harness.ts";
+import { DENY_NETWORK, heldMcporter, ownedVault } from "../../../tests/fixtures/native-oauth.ts";
 import { type Envelope, FigmaMachine, OFFICIAL_MCPORTER } from "./fixtures/figma-machine.ts";
 import { type FigmaStub, startFigmaStub, UPLOAD_CAPABILITY } from "./fixtures/figma-stub.ts";
 
@@ -167,7 +169,8 @@ test.skipIf(!OFFICIAL_MCPORTER)("a preview applies once, with its identical inpu
 	});
 }, 120_000);
 
-test.skipIf(!OFFICIAL_MCPORTER)("a Weave run acknowledges only the cost Figma quoted for that exact input", async () => {
+// Fails if a consumed quote admits another approved apply.
+test.skipIf(!OFFICIAL_MCPORTER)("a Weave run acknowledges a quoted cost once, refusing reuse through future and existing previews", async () => {
 	await withFigma(async ({ run, stub }) => {
 		stub.weaveCost = 3;
 		const value = { recipeId: "recipe-1", inputs: [{ nodeId: "prompt", value: "a cat" }] };
@@ -177,9 +180,39 @@ test.skipIf(!OFFICIAL_MCPORTER)("a Weave run acknowledges only the cost Figma qu
 		expect(callsOf(stub, "weave_run_tool").map((call) => call.args.acknowledgedCost)).toEqual([undefined]);
 		for (const cost of [5, 0]) expect(station(await run(["run", "figma", "weave_run_tool", ...input({ ...value, acknowledgedCost: cost }), "--preview"]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "cost-not-quoted" });
 		expect(station(await run(["run", "figma", "weave_run_tool", ...input({ recipeId: "recipe-1", acknowledgedCost: 3 }), "--preview"]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "cost-not-quoted" });
-		const ran = await previewApply(run, "weave_run_tool", { ...value, acknowledgedCost: 3 });
+		const paid = { ...value, acknowledgedCost: 3 };
+		const first = await run(["run", "figma", "weave_run_tool", ...input(paid), "--preview"]);
+		const second = await run(["run", "figma", "weave_run_tool", ...input(paid), "--preview"]);
+		for (const preview of [first, second]) expect(station(preview)).toEqual({ code: 0, cause: "SUCCESS_RUN_RECORDED", connectorCause: null });
+		const ran = await run(["run", "figma", "weave_run_tool", ...input(paid), "--apply", first.result.data?.previewId as string]);
 		expect(station(ran)).toEqual({ code: 0, cause: "SUCCESS_RUN_APPLIED", connectorCause: null });
+		expect(ran.result.data?.receipt?.status).toBe("completed");
+		expect(station(await run(["run", "figma", "weave_run_tool", ...input(paid), "--preview"]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "cost-not-quoted" });
+		expect(station(await run(["run", "figma", "weave_run_tool", ...input(paid), "--apply", second.result.data?.previewId as string]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "cost-not-quoted" });
 		expect(callsOf(stub, "weave_run_tool").map((call) => call.args.acknowledgedCost)).toEqual([undefined, 3]);
+	});
+}, 120_000);
+
+// A terminal run cannot become CANCELED. Refuse the mixed set before sending
+// a cancellation that can no longer meet the every-named-run read-back rule.
+test.skipIf(!OFFICIAL_MCPORTER)("cancellation previews refuse any terminal run alongside a running run before sending a write", async () => {
+	await withFigma(async ({ run, stub }) => {
+		const started = await previewApply(run, "weave_run_tool", { recipeId: "recipe-1", numberOfRuns: 2 });
+		expect(station(started)).toEqual({ code: 0, cause: "SUCCESS_RUN_APPLIED", connectorCause: null });
+		expect((started.result.data?.receipt?.effects as { id: string }[]).map((effect) => effect.id)).toEqual(["run-0001", "run-0002"]);
+		stub.finishRun("run-0001", "FAILED");
+		const before = callsOf(stub, "weave_cancel_tool_run").length;
+		for (const runIds of [["run-0"], ["run-0", "run-0002"], ["run-0001", "run-0002"]]) {
+			const preview = await run(["run", "figma", "weave_cancel_tool_run", ...input({ recipeId: "recipe-1", runIds }), "--preview"]);
+			expect([runIds, station(preview)]).toEqual([runIds, { code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "runs-finished" }]);
+			expect(preview.result.data?.previewId).toBeUndefined();
+		}
+		expect(callsOf(stub, "weave_cancel_tool_run").length).toBe(before);
+		const canceled = await previewApply(run, "weave_cancel_tool_run", { recipeId: "recipe-1", runIds: ["run-0002"] });
+		expect(station(canceled)).toEqual({ code: 0, cause: "SUCCESS_RUN_APPLIED", connectorCause: null });
+		expect(canceled.result.data?.receipt?.status).toBe("completed");
+		expect(station(await run(["run", "figma", "weave_cancel_tool_run", ...input({ recipeId: "recipe-1", runIds: ["run-0002"] }), "--preview"]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "runs-finished" });
+		expect(callsOf(stub, "weave_cancel_tool_run").map((call) => call.args.runIds)).toEqual([["run-0002"]]);
 	});
 }, 120_000);
 
@@ -243,6 +276,53 @@ test("auth status reads only the vault's presence, and login needs Nathan's own 
 			expect([argv, station(await run(argv))]).toEqual([argv, { code: 3, cause: "DOMAIN_ATTENDED_REQUIRED", connectorCause: null }]);
 		}
 		expect(station(await run(["auth", "configure", "figma", "--input", "{}"]))).toEqual({ code: 3, cause: "DOMAIN_AUTH_VERB_UNSUPPORTED", connectorCause: "auth-verb-unsupported" });
+		expect(existsSync(path.join(home, ".mcporter"))).toBe(false);
+	} finally {
+		bundle.dispose();
+	}
+}, 120_000);
+
+// A real pseudo-terminal reaches the verified MCPorter's attended auth, with
+// every outbound connection and Keychain command denied by the sandbox.
+// Fails if login drops either flag or routes into a shared OAuth vault.
+test.skipIf(!OFFICIAL_MCPORTER)("attended Figma login forwards no-browser and reset to MCPorter in only Figma's vault", async () => {
+	const bundle = createBundle();
+	cpSync(path.resolve(import.meta.dir, "..", "config"), path.join(bundle.skillsRoot, "figma", "config"), { recursive: true });
+	const home = path.join(bundle.root, "home");
+	const state = path.join(bundle.root, "state");
+	mkdirSync(home);
+	mkdirSync(state);
+	const sandbox = path.join(bundle.root, "attended-sandbox");
+	const exitFile = path.join(bundle.root, "attended-exit");
+	writeFileSync(sandbox, `#!/bin/sh\n/usr/bin/sandbox-exec -p '${DENY_NETWORK}' '${bundle.binary}' "$@"\nauth_exit=$?\nprintf '%s\\n' "$auth_exit" > '${exitFile}'\nexit "$auth_exit"\n`, { mode: 0o700 });
+	const vault = path.join(state, "connectors", "figma-mcporter");
+	try {
+		const cases = [
+			{ flags: [], expected: ["auth", "figma-connectors"] },
+			{ flags: ["--reset", "--no-browser"], expected: ["auth", "figma-connectors", "--no-browser", "--reset"] },
+		];
+		expect(cases).toHaveLength(2);
+		for (const { flags, expected } of cases) {
+			const fifo = ownedVault(vault);
+			rmSync(fifo, { force: true });
+			execFileSync("/usr/bin/mkfifo", [fifo]);
+			const running = runInteractiveBundle({ ...bundle, binary: sandbox }, ["auth", "login", "figma", ...flags], {
+				home, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: OFFICIAL_MCPORTER as string, FIGMA_ACCESS_TOKEN: AMBIENT_SENTINEL }, timeoutMs: 30_000,
+			});
+			const held = await heldMcporter(fifo, state, "auth", running);
+			const login = await running;
+			expect(Number(readFileSync(exitFile, "utf8"))).toBe(3);
+			expect({ flags, argv: held?.argv ?? null }).toEqual({ flags, argv: expected });
+			const env = held?.env ?? [];
+			expect(env.filter((entry) => ["XDG_DATA_HOME=", "XDG_CACHE_HOME=", "MCPORTER_NO_KEEPALIVE="].some((name) => entry.startsWith(name))).sort()).toEqual(["MCPORTER_NO_KEEPALIVE=*", `XDG_CACHE_HOME=${vault}/cache`, `XDG_DATA_HOME=${vault}/data`]);
+			expect(env.some((entry) => entry.startsWith("FIGMA_ACCESS_TOKEN=") || entry.includes(AMBIENT_SENTINEL))).toBe(false);
+			expect(login.stderr).toBe("");
+			expect(login.stdout.trim().split("\n")).toHaveLength(1);
+			expect((JSON.parse(login.stdout) as Envelope).result).toMatchObject({ commandIdentity: "connectors.auth", outcome: "failed", causeCode: "DOMAIN_AUTH_LOGIN_UNKNOWN", exitCode: 3, transactionState: "unknown", effects: { uncertain: ["account-grant"] } });
+			for (const output of [login.stdout, login.stderr, login.terminal]) expect(output).not.toContain(AMBIENT_SENTINEL);
+		}
+		expect(existsSync(path.join(vault, "data", "mcporter", "credentials.json"))).toBe(true);
+		expect(existsSync(path.join(state, "connectors", "mcporter-keyless"))).toBe(false);
 		expect(existsSync(path.join(home, ".mcporter"))).toBe(false);
 	} finally {
 		bundle.dispose();

@@ -1,11 +1,11 @@
 // Mermaid's binding of the shared 1Password custody mode
 // (bin/one-password-custody.ts), as Atlassian proved it: the item read
-// through this skill's own Keychain leaf, then its one credential field. The
+// through the shared Keychain reader, then its one credential field. The
 // credential returns to the caller process and nowhere else. Nothing here
 // creates, rotates, imports, prints, or logs a token.
 import { CREDENTIAL_VAULT, type OnePasswordFailure, readOnePasswordItem } from "../../../../bin/one-password-custody.ts";
 import type { EnvironmentSource } from "../../../../bin/safe-environment.ts";
-import { readKeychain } from "./keychain-read.ts";
+import { readKeychain } from "../../../../bin/keychain-read.ts";
 
 export { CREDENTIAL_VAULT, OP_SETUP_REPAIR, SERVICE_TOKEN_HANDOFF } from "../../../../bin/one-password-custody.ts";
 
