@@ -31,7 +31,7 @@
       "path": "/Users/nathanvale/.local/share/my-second-brain-playground/beads/drive-inbox-filing",
       "name": "Drive Inbox Filing",
       "addedAt": "2026-09-29T10:27:56.866774Z",
-      "lastOpened": "2026-09-29T10:38:35.714Z"
+      "lastOpened": "2026-10-01T07:35:31.457Z"
     },
     {
       "id": "browser-automation-quiet-profile",
@@ -46,6 +46,13 @@
       "path": "/Users/nathanvale/.local/state/bead-me-up-scotty/remote/agent-routing-and-handoffs",
       "addedAt": "2026-09-29T23:38:29.796Z",
       "lastOpened": "2026-09-29T23:38:38.649Z"
+    },
+    {
+      "id": "design-system-feedback-uplift",
+      "name": "Design System Feedback Uplift",
+      "path": "/Users/nathanvale/.local/share/my-second-brain-playground/beads/design-system-feedback-uplift",
+      "addedAt": "2026-10-01T07:59:42.130Z",
+      "lastOpened": "2026-10-01T07:59:55.686Z"
     }
   ],
   "orders": {},
