@@ -12,9 +12,9 @@
   the consequence or check.
 - Keep the closest applicable instruction file as a trigger-bearing map. Put
   branch-only guidance in an owned `docs/agents/` file.
-- Admit a `docs/agents/` file only with its pointer in the personal
-  instruction source or `AGENTS.md`. Add the file to
-  `docs/agents/README.md`.
+- Register each `docs/agents/` file with a task trigger in
+  `docs/agents/README.md`. Reach that index from the personal instruction
+  source or `AGENTS.md`; add direct pointers only when a branch needs them.
 - Preserve one source of truth. Point to it instead of copying its contract.
 - Before editing, inspect the current owner and check for duplicate,
   contradictory, stale, or broader guidance.
