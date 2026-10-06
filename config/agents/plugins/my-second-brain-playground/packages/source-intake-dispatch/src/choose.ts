@@ -16,7 +16,8 @@ interface LocalInbox {
 	inbox: string
 }
 
-// The system osascript, by absolute path: no PATH entry or environment value can substitute another chooser.
+// The system osascript, by absolute path, never resolved through PATH. This pins the executable only; the README
+// names the process trust boundary.
 const OSASCRIPT = "/usr/bin/osascript"
 const ACCOUNT_PREFIX = "GoogleDrive-"
 const INBOX_PATH = ["My Drive", "00 Inbox"] as const
@@ -38,31 +39,51 @@ export function closeChooser(): void {
 	chooser?.kill()
 }
 
-/** A directory that is its own physical path, so no link can stand in for the account folder or 00 Inbox. */
-function isPhysicalDirectory(path: string): boolean {
+type Probe = "present" | "absent" | "chooserUnavailable" | "inputBusy"
+type Refusal = Exclude<Probe, "present" | "absent">
+
+// Errors that mean the path, or one of its parents, is not there as a directory.
+const ABSENT_CODES = new Set(["ENOENT", "ENOTDIR"])
+
+/** An absent path is "absent"; any other failure means this session cannot inspect it. */
+function probeFailure(error: unknown): "absent" | Refusal {
+	if (isDescriptorLimit(error)) return "inputBusy"
+	return ABSENT_CODES.has((error as NodeJS.ErrnoException).code ?? "") ? "absent" : "chooserUnavailable"
+}
+
+/**
+ * A directory that is its own physical path, so no link can stand in for the account folder or 00 Inbox. A link, a
+ * non-directory or a non-canonical path is "absent"; a path this session may not inspect is a refusal, never absent.
+ */
+function probeDirectory(path: string): Probe {
 	try {
-		return lstatSync(path).isDirectory() && realpathSync(path) === path
-	} catch {
-		return false
+		return lstatSync(path).isDirectory() && realpathSync(path) === path ? "present" : "absent"
+	} catch (error) {
+		return probeFailure(error)
 	}
 }
 
 /**
  * Every local 00 Inbox under HOME/Library/CloudStorage, sorted by path. HOME is trusted configuration, as for the
- * receipt root. A missing CloudStorage folder means no inbox; any other read failure means this session cannot see it.
+ * receipt root. A missing CloudStorage folder means no inbox. Any candidate this session cannot inspect refuses the
+ * whole run, so a denied account is never reported as missing.
  */
-function localInboxes(storage: string): LocalInbox[] | "unavailable" {
+function localInboxes(storage: string): LocalInbox[] | Refusal {
 	let entries: string[]
 	try {
 		entries = readdirSync(storage)
 	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : "unavailable"
+		const failure = probeFailure(error)
+		return failure === "absent" ? [] : failure
 	}
-	return entries
-		.filter((entry) => entry.startsWith(ACCOUNT_PREFIX) && entry.length > ACCOUNT_PREFIX.length)
-		.map((entry) => ({ account: entry.slice(ACCOUNT_PREFIX.length), inbox: join(storage, entry, ...INBOX_PATH) }))
-		.filter((candidate) => isPhysicalDirectory(candidate.inbox))
-		.sort((left, right) => left.inbox.localeCompare(right.inbox))
+	const inboxes: LocalInbox[] = []
+	for (const entry of entries.filter((name) => name.startsWith(ACCOUNT_PREFIX) && name.length > ACCOUNT_PREFIX.length)) {
+		const candidate = { account: entry.slice(ACCOUNT_PREFIX.length), inbox: join(storage, entry, ...INBOX_PATH) }
+		const probe = probeDirectory(candidate.inbox)
+		if (probe === "present") inboxes.push(candidate)
+		else if (probe !== "absent") return probe
+	}
+	return inboxes.sort((left, right) => left.inbox.localeCompare(right.inbox))
 }
 
 type ChooserReply = { kind: "reply"; text: string } | { kind: "cancelled" | "chooserUnavailable" | "inputBusy" }
@@ -86,7 +107,9 @@ function acceptSelection(reply: string, inboxes: readonly LocalInbox[]): ChooseO
 	if (!isAbsolute(path) || /[\0\n\r]/.test(path) || path.endsWith("/")) return { kind: "selectionRefused" }
 	const fileName = basename(path)
 	const match = inboxes.find((candidate) => candidate.inbox === dirname(path))
-	if (match === undefined || fileName.startsWith(".") || !isPhysicalDirectory(match.inbox)) return { kind: "selectionRefused" }
+	if (match === undefined || fileName.startsWith(".")) return { kind: "selectionRefused" }
+	const probe = probeDirectory(match.inbox)
+	if (probe !== "present") return { kind: probe === "absent" ? "selectionRefused" : probe }
 	try {
 		if (!lstatSync(path).isFile()) return { kind: "selectionRefused" }
 	} catch {
@@ -104,7 +127,7 @@ export async function chooseItem(): Promise<ChooseOutcome> {
 	if (!isAbsolute(home)) return { kind: "noInbox" }
 	const storage = join(home, "Library", "CloudStorage")
 	const inboxes = localInboxes(storage)
-	if (inboxes === "unavailable") return { kind: "chooserUnavailable" }
+	if (typeof inboxes === "string") return { kind: inboxes }
 	const [only, ...others] = inboxes
 	if (only === undefined) return { kind: "noInbox" }
 	const reply = await runChooser(others.length === 0 ? only.inbox : storage)

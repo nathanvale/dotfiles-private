@@ -39,9 +39,11 @@ const REDACTED_RECIPIENTS = new Set(["status", "evaluation"])
 // A grant and request are a few hundred bytes; the bound keeps a runaway pipe from growing memory without limit.
 const INPUT_LIMIT_BYTES = 64 * 1024
 
-// Fixed, value-free messages. None names a path, receipt value, source label or raw error.
-const MESSAGES: Record<Exclude<StationKey, "usage" | "serialization">, string> = {
+// Fixed, value-free messages. None names a path, receipt value, source label or raw error. chooserBusy is the inputBusy
+// station's wording for choose, which reads no standard input.
+const MESSAGES: Record<Exclude<StationKey, "usage" | "serialization"> | "chooserBusy", string> = {
 	cancelled: "No file was selected.",
+	chooserBusy: "A file-descriptor limit was reached before the chooser opened; nothing was read.",
 	chooserUnavailable: "The native chooser is unavailable in this session.",
 	denied: "Request denied. Stage Manager must verify the private grant before retrying.",
 	inputBusy: "A file-descriptor limit was reached before input was read; no receipt was touched.",
@@ -112,11 +114,7 @@ async function readInput(): Promise<InputRead> {
 	return { kind: "text", text: Buffer.concat(chunks).toString("utf8") }
 }
 
-// choose reads no standard input, so its busy refusal names the chooser instead of input.
-const CHOOSE_BUSY = "A file-descriptor limit was reached before the chooser opened; nothing was read."
-
-function refusalOutput(identity: CommandIdentity, key: keyof typeof MESSAGES): Output {
-	const message = identity === "source-intake-dispatch.choose" && key === "inputBusy" ? CHOOSE_BUSY : MESSAGES[key]
+function refusalOutput(identity: CommandIdentity, key: Exclude<StationKey, "usage" | "serialization">, message = MESSAGES[key]): Output {
 	return { envelope: stationResult(identity, key, message), human: "" }
 }
 
@@ -136,8 +134,9 @@ async function projectOutput(): Promise<Output> {
 
 async function chooseOutput(): Promise<Output> {
 	const identity: CommandIdentity = "source-intake-dispatch.choose"
-	if (descriptorLimitReached()) return refusalOutput(identity, "inputBusy")
+	if (descriptorLimitReached()) return refusalOutput(identity, "inputBusy", MESSAGES.chooserBusy)
 	const outcome = await chooseItem()
+	if (outcome.kind === "inputBusy") return refusalOutput(identity, "inputBusy", MESSAGES.chooserBusy)
 	if (outcome.kind !== "selected") return refusalOutput(identity, outcome.kind)
 	const { fileName, localAccount } = outcome
 	const envelope = success(identity, { fileName, localAccount }, "Nathan selected one file in a local 00 Inbox.", "Keep the selection in the granted foreground's private receipt only.")

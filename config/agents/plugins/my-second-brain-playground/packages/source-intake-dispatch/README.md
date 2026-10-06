@@ -29,10 +29,10 @@ prompts. No other command reads standard input.
 
 ## choose
 
-`choose` opens the native macOS chooser (always `/usr/bin/osascript`; no `PATH`
-entry or environment value substitutes another) for Nathan to select exactly
-one file. It starts at the local Google Drive for desktop
-`00 Inbox`, or at `CloudStorage` when several accounts have one:
+`choose` opens the native macOS chooser for Nathan to select exactly one file.
+The executable is pinned to `/usr/bin/osascript` and never resolved through
+`PATH`. It starts at the local Google Drive for desktop `00 Inbox`, or at
+`CloudStorage` when several accounts have one:
 
 ```text
 $HOME/Library/CloudStorage/GoogleDrive-<account>/My Drive/00 Inbox
@@ -47,6 +47,10 @@ crosses to the caller.
 - Run it only from the granted foreground, under the Steward skill's
   single-use Selection grant, with Nathan present. The command cannot verify
   that grant, and its success output is item detail.
+- Pinning is not process integrity. The granted foreground's Bun process may
+  load a `BUN_OPTIONS` or working-directory `bunfig.toml` preload, which runs
+  code inside this command (`project` too). That caller is trusted, like
+  `HOME` and `XDG_STATE_HOME`.
 - It reads no file content, writes nothing, takes no operands and never reads
   standard input. The folder listing is visible only to Nathan in the dialog.
 - Every refusal is fixed and value-free: it never names a path, file name or
@@ -147,7 +151,7 @@ the receipt.
 | 3 | `DOMAIN_AUTHORITY_REQUIRED` | `choose`: Nathan cancelled the dialog; hand back to him. |
 | 3 | `DOMAIN_PATH_REFUSED` | `choose`: the selection is a folder, link, hidden, nested or outside file. |
 | 75 | `TRANSIENT_NOT_STARTED` | A file-descriptor limit was reached before input was read or the chooser opened; retry after 1000 ms. |
-| 1 | `INTERNAL_PREPARATION` | `choose`: the dialog cannot open, or the local Drive folder cannot be read, in this session. |
+| 1 | `INTERNAL_PREPARATION` | `choose`: the dialog cannot open, or `CloudStorage`, an account folder or its `00 Inbox` cannot be inspected, in this session; no dialog opens for an uninspectable folder. |
 | 1 | `INTERNAL_UNEXPECTED` | Standard input cannot be read, for example a directory. |
 | 1 | `INTERNAL_RESULT_UNCHANGED` | An unexpected failure, or the result failed envelope validation. |
 

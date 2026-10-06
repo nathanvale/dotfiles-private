@@ -506,11 +506,17 @@ var chooser = null;
 function closeChooser() {
   chooser?.kill();
 }
-function isPhysicalDirectory(path) {
+var ABSENT_CODES = new Set(["ENOENT", "ENOTDIR"]);
+function probeFailure(error) {
+  if (isDescriptorLimit(error))
+    return "inputBusy";
+  return ABSENT_CODES.has(error.code ?? "") ? "absent" : "chooserUnavailable";
+}
+function probeDirectory(path) {
   try {
-    return lstatSync2(path).isDirectory() && realpathSync2(path) === path;
-  } catch {
-    return false;
+    return lstatSync2(path).isDirectory() && realpathSync2(path) === path ? "present" : "absent";
+  } catch (error) {
+    return probeFailure(error);
   }
 }
 function localInboxes(storage) {
@@ -518,9 +524,19 @@ function localInboxes(storage) {
   try {
     entries = readdirSync(storage);
   } catch (error) {
-    return error.code === "ENOENT" ? [] : "unavailable";
+    const failure = probeFailure(error);
+    return failure === "absent" ? [] : failure;
   }
-  return entries.filter((entry) => entry.startsWith(ACCOUNT_PREFIX) && entry.length > ACCOUNT_PREFIX.length).map((entry) => ({ account: entry.slice(ACCOUNT_PREFIX.length), inbox: join2(storage, entry, ...INBOX_PATH) })).filter((candidate) => isPhysicalDirectory(candidate.inbox)).sort((left, right) => left.inbox.localeCompare(right.inbox));
+  const inboxes = [];
+  for (const entry of entries.filter((name) => name.startsWith(ACCOUNT_PREFIX) && name.length > ACCOUNT_PREFIX.length)) {
+    const candidate = { account: entry.slice(ACCOUNT_PREFIX.length), inbox: join2(storage, entry, ...INBOX_PATH) };
+    const probe = probeDirectory(candidate.inbox);
+    if (probe === "present")
+      inboxes.push(candidate);
+    else if (probe !== "absent")
+      return probe;
+  }
+  return inboxes.sort((left, right) => left.inbox.localeCompare(right.inbox));
 }
 async function runChooser(startFolder) {
   try {
@@ -541,8 +557,11 @@ function acceptSelection(reply, inboxes) {
     return { kind: "selectionRefused" };
   const fileName = basename(path);
   const match = inboxes.find((candidate) => candidate.inbox === dirname(path));
-  if (match === undefined || fileName.startsWith(".") || !isPhysicalDirectory(match.inbox))
+  if (match === undefined || fileName.startsWith("."))
     return { kind: "selectionRefused" };
+  const probe = probeDirectory(match.inbox);
+  if (probe !== "present")
+    return { kind: probe === "absent" ? "selectionRefused" : probe };
   try {
     if (!lstatSync2(path).isFile())
       return { kind: "selectionRefused" };
@@ -557,8 +576,8 @@ async function chooseItem() {
     return { kind: "noInbox" };
   const storage = join2(home, "Library", "CloudStorage");
   const inboxes = localInboxes(storage);
-  if (inboxes === "unavailable")
-    return { kind: "chooserUnavailable" };
+  if (typeof inboxes === "string")
+    return { kind: inboxes };
   const [only, ...others] = inboxes;
   if (only === undefined)
     return { kind: "noInbox" };
@@ -587,6 +606,7 @@ var REDACTED_RECIPIENTS = new Set(["status", "evaluation"]);
 var INPUT_LIMIT_BYTES = 64 * 1024;
 var MESSAGES = {
   cancelled: "No file was selected.",
+  chooserBusy: "A file-descriptor limit was reached before the chooser opened; nothing was read.",
   chooserUnavailable: "The native chooser is unavailable in this session.",
   denied: "Request denied. Stage Manager must verify the private grant before retrying.",
   inputBusy: "A file-descriptor limit was reached before input was read; no receipt was touched.",
@@ -644,9 +664,7 @@ async function readInput() {
   }
   return { kind: "text", text: Buffer.concat(chunks).toString("utf8") };
 }
-var CHOOSE_BUSY = "A file-descriptor limit was reached before the chooser opened; nothing was read.";
-function refusalOutput(identity, key) {
-  const message = identity === "source-intake-dispatch.choose" && key === "inputBusy" ? CHOOSE_BUSY : MESSAGES[key];
+function refusalOutput(identity, key, message = MESSAGES[key]) {
   return { envelope: stationResult(identity, key, message), human: "" };
 }
 async function projectOutput() {
@@ -670,8 +688,10 @@ async function projectOutput() {
 async function chooseOutput() {
   const identity = "source-intake-dispatch.choose";
   if (descriptorLimitReached())
-    return refusalOutput(identity, "inputBusy");
+    return refusalOutput(identity, "inputBusy", MESSAGES.chooserBusy);
   const outcome = await chooseItem();
+  if (outcome.kind === "inputBusy")
+    return refusalOutput(identity, "inputBusy", MESSAGES.chooserBusy);
   if (outcome.kind !== "selected")
     return refusalOutput(identity, outcome.kind);
   const { fileName, localAccount } = outcome;

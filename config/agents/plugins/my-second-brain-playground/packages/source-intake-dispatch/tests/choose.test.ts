@@ -3,7 +3,7 @@
 // replies, cancels, fails or hangs, so no dialog opens. Every name and account is fictional. Expected envelopes,
 // stations, replies and start folders are test-owned literals, not production tables.
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DESCRIPTOR_LIMIT_PRELOAD, EXHAUST_DESCRIPTORS, RUNTIME, type ProcessResult } from "./fixtures/harness.ts"
@@ -208,6 +208,20 @@ describe("refusals before or around the dialog", () => {
 			expect(chooserArguments(fixture)).toBeNull()
 		}))
 
+	// Wrong behavior caught: an account folder this session may not inspect (a privacy or sandbox denial) reported as
+	// a missing inbox, which sends Nathan to start Google Drive instead of running choose where it may read the folder.
+	test("an account folder that cannot be inspected is the unavailable refusal, and no chooser opens", () =>
+		withFixture((fixture) => {
+			const account = join(fixture.storage, `GoogleDrive-${PERSONAL}`)
+			chmodSync(account, 0o000)
+			try {
+				expect(choose(fixture, ["--json"])).toEqual({ exitCode: 1, stderr: "", stdout: REFUSED.unavailable })
+				expect(chooserArguments(fixture)).toBeNull()
+			} finally {
+				chmodSync(account, 0o755)
+			}
+		}))
+
 	test("a cancelled dialog hands back to Nathan without a value", () =>
 		withFixture((fixture) => {
 			expect(choose(fixture, ["--json"], { mode: "cancel" })).toEqual({ exitCode: 3, stderr: "", stdout: REFUSED.cancelled })
@@ -240,6 +254,47 @@ describe("refusals before or around the dialog", () => {
 			expect(chooserArguments(fixture)).toBeNull()
 		}))
 })
+
+// The seam itself must fail closed, so a later production spawn shape can never open a real dialog under test. Every
+// probe is harmless if the guard regresses: `osascript -e "return 1"` opens no window, and the non-pinned osascript is
+// a fixture that only touches a marker.
+const SEAM_PROBE = `const dir = process.argv[2]
+const attempts = [
+	["object-form spawn", () => Bun.spawn({ cmd: ["/usr/bin/osascript", "-e", "return 1"], stdout: "ignore", stderr: "ignore" })],
+	["array-form spawnSync", () => Bun.spawnSync(["/usr/bin/osascript", "-e", "return 1"])],
+	["object-form spawnSync", () => Bun.spawnSync({ cmd: ["/usr/bin/osascript", "-e", "return 1"] })],
+	["non-pinned osascript", () => Bun.spawnSync([dir + "/osascript"])],
+]
+for (const [name, attempt] of attempts) {
+	try {
+		attempt()
+		console.log(name + ": ran")
+	} catch {
+		console.log(name + ": refused")
+	}
+}
+const redirected = Bun.spawn(["/usr/bin/osascript", "-e", "unused"], { stdout: "pipe" })
+console.log("array-form pinned spawn: " + (await new Response(redirected.stdout).text()))
+`
+
+test("the chooser seam redirects only the array-form pinned spawn and refuses every other chooser spawn", () =>
+	withFixture((fixture) => {
+		const marker = join(fixture.root, "non-pinned-ran")
+		writeFileSync(join(fixture.root, "osascript"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 })
+		writeFileSync(join(fixture.root, "seam-probe.ts"), SEAM_PROBE)
+		const probe = Bun.spawnSync({
+			cmd: [process.execPath, "--preload", CHOOSER_REDIRECT, join(fixture.root, "seam-probe.ts"), fixture.root],
+			cwd: fixture.root,
+			env: chooseEnv(fixture, { reply: "stand-in reply" }),
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: 5000,
+		})
+		expect(probe.stdout.toString()).toBe(
+			"object-form spawn: refused\narray-form spawnSync: refused\nobject-form spawnSync: refused\nnon-pinned osascript: refused\narray-form pinned spawn: stand-in reply\n",
+		)
+		expect(existsSync(marker)).toBe(false)
+	}))
 
 // Test-owned expected stations: cause|outcome|exit|class|retryable|repair action.
 const EXPECTED_STATIONS = [
@@ -302,6 +357,15 @@ function isAlive(pid: number): boolean {
 	}
 }
 
+/**
+ * True only while pid still runs the hanging stand-in (`exec sleep 30`), so cleanup never signals a reused pid running
+ * something else. macOS offers no process handle for this grandchild; the command check is the identity check.
+ */
+function isHangingStandIn(pid: number): boolean {
+	const ps = Bun.spawnSync({ cmd: ["/bin/ps", "-o", "command=", "-p", String(pid)], stdout: "pipe", stderr: "ignore" })
+	return ps.stdout.toString().trim() === "sleep 30"
+}
+
 async function waitUntil(condition: () => boolean, boundMs: number): Promise<boolean> {
 	const deadline = Date.now() + boundMs
 	while (!condition()) {
@@ -324,11 +388,11 @@ async function withOpenChooser(run: (child: Bun.Subprocess<"ignore", "pipe", "pi
 			expect(await waitUntil(() => existsSync(pidFile), READY_BOUND_MS)).toBe(true)
 			chooserPid = Number(readFileSync(pidFile, "utf8"))
 			expect(Number.isInteger(chooserPid) && chooserPid > 0).toBe(true)
-			expect(isAlive(chooserPid)).toBe(true)
+			expect(isAlive(chooserPid) && isHangingStandIn(chooserPid)).toBe(true)
 			await run(child, chooserPid)
 		} finally {
 			child.kill("SIGKILL")
-			if (chooserPid > 0 && isAlive(chooserPid)) process.kill(chooserPid, "SIGKILL")
+			if (chooserPid > 0 && isHangingStandIn(chooserPid)) process.kill(chooserPid, "SIGKILL")
 		}
 	})
 }
