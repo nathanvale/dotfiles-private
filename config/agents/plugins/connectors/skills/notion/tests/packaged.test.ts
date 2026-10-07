@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { afterAll, expect, test } from "bun:test";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { DENY_NETWORK, heldMcporter, ownedVault } from "../../../tests/fixtures/native-oauth.ts";
@@ -282,7 +283,7 @@ test("Notion reply references accept stable entities and reject nested credentia
 
 for (const failure of ["delayed-response", "post-send-drop"] as const) {
 	test.skipIf(!official)(`Notion ${failure} after send remains unknown and blocks replay on matching baselines`, async () => {
-		const machine = notionMachine(TOOLS, { timeoutMs: 200 });
+		const machine = notionMachine(TOOLS);
 		try {
 			machine.setFailure(failure);
 			const value = write();
@@ -310,13 +311,22 @@ for (const failure of ["delayed-response", "post-send-drop"] as const) {
 
 
 // Supporting output-contract proof isolates unknown valid JSON from MCPorter's
-// positively observed validation error. Native timeout/drop tests above own
-// the real provider transport and packaged-envelope boundary.
+// positively observed validation error. The packaged delayed-response and
+// post-send-drop tests above own the real provider transport and envelope.
+// Its one executable is written and first run at load, so the host's one-time
+// first-exec assessment stays outside the test budget; each case changes only
+// the data the executable prints.
+const outputRoot = mkdtempSync(path.join(os.tmpdir(), "connectors-notion-output-"));
+const output = path.join(outputRoot, "output.json");
+const binary = path.join(outputRoot, "output-fixture");
+writeFileSync(output, "{}\n");
+writeFileSync(binary, `#!/bin/sh\n/bin/cat '${output}'\nexit 1\n`, { mode: 0o700 });
+Bun.spawnSync([binary], { stdout: "ignore", stderr: "ignore" });
+afterAll(() => rmSync(outputRoot, { recursive: true, force: true }));
 test("Notion nonzero JSON without positive tool-error evidence remains indeterminate", async () => {
 	const bundle = createBundle();
 	const home = path.join(bundle.root, "home");mkdirSync(home);
 	const env = { HOME: home, PATH: process.env.PATH, XDG_STATE_HOME: path.join(bundle.root, "state") };
-	const binary = path.join(bundle.root, "output-fixture");
 	const caller = notionCaller(env, path.join(PLUGIN_ROOT, "skills"), "personal", { async selectMcporter() { return binary; }, internalCommand() { return []; } });
 	try {
 		const indeterminate = [
@@ -329,13 +339,13 @@ test("Notion nonzero JSON without positive tool-error evidence remains indetermi
 			{ isError: true, content: [{ type: "text", text: JSON.stringify({ message: "provider failure" }) }] },
 		];
 		for (const data of indeterminate) {
-			writeFileSync(binary, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(data)}'\nexit 1\n`, { mode: 0o700 });
+			writeFileSync(output, `${JSON.stringify(data)}\n`);
 			expect(await caller.call({ tool: "notion-update-page", args: {} })).toEqual({ ok: false, sent: true, cause: "transport-failed" });
 		}
 		const validation = { status: 400, code: "validation_error", message: "fixture validation rejection" };
 		const qualified = [validation, { isError: true, structuredContent: validation }, { isError: true, content: [{ type: "text", text: JSON.stringify(validation) }] }];
 		for (const data of qualified) {
-			writeFileSync(binary, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(data)}'\nexit 1\n`, { mode: 0o700 });
+			writeFileSync(output, `${JSON.stringify(data)}\n`);
 			expect(await caller.call({ tool: "notion-update-page", args: {} })).toEqual({ ok: false, sent: true, cause: "tool-error", data });
 		}
 	} finally { bundle.dispose(); }
