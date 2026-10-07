@@ -37,7 +37,7 @@ a set of values into the environment.
 | Script | Purpose |
 |--------|---------|
 | `bin/dotfiles/symlinks/symlinks_manage.sh` | Manage all configuration symlinks |
-| `config/brew/Brewfile` | Profile-aware package install/update via `./setup.sh` or `brew bundle` (see `AGENTS.md` Routes) |
+| `config/brew/Brewfile` | Profile-aware package install/update via `./setup.sh` or `brew bundle` (see [package instructions](../../CODING_STANDARDS.md#packages)) |
 | `config/macos/defaults.common.sh` | Configure macOS user-domain preferences |
 | `bin/tmux/tx` | Universal tmux session launcher (replaces 20+ project configs) |
 | `bin/colour_log.sh` | Standardized logging utilities (source in all scripts) |
