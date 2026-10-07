@@ -80,13 +80,13 @@ path remains valid when a caller has not activated the managed tree.
 | unqualified | `bin/superwhisper-default` | `bin/superwhisper-default` | Source: self. The script documents a Karabiner trigger, but the current tracked route is unverified. |
 | unqualified | `bin/superwhisper-email` | `bin/superwhisper-email` | Source: self. The script documents a Karabiner trigger; the current tracked route is unverified. |
 | public | `bin/superwhisper-email-complete` | `bin/superwhisper-email-complete` | Source: self. Route: `config/macrowhisper/macrowhisper.json:78`; no dedicated test is recorded. |
-| public | `bin/teams-reply` | `teams-reply <search-text> <file\|->` | Source: self plus `bin/lib/teams-automation.sh`. Owner doc: `config/agents/skills/personal/teams/SKILL.md:297`; no dedicated test is recorded. |
-| public | `bin/teams-send` | `teams-send <conversation> <file\|-> [--send]` | Source: self plus `bin/lib/teams-automation.sh`. Owner doc: `config/agents/skills/personal/teams/SKILL.md:297`; no dedicated test is recorded. |
+| public | `bin/teams-reply` | `teams-reply <search-text> <file\|->` | Source: self plus `bin/lib/teams-automation.sh`. Owner doc: `config/agents/plugins/personal/library/teams/SKILL.md:297`; no dedicated test is recorded. |
+| public | `bin/teams-send` | `teams-send <conversation> <file\|-> [--send]` | Source: self plus `bin/lib/teams-automation.sh`. Owner doc: `config/agents/plugins/personal/library/teams/SKILL.md:297`; no dedicated test is recorded. |
 | unqualified | `bin/test-plugin-without-symlink.sh` | `bin/test-plugin-without-symlink.sh <setup\|restore\|status>` | Source: self. It is a manual, effectful test with hard-coded machine paths; current tracked caller and covering route are unverified. |
 | public | `bin/tode-diff` | `tode-diff BEFORE AFTER` | Source: self. Owner doc: `docs/dev-shortcuts.md:52`; covering route is `git difftool` through Herdr. |
 | unqualified | `bin/trimmy` | `trimmy [arguments]` | Source: `/Applications/Trimmy.app/Contents/Helpers/TrimmyCLI` through the wrapper. Current tracked caller and dedicated covering test are unverified. |
 | public | `bin/vault` | `vault <subcommand>` | Source owner: `apps/vault` through the wrapper. Owner doc: `VAULT_SYSTEM.md:18`; route: `config/tmuxinator/fullstack.yml:35`. |
-| public | `bin/with-one-password-token` | `with-one-password-token <check\|op\|inject\|inject-stdin> ...` | Source: self. Owner docs: `.claude/skills/dotfiles/references/sensitive-material-access.md:51` and `config/agents/skills/personal/one-password/SKILL.md`; covering command: `bin/test/with-one-password-token-test.sh`. |
+| public | `bin/with-one-password-token` | `with-one-password-token <check\|op\|inject\|inject-stdin> ...` | Source: self. Owner docs: `.claude/skills/dotfiles/references/sensitive-material-access.md:51` and `config/agents/plugins/personal/library/one-password/SKILL.md`; covering command: `bin/test/with-one-password-token-test.sh`. |
 | unqualified | `bin/worktree-recency` | `worktree-recency` | Source: self. It emits Git worktree recency rows; current tracked caller and dedicated covering test are unverified. |
 
 ## Direct production commands and helpers

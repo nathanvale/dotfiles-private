@@ -58,11 +58,11 @@ function entryCount(root: string): number {
 	return count
 }
 
-function makeFixture() {
+function makeFixture(repositoryPath = 'code/dotfiles') {
 	const fixture = mkdtempSync(join(tmpdir(), 'agent-skills-inventory-'))
 	fixtures.push(fixture)
 	const home = join(fixture, 'home')
-	const dotfiles = join(home, 'code', 'dotfiles')
+	const dotfiles = join(home, repositoryPath)
 	const legacySource = join(dotfiles, '.agents', 'skills')
 	const canonicalLockSource = join(dotfiles, 'config', 'agents', 'skills')
 	const personalSource = join(dotfiles, 'config', 'agents', 'skills', 'personal')
@@ -87,22 +87,6 @@ function makeFixture() {
 	]) {
 		mkdirSync(path, { recursive: true })
 	}
-
-	skill(join(personalSource, 'personal-one', 'SKILL.md'), 'personal-one')
-	symlinkSync(join(personalSource, 'personal-one'), join(agents, 'personal-one'))
-	symlinkSync(join(personalSource, 'personal-one'), join(claude, 'personal-one'))
-	skill(join(personalSource, 'disabled-one', 'SKILL.md'), 'disabled-one')
-	symlinkSync(join(personalSource, 'disabled-one'), join(agents, 'disabled-one'))
-	symlinkSync(join(personalSource, 'disabled-one'), join(claude, 'disabled-one'))
-	skill(join(personalSource, 'codex-disabled-one', 'SKILL.md'), 'codex-disabled-one')
-	symlinkSync(
-		join(personalSource, 'codex-disabled-one'),
-		join(agents, 'codex-disabled-one'),
-	)
-	symlinkSync(
-		join(personalSource, 'codex-disabled-one'),
-		join(claude, 'codex-disabled-one'),
-	)
 
 	const lockedStaging = join(fixture, 'locked-staging')
 	skill(join(lockedStaging, 'SKILL.md'), 'locked-one')
@@ -148,17 +132,6 @@ function makeFixture() {
 		join(dotfiles, 'config', 'agents', 'skills', 'topology.json'),
 		JSON.stringify({
 			schemaVersion: 1,
-			personal: {
-				'disabled-one': {
-					addresses: ['agents', 'claude'],
-					disabledAddresses: ['claude'],
-				},
-				'codex-disabled-one': {
-					addresses: ['agents', 'claude'],
-					disabledHarnesses: ['codex'],
-				},
-				'personal-one': { addresses: ['agents', 'claude'] },
-			},
 			thirdParty: {
 				'locked-one': {
 					owner: 'fixture/skills',
@@ -174,12 +147,14 @@ function makeFixture() {
 	)
 	write(
 		join(dotfiles, 'config', 'agents', 'claude', 'settings.json'),
-		JSON.stringify({ skillOverrides: { 'disabled-one': 'off' } }),
+		JSON.stringify({ skillOverrides: {} }),
 	)
 	write(
 		join(home, '.codex', 'config.toml'),
-		`[[skills.config]]\npath = "${join(agents, 'codex-disabled-one', 'SKILL.md')}"\nenabled = false\n`,
+		'',
 	)
+
+	write(join(dotfiles, 'bin', 'agent-skills-inventory'), readFileSync(subject, 'utf8'))
 
 	return {
 		agents,
@@ -194,7 +169,7 @@ function makeFixture() {
 	}
 }
 
-function makeProtectedBaselineFixture() {
+function makeProtectedSnapshotFixture() {
 	const fixture = makeFixture()
 	const skillsRoot = join(fixture.home, '.codex', 'skills')
 	const cacheRoot = join(fixture.home, '.codex', 'plugins', 'cache')
@@ -216,7 +191,7 @@ function makeProtectedBaselineFixture() {
 		join(protectedSkillsOracle, 'system-alias'),
 	)
 
-	const protectedBaseline = {
+	const protectedSnapshot = {
 		algorithm: 'git-tree-sha1',
 		version: 1,
 		roots: [
@@ -233,18 +208,7 @@ function makeProtectedBaselineFixture() {
 			},
 		],
 	}
-	const topologyPath = join(
-		fixture.dotfiles,
-		'config',
-		'agents',
-		'skills',
-		'topology.json',
-	)
-	const topology = JSON.parse(readFileSync(topologyPath, 'utf8'))
-	topology.protectedHarness = protectedBaseline
-	writeFileSync(topologyPath, JSON.stringify(topology))
-
-	return { ...fixture, protectedBaseline, topologyPath }
+	return { ...fixture, protectedSnapshot }
 }
 
 function declareProjectOnlyDotfiles(fixture: ReturnType<typeof makeFixture>) {
@@ -273,13 +237,13 @@ function declareProjectOnlyDotfiles(fixture: ReturnType<typeof makeFixture>) {
 }
 
 function run(home: string, ...args: string[]) {
-	return Bun.spawnSync([subject, ...args], {
-		env: { ...process.env, HOME: home },
+	return Bun.spawnSync(['python3', join(home, 'code', 'dotfiles', 'bin', 'agent-skills-inventory'), ...args], {
+		env: { ...process.env, HOME: home, XDG_STATE_HOME: '' },
 	})
 }
 
 describe('agent-skills-inventory public process', () => {
-	test('reconciles accepted personal, third-party, and Codex-owned entries', () => {
+	test('reconciles reviewed third-party and Codex-owned entries', () => {
 		const fixture = makeFixture()
 		const result = run(fixture.home, '--json')
 		expect(result.stderr.toString()).toBe('')
@@ -292,7 +256,7 @@ describe('agent-skills-inventory public process', () => {
 		expect(report.schema_version).toBe(1)
 		expect(report.status).toBe('ok')
 		expect(report.issues).toEqual([])
-		expect(report.entries).toHaveLength(11)
+		expect(report.entries).toHaveLength(5)
 		expect(report.lock_path).toBe(
 			realpathSync(join(fixture.canonicalLockSource, '.skill-lock.json')),
 	)
@@ -304,13 +268,6 @@ describe('agent-skills-inventory public process', () => {
 			]),
 		)
 		expect(byAddressAndName.has('dotfiles:.skill-lock.json')).toBe(false)
-		expect(byAddressAndName.get('agents:personal-one')).toMatchObject({
-			content_agreement: 'match',
-			filesystem_kind: 'symlink',
-			provenance: 'personal-transitional',
-			source_owner: 'dotfiles',
-			source_path: realpathSync(join(fixture.personalSource, 'personal-one')),
-		})
 		expect(byAddressAndName.get('claude:locked-one')).toMatchObject({
 			content_agreement: 'match',
 			filesystem_kind: 'symlink',
@@ -325,18 +282,6 @@ describe('agent-skills-inventory public process', () => {
 			source_path: realpathSync(
 				join(fixture.thirdPartySource, 'fixture', 'skills', 'installed-one'),
 			),
-		})
-		expect(byAddressAndName.get('claude:disabled-one')).toMatchObject({
-			activation: 'disabled',
-			content_agreement: 'match',
-			provenance: 'personal-transitional',
-		})
-		expect(byAddressAndName.get('agents:codex-disabled-one')).toMatchObject({
-			activation: 'enabled',
-			harness_activation: {
-				agents: 'enabled',
-				codex: 'disabled',
-			},
 		})
 		expect(byAddressAndName.get('codex:.system')).toMatchObject({
 			content_agreement: 'owned',
@@ -503,10 +448,7 @@ describe('agent-skills-inventory public process', () => {
 		)
 		symlinkSync(join(fixture.home, 'missing-skill'), join(fixture.claude, 'dangling-one'))
 		write(join(fixture.agents, 'locked-one', 'SKILL.md'), 'changed\n')
-		write(
-			join(fixture.home, '.codex', 'config.toml'),
-			`[[skills.config]]\npath = "${join(fixture.agents, 'personal-one', 'SKILL.md')}"\nenabled = false\n`,
-		)
+
 
 		const result = run(fixture.home, '--json')
 		expect(result.stderr.toString()).toBe('')
@@ -518,9 +460,7 @@ describe('agent-skills-inventory public process', () => {
 				'content-mismatch',
 				'dangling-symlink',
 				'legacy-source',
-				'missing-disabled-harness-state',
 				'retired-present',
-				'undeclared-disabled-harness',
 			]),
 		)
 
@@ -530,115 +470,96 @@ describe('agent-skills-inventory public process', () => {
 		expect(human.stdout.toString()).toContain('legacy-source')
 	})
 
-	test('reports the accepted protected Harness baseline and detects mutation', () => {
-		const fixture = makeProtectedBaselineFixture()
+	test('reports operation snapshots without enforcing permanent baselines', () => {
+		const fixture = makeProtectedSnapshotFixture()
 		const baseline = run(fixture.home, '--json')
 		expect(baseline.stderr.toString()).toBe('')
-		if (baseline.exitCode !== 0) {
-			const failedReport = JSON.parse(baseline.stdout.toString())
-			throw new Error(JSON.stringify(failedReport.issues))
-		}
+		expect(baseline.exitCode).toBe(0)
 		const report = JSON.parse(baseline.stdout.toString())
-		expect(report.protected_harness).toEqual(fixture.protectedBaseline)
-		expect(report.protected_harness.issues).toBeUndefined()
+		expect(report.protected_harness).toEqual(fixture.protectedSnapshot)
 
-		write(
-			join(fixture.home, '.codex', 'skills', '.system', 'launch-version.txt'),
-			'new Codex build\n',
-		)
-		const harnessOwnedMutation = run(fixture.home, '--json')
-		expect(harnessOwnedMutation.stderr.toString()).toBe('')
-		expect(harnessOwnedMutation.exitCode).toBe(0)
-		const harnessOwnedReport = JSON.parse(
-			harnessOwnedMutation.stdout.toString(),
-		)
-		expect(harnessOwnedReport.protected_harness).toEqual(
-			fixture.protectedBaseline,
-		)
+		write(join(fixture.codex, '.system', 'launch-version.txt'), 'new Codex build\n')
+		const systemChanged = run(fixture.home, '--json')
+		expect(systemChanged.exitCode).toBe(0)
+		expect(JSON.parse(systemChanged.stdout.toString()).protected_harness).toEqual(fixture.protectedSnapshot)
 
-		write(join(fixture.home, '.codex', 'skills', 'baseline-mutation.txt'), 'mutation\n')
+		write(join(fixture.codex, 'baseline-mutation.txt'), 'mutation\n')
 		const mutated = run(fixture.home, '--json')
-		expect(mutated.exitCode).toBe(1)
-		const mutatedReport = JSON.parse(mutated.stdout.toString())
-		expect(mutatedReport.issues).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					address: 'protected-harness',
-					code: 'protected-entry-count-drift',
-					name: '.codex/skills',
-				}),
-				expect.objectContaining({
-					address: 'protected-harness',
-					code: 'protected-tree-hash-drift',
-					name: '.codex/skills',
-				}),
-			]),
-		)
+		expect(mutated.exitCode).toBe(0)
+		const changed = JSON.parse(mutated.stdout.toString())
+		expect(changed.issues).toEqual([])
+		expect(changed.protected_harness.roots[0].entryCount).toBe(fixture.protectedSnapshot.roots[0].entryCount + 1)
+		expect(changed.protected_harness.roots[0].gitTreeSha1).not.toBe(fixture.protectedSnapshot.roots[0].gitTreeSha1)
 
-		rmSync(join(fixture.home, '.codex', 'plugins', 'cache'), {
-			recursive: true,
-			force: true,
-		})
+		rmSync(join(fixture.home, '.codex', 'plugins', 'cache'), { recursive: true })
+		rmSync(join(fixture.codex, 'system-alias'))
+		rmSync(join(fixture.codex, '.system'), { recursive: true })
 		const missing = run(fixture.home, '--json')
-		expect(missing.exitCode).toBe(1)
-		const missingReport = JSON.parse(missing.stdout.toString())
-		expect(missingReport.issues).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					address: 'protected-harness',
-					code: 'protected-root-missing',
-					name: '.codex/plugins/cache',
-				}),
-			]),
-		)
+		expect(missing.exitCode).toBe(0)
+		const absent = JSON.parse(missing.stdout.toString())
+		expect(absent.issues).toEqual([])
+		expect(absent.protected_harness.roots[1]).toEqual({ path: '.codex/plugins/cache', entryCount: null, gitTreeSha1: null })
 	})
 
-	test('rejects unsafe protected Harness exclusions', () => {
-		for (const invalid of [
-			{
-				excludedTopLevelEntries: ['../skills'],
-				expectedName: '.codex/skills',
-				rootIndex: 0,
-			},
-			{
-				excludedTopLevelEntries: ['.system', '.system'],
-				expectedName: '.codex/skills',
-				rootIndex: 0,
-			},
-			{
-				excludedTopLevelEntries: ['.system', {}],
-				expectedName: '.codex/skills',
-				rootIndex: 0,
-			},
-			{
-				excludedTopLevelEntries: ['personal'],
-				expectedName: '.codex/skills',
-				rootIndex: 0,
-			},
-			{
-				excludedTopLevelEntries: ['.system'],
-				expectedName: '.codex/plugins/cache',
-				rootIndex: 1,
-			},
-		]) {
-			const fixture = makeProtectedBaselineFixture()
-			const topology = JSON.parse(readFileSync(fixture.topologyPath, 'utf8'))
-			topology.protectedHarness.roots[
-				invalid.rootIndex
-			].excludedTopLevelEntries = invalid.excludedTopLevelEntries
-			writeFileSync(fixture.topologyPath, JSON.stringify(topology))
+	test('reads the candidate repository beside the executable rather than the home checkout', () => {
+		const fixture = makeFixture('isolated-candidate')
+		const result = Bun.spawnSync(['python3', join(fixture.dotfiles, 'bin', 'agent-skills-inventory'), '--json'], { env: { ...process.env, HOME: fixture.home, XDG_STATE_HOME: '' } })
+		expect(result.exitCode).toBe(0)
+		expect(result.stderr.toString()).toBe('')
+		const report = JSON.parse(result.stdout.toString())
+		expect(report.topology_path).toBe(realpathSync(join(fixture.dotfiles, 'config', 'agents', 'skills', 'topology.json')))
+		expect(report.entries).toHaveLength(5)
+		expect(report.issues).toEqual([])
+	})
 
-			const result = run(fixture.home, '--json')
-			expect(result.stderr.toString()).toBe('')
-			expect(result.exitCode).toBe(1)
-			const report = JSON.parse(result.stdout.toString())
-			expect(report.issues).toContainEqual(
-				expect.objectContaining({
-					address: 'protected-harness',
-					code: 'protected-manifest-invalid',
-					name: invalid.expectedName,
-				}),
-			)
+	test('infers native Matt ownership from the configured XDG state lock', () => {
+		const fixture = makeFixture()
+		const stateHome = join(fixture.home, 'isolated-state')
+		const lockPath = join(stateHome, 'skills', '.skill-lock.json')
+		write(lockPath, JSON.stringify({ version: 3, skills: {
+			'xdg-matt': { source: 'mattpocock/skills', sourceType: 'github' },
+		} }))
+		skill(join(fixture.agents, 'xdg-matt', 'SKILL.md'), 'xdg-matt')
+		symlinkSync(join(fixture.agents, 'xdg-matt'), join(fixture.codex, 'xdg-matt'))
+		const result = Bun.spawnSync(['python3', join(fixture.dotfiles, 'bin', 'agent-skills-inventory'), '--json'], { env: { ...process.env, HOME: fixture.home, XDG_STATE_HOME: stateHome } })
+		expect(result.stderr.toString()).toBe('')
+		expect(result.exitCode).toBe(0)
+		const report = JSON.parse(result.stdout.toString())
+		expect(report.lock_path).toBe(realpathSync(lockPath))
+		expect(report.issues).toEqual([])
+		const native = report.entries.filter((row: { name: string }) => row.name === 'xdg-matt')
+		expect(native).toHaveLength(2)
+		expect(native.map((row: { address: string }) => row.address)).toEqual(['agents', 'codex'])
+		for (const row of native) {
+			expect(row).toMatchObject({ provenance: 'third-party-installer-owned', source_owner: 'mattpocock/skills', content_agreement: 'installer-owned' })
 		}
+	})
+
+	test('accepts native Matt directories and links from machine provenance without declarations or hashes', () => {
+		const fixture = makeFixture()
+		rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+		write(join(fixture.home, '.agents', '.skill-lock.json'), JSON.stringify({ skills: {
+			'native-matt': { source: 'mattpocock/skills', sourceType: 'github' },
+			'uncategorized': { source: 'other/skills' },
+		} }))
+		skill(join(fixture.agents, 'native-matt', 'SKILL.md'), 'native-matt')
+		symlinkSync(join(fixture.agents, 'native-matt'), join(fixture.claude, 'native-matt'))
+		symlinkSync(join(fixture.agents, 'native-matt'), join(fixture.codex, 'native-matt'))
+		const result = run(fixture.home, '--json')
+		expect(result.stderr.toString()).toBe('')
+		expect(result.exitCode).toBe(0)
+		const report = JSON.parse(result.stdout.toString())
+		expect(report.issues).toEqual([])
+		const native = report.entries.filter((row: { name: string }) => row.name === 'native-matt')
+		expect(native).toHaveLength(3)
+		expect(native.map((row: { address: string }) => row.address)).toEqual(['agents', 'claude', 'codex'])
+		for (const row of native) {
+			expect(row).toMatchObject({ provenance: 'third-party-installer-owned', source_owner: 'mattpocock/skills', content_agreement: 'installer-owned', lock_hash: null })
+			expect(row.observed_git_tree_sha1).toMatch(/^[a-f0-9]{40}$/)
+		}
+		expect(native[0].filesystem_kind).toBe('directory')
+		expect(native[1].filesystem_kind).toBe('symlink')
+		expect(report.topology_path).toBe(realpathSync(join(fixture.dotfiles, 'config', 'agents', 'skills', 'topology.json')))
+		expect(report.lock_path).toBe(realpathSync(join(fixture.home, '.agents', '.skill-lock.json')))
 	})
 })

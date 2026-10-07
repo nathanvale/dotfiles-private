@@ -1,0 +1,18 @@
+{
+	"name": "@local/xero-skill",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"quarter-ledger": "./dist/quarter-ledger.js"
+	},
+	"scripts": {
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test scripts/quarter-ledger.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"build:bundle": "NODE_ENV=production bun build --target bun --minify-whitespace scripts/quarter-ledger.ts --outdir dist"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

@@ -4,11 +4,11 @@ Recover access to a selected session after its rollout moved to Scratch.
 
 ## Find a session
 
-1. Use the [session-picker skill](../../config/agents/skills/personal/session-picker/SKILL.md).
+1. Use the [session-picker skill](../../config/agents/plugins/personal/library/session-picker/SKILL.md).
 2. Search the expanded private snapshot by title or full session ID:
 
    ```sh
-   bun run "$HOME/code/dotfiles/config/agents/skills/personal/session-picker/scripts/archived-sessions.ts" search --query 'SEARCH TERMS' --limit 12 --json
+   bun run "$HOME/code/dotfiles/config/agents/plugins/personal/library/session-picker/scripts/archived-sessions.ts" search --query 'SEARCH TERMS' --limit 12 --json
    ```
 
 3. Read the [Scratch session register](/Volumes/Scratch/Codex-History/session-register.md)
