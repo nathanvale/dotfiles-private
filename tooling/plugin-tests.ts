@@ -10,18 +10,18 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 const pluginsRoot = path.join(repoRoot, "config/agents/plugins");
 const SKIP = new Set(["proof"]);
 
-export interface PluginStep {
+export interface PluginCheckStep {
 	plugin: string;
 	script: "test" | "typecheck";
 }
 
-export function discoverPluginSteps(): PluginStep[] {
+export function discoverPluginCheckSteps(): PluginCheckStep[] {
 	const pluginNames = readdirSync(pluginsRoot, { withFileTypes: true })
 		.filter((entry) => entry.isDirectory() && !SKIP.has(entry.name))
 		.map((entry) => entry.name)
 		.sort();
 
-	const steps: PluginStep[] = [];
+	const steps: PluginCheckStep[] = [];
 	for (const plugin of pluginNames) {
 		const manifestPath = path.join(pluginsRoot, plugin, "package.json");
 		if (!existsSync(manifestPath)) continue;
@@ -33,7 +33,7 @@ export function discoverPluginSteps(): PluginStep[] {
 	return steps;
 }
 
-function runStep(step: PluginStep): boolean {
+function runStep(step: PluginCheckStep): boolean {
 	console.log(`\n> bun run ${step.script}  (config/agents/plugins/${step.plugin})`);
 	const result = Bun.spawnSync(["bun", "run", step.script], {
 		cwd: path.join(pluginsRoot, step.plugin),
@@ -44,8 +44,8 @@ function runStep(step: PluginStep): boolean {
 }
 
 if (import.meta.main) {
-	const steps = discoverPluginSteps();
-	const failures: PluginStep[] = [];
+	const steps = discoverPluginCheckSteps();
+	const failures: PluginCheckStep[] = [];
 	for (const step of steps) {
 		if (!runStep(step)) failures.push(step);
 	}

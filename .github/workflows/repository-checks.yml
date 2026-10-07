@@ -13,7 +13,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  repository-checks:
+  # `bun run check` is `check:core` plus `test:plugins`. This job runs
+  # `check:core` and the shell regressions; `plugin-tests` runs each plugin's
+  # test and typecheck routes as matrix legs, and `check:core` fails when that
+  # matrix stops matching the plugins `test:plugins` discovers.
+  repository-gate:
     runs-on: macos-15
     timeout-minutes: 30
     env:
@@ -29,8 +33,107 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+      - name: Validate the event's immutable comparison base
+        shell: bash
+        run: |
+          if [[ ! "$COMPARISON_BASE" =~ ^[0-9a-f]{40}$ ]] || [[ "$COMPARISON_BASE" == 0000000000000000000000000000000000000000 ]]; then
+            echo "A nonzero event commit is required for comparison." >&2
+            exit 1
+          fi
+          git cat-file -e "${COMPARISON_BASE}^{commit}"
+      - name: Prepare root and independently locked dependencies
+        id: preparation
+        run: bun run prepare:check -- --receipt-dir "$RUNNER_TEMP/dotfiles-preparation"
+      - name: Run the repository gate except plugin test suites
+        run: bun run check:core
+      - name: Check the audit's public shell processes
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          failures=0
+          failed_suites=()
+          suites=(
+            bin/test/agent-lane-audit-test.sh
+            bin/test/agent-lane-launch-test.sh
+            bin/test/agent-lane-receipt-test.sh
+            bin/test/agent-lane-zsh-test.sh
+            bin/test/atuin-agent-history-test.sh
+            bin/test/bun-core-install-test.sh
+            bin/test/claude-native-install-test.sh
+            bin/test/cloudflare-access-headers-test.sh
+            bin/test/codex-ambient-credential-boundary-test.sh
+            bin/test/codex-managed-install-test.sh
+            bin/test/generic-credential-consumer-test.sh
+            bin/test/ghh-test.sh
+            bin/test/git-effective-behavior-test.sh
+            bin/test/lm-studio-ensure-test.sh
+            bin/test/profile-link-parity-test.sh
+            bin/test/setup-completion-test.sh
+            bin/test/setup-state-recovery-test.sh
+            bin/test/symlinks-manage-test.sh
+            bin/test/symlinks-real-directory-test.sh
+            bin/test/toolchain-apply-test.sh
+            bin/test/toolchain-bootstrap-test.sh
+            bin/test/toolchain-status-test.sh
+            bin/test/with-one-password-token-test.sh
+            bin/test/work-profile-slug-parity-test.sh
+            bin/test/zsh-effective-behavior-test.sh
+            bin/test/zsh-startup-silence-test.sh
+            bin/test/zsh-work-profile-boundary-test.sh
+          )
+          for suite in "${suites[@]}"; do
+            if bash "$suite"; then
+              :
+            else
+              status=$?
+              failures=$((failures + 1))
+              failed_suites+=("$suite (exit $status)")
+            fi
+          done
+          if (( failures > 0 )); then
+            printf 'Shell regression suite failures (%d):\n' "$failures" >&2
+            printf '  %s\n' "${failed_suites[@]}" >&2
+            exit 1
+          fi
+      - name: Compare root and runtime Fallow against the event commit
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        shell: bash
+        run: |
+          bun run --silent quality:fallow --changed-since "$COMPARISON_BASE"
+          bun run --silent quality:fallow:runtime -- --base "$COMPARISON_BASE"
+
+  plugin-tests:
+    name: plugin-tests (${{ matrix.plugin }} ${{ matrix.shard }}/${{ matrix.shards }})
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - plugin: connectors
+            shard: 1
+            shards: 1
+          - plugin: my-second-brain-playground
+            shard: 1
+            shards: 2
+          - plugin: my-second-brain-playground
+            shard: 2
+            shards: 2
+    env:
+      CI: "true"
+    steps:
+      - name: Check out the candidate and comparison history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the repository's Bun version
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
       - name: Prepare the pinned Bun CLI template
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        if: ${{ matrix.plugin == 'my-second-brain-playground' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         shell: bash
         env:
           TEMPLATE_DEPLOY_KEY: ${{ secrets.CLI_TEMPLATE_DEPLOY_KEY }}
@@ -57,18 +160,11 @@ jobs:
           git -C "$template_root" checkout --quiet --detach FETCH_HEAD
           test "$(git -C "$template_root" rev-parse HEAD)" = "$TEMPLATE_REVISION"
           printf 'BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT=%s\n' "$template_root" >> "$GITHUB_ENV"
-      - name: Validate the event's immutable comparison base
-        shell: bash
-        run: |
-          if [[ ! "$COMPARISON_BASE" =~ ^[0-9a-f]{40}$ ]] || [[ "$COMPARISON_BASE" == 0000000000000000000000000000000000000000 ]]; then
-            echo "A nonzero event commit is required for comparison." >&2
-            exit 1
-          fi
-          git cat-file -e "${COMPARISON_BASE}^{commit}"
       - name: Prepare root and independently locked dependencies
         id: preparation
         run: bun run prepare:check -- --receipt-dir "$RUNNER_TEMP/dotfiles-preparation"
       - name: Prepare the official MCPorter process fixture
+        if: ${{ matrix.plugin == 'connectors' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -91,7 +187,7 @@ jobs:
             "$fixture_dir/mcporter" | shasum -a 256 -c -
           printf 'CONNECTORS_OFFICIAL_RELEASE_FIXTURE=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
       - name: Prepare the signed official mise fixture for Connectors setup
-        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' && matrix.plugin == 'connectors' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -121,7 +217,7 @@ jobs:
           printf 'CONNECTORS_TEST_MISE_BINARY=%s\n' "$mise_binary" >> "$GITHUB_ENV"
           printf 'CONNECTORS_TEST_MISE_RELEASE_DIR=%s\n' "$fixture_root/downloads" >> "$GITHUB_ENV"
       - name: Prepare the signed official op fixture for compiled setup
-        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' && matrix.plugin == 'connectors' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -142,6 +238,33 @@ jobs:
           grep -Fq 'source=Notarized Developer ID' <<< "$assessment"
           grep -Fq 'origin=Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$assessment"
           printf 'CONNECTORS_TEST_OP_PACKAGE=%s\n' "$package" >> "$GITHUB_ENV"
-      - name: Run the complete repository gate in concurrent lanes
+      - name: Run this shard of the plugin's tests
         if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
-        run: bun run check:ci
+        working-directory: config/agents/plugins/${{ matrix.plugin }}
+        env:
+          PLUGIN_TEST_SHARD: --shard=${{ matrix.shard }}/${{ matrix.shards }}
+        run: bun run test
+      - name: Typecheck the plugin once
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' && matrix.shard == 1 }}
+        working-directory: config/agents/plugins/${{ matrix.plugin }}
+        run: bun run typecheck
+
+  # The single required result. It runs even when a job above fails or is
+  # cancelled, and passes only when every job and every matrix leg succeeded.
+  repository-checks:
+    if: ${{ always() }}
+    needs: [repository-gate, plugin-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every repository check job to succeed
+        shell: bash
+        env:
+          GATE_RESULT: ${{ needs.repository-gate.result }}
+          PLUGIN_TESTS_RESULT: ${{ needs.plugin-tests.result }}
+        run: |
+          printf 'repository-gate: %s\nplugin-tests: %s\n' "$GATE_RESULT" "$PLUGIN_TESTS_RESULT"
+          if [[ "$GATE_RESULT" != success || "$PLUGIN_TESTS_RESULT" != success ]]; then
+            echo "Every repository check job must succeed." >&2
+            exit 1
+          fi
