@@ -1,0 +1,25 @@
+{
+	"name": "bitbucket-scripts",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"bb": "./dist/cli.js"
+	},
+	"setup": {
+		"pathBin": {
+			"bb": "./dist/cli.js"
+		}
+	},
+	"scripts": {
+		"bb": "bun --no-install dist/cli.js",
+		"generate-openapi-baseline": "bun --no-install dist/generate-openapi-baseline.js",
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test src/*.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"build:bundle": "NODE_ENV=production bun build --target bun --minify-whitespace src/cli.ts src/generate-openapi-baseline.ts --outdir dist"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

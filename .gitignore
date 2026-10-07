@@ -33,12 +33,12 @@ config/google-chrome-devtools
 
 node_modules/
 dist/
-!config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/
-config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/*
-!config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/xero-history.js
-!config/agents/plugins/personal/skills/imazing-archive/helper/dist/
-config/agents/plugins/personal/skills/imazing-archive/helper/dist/*
-!config/agents/plugins/personal/skills/imazing-archive/helper/dist/imazing-archive.js
+!config/agents/plugins/personal/library/xero-cash-coding/helper/dist/
+config/agents/plugins/personal/library/xero-cash-coding/helper/dist/*
+!config/agents/plugins/personal/library/xero-cash-coding/helper/dist/xero-history.js
+!config/agents/plugins/personal/library/imazing-archive/helper/dist/
+config/agents/plugins/personal/library/imazing-archive/helper/dist/*
+!config/agents/plugins/personal/library/imazing-archive/helper/dist/imazing-archive.js
 
 # Karabiner automatic backups (generated)
 config/karabiner/automatic_backups/
@@ -140,3 +140,18 @@ config/bead-me-up-scotty/
 config/bead-me-up-scotty/config.json
 config/bead-me-up-scotty/config.json
 config/bead-me-up-scotty/config.json
+
+# Personal plugin executable payloads, built from root-owned workspaces.
+!config/agents/plugins/personal/library/bitbucket/dist/
+!config/agents/plugins/personal/library/bitbucket/dist/*.js
+!config/agents/plugins/personal/library/classic-cinema/dist/
+!config/agents/plugins/personal/library/classic-cinema/dist/*.js
+!config/agents/plugins/personal/library/session-recovery/dist/
+!config/agents/plugins/personal/library/session-recovery/dist/*.js
+!config/agents/plugins/personal/library/test-runner/dist/
+!config/agents/plugins/personal/library/test-runner/dist/*.js
+!config/agents/plugins/personal/library/worktree/dist/
+!config/agents/plugins/personal/library/worktree/dist/*.js
+!config/agents/plugins/personal/library/xero/dist/
+!config/agents/plugins/personal/library/xero/dist/*.js
+!config/agents/plugins/personal/library/test-runner/dist/test-runner.sh

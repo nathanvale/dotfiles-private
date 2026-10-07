@@ -92,7 +92,7 @@ test("the public guard accepts the current exact-path non-workspace inventory", 
 	expect(result.report.status).toBe("pass");
 	expect(result.report.violations).toEqual([]);
 	expect(result.report.inventory_paths).toContain("bin/teams/lib/lines.ts");
-	expect(result.report.inventory_paths).toContain("config/agents/skills/personal/imessage-reader/scripts/query-imessage.ts");
+	expect(result.report.inventory_paths).toContain("config/agents/plugins/personal/library/imessage-reader/scripts/query-imessage.ts");
 });
 
 test("the public guard rejects an unclassified file, then accepts an exact named owner", async () => {

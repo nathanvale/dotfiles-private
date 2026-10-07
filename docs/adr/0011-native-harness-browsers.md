@@ -124,4 +124,4 @@ namespaces) is a separate deletion scope for Nathan.
 - [ADR-0004](0004-browser-use-entry-ownership.md) and
   [ADR-0006](0006-private-handoff-token-and-explicit-recovery.md), superseded.
 - `docs/agents/browser-automation.md`.
-- Precedent: `config/agents/plugins/personal/skills/timesheets/SKILL.md`.
+- Precedent: `config/agents/plugins/personal/library/timesheets/SKILL.md`.

@@ -1,0 +1,26 @@
+{
+	"name": "classic-cinema-scripts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Bun package for the classic-cinema skill. Owns the listing, availability, ticket-parse, seat-pick, ticket-fill, and heal-skill command surfaces. Uses only Bun built-ins (fetch, Bun.file, Bun.write) so the skill travels as a standalone zip.",
+	"scripts": {
+		"list-movies": "bun --no-install dist/list-movies.js",
+		"check-availability": "bun --no-install dist/check-availability.js",
+		"parse-tickets": "bun --no-install dist/parse-tickets.js",
+		"pick-seats": "bun --no-install dist/pick-seats.js",
+		"fill-ticket": "bun --no-install dist/fill-ticket.js",
+		"heal-skill": "bun --no-install dist/heal-skill.js",
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"build:bundle": "NODE_ENV=production bun build --target bun --minify-whitespace src/list-movies.ts src/check-availability.ts src/parse-tickets.ts src/pick-seats.ts src/fill-ticket.ts src/heal-skill.ts --outdir dist"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

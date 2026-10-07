@@ -1,0 +1,21 @@
+{
+	"name": "test-runner-scripts",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"benchmark": "bun --no-install dist/test-runner.benchmark.js",
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test src/test-runner.test.ts",
+		"test-runner": "./dist/test-runner.sh",
+		"test-runner-benchmark": "bun --no-install dist/test-runner.benchmark.js",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"build:bundle": "NODE_ENV=production bun build --target bun --minify-whitespace src/test-runner.ts src/test-runner.benchmark.ts --outdir dist && cp src/test-runner.sh dist/test-runner.sh && cp -R src/fixtures dist/"
+	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}
