@@ -120,10 +120,12 @@ test("a second apply that starts after consumption refuses consumed while the fi
 	const worktree = candidate(f)
 	const id = preview(f, worktree)
 	const env = stewardEnvironment(f)
-	const first = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=after-consume:2500" })
-	await Bun.sleep(600)
+	const release = join(f.root, "consume-release")
+	const first = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=after-consume:${release}` })
+	await waitForBarrierArrival(release)
 	// bindPreview runs outside the lock: the consumed record is visible before the lock is released
 	const second = run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree])
+	writeFileSync(release, "release\n")
 	expect(second.envelope?.result.causeCode).toBe("DOMAIN_PREVIEW_CONSUMED")
 	expect((await first).envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
@@ -134,13 +136,15 @@ test("an apply bound before the lock refuses stale when a newer preview supersed
 	const worktree = candidate(f)
 	const first = preview(f, worktree)
 	const env = stewardEnvironment(f)
-	const apply = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", first, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=after-lock:2500" })
-	await Bun.sleep(600)
-	// preview runs outside the lock: the candidate is amended and a newer record replaces the bound one while the apply is paused
+	const release = join(f.root, "lock-release")
+	const apply = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", first, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=after-lock:${release}` })
+	await waitForBarrierArrival(release)
+	// preview runs outside the lock: the candidate is amended and a newer record replaces the bound one while the apply is held
 	write(worktree, "projects/demo/GOAL.md", "# Goal\n\nRevised.\n")
 	git(worktree, "commit", "--amend", "--no-edit", "--all")
 	const amended = git(worktree, "rev-parse", "HEAD")
 	const second = preview(f, worktree)
+	writeFileSync(release, "release\n")
 	expect(second).not.toBe(first)
 	const stale = await apply
 	expect(stale.exitCode).toBe(3)

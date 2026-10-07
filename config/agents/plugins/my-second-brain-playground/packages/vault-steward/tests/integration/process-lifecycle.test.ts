@@ -1,6 +1,8 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
+import { writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { cleanupFixtures, type Fixture, fixture, git } from "../helpers/harness.ts"
-import { candidate, data, STEWARD_PREFIX, steward, stewardEnvironment } from "../helpers/steward.ts"
+import { candidate, data, STEWARD_PREFIX, steward, stewardEnvironment, waitForBarrierArrival } from "../helpers/steward.ts"
 
 // Process lifecycle through real children: stdin held open or closed never prompts or blocks, SIGINT and SIGTERM
 // before output exit 130 and 143 with empty streams, a closed stdout reader (EPIPE) ends the process without a
@@ -31,9 +33,11 @@ test.each([["SIGINT", 130] as const, ["SIGTERM", 143] as const])("%s before outp
 	const f = fixture()
 	const worktree = candidate(f)
 	const id = data(steward(f.vault, ["finish", "--preview", "--worktree", worktree, "--message", "docs: change"], stewardEnvironment(f))).previewId as string
-	const child = spawn(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { VAULT_STEWARD_FAULT: "pause=after-lock:3000" })
-	await Bun.sleep(1_500)
+	const release = join(f.root, "signal-release")
+	const child = spawn(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { VAULT_STEWARD_FAULT: `barrier=after-lock:${release}` })
+	await waitForBarrierArrival(release)
 	child.kill(signal)
+	writeFileSync(release, "release\n")
 	const exit = await child.exited
 	expect(exit).toBe(code)
 	expect(await new Response(child.stdout).text()).toBe("")
