@@ -63,3 +63,10 @@ effort = "high"
 agent = "claude"
 model = "claude-sonnet-5-5"
 effort = "high"
+
+[profiles.claude-sonnet-monash]
+agent = "claude"
+model = "claude-sonnet-5"
+effort = "high"
+description = "Sonnet 5 high on Monash Foundry: EN01 lane work"
+args = ["--settings", '{"env":{"CLAUDE_CODE_USE_FOUNDRY":"1","ANTHROPIC_FOUNDRY_RESOURCE":"monash-edu-smst-ai-claude-code"}}']
