@@ -1,5 +1,7 @@
 # Dotfiles Coding Standards
 
+Code and test rules: [shared coding standards](docs/agents/coding-standards.md).
+
 ## Before editing
 
 - Accepted-behavior change: reconcile with the relevant [ADRs](docs/adr/).

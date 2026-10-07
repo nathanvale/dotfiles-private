@@ -9,7 +9,7 @@ Scope, admission, and the edit rule:
 
 | Read this | When |
 |---|---|
-| [`Repository coding standards`](../../CODING_STANDARDS.md) | Editing or reviewing repository files; running, repairing, or triaging code or tests; setup, profile, or package work |
+| [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) | Editing or reviewing repository files; running, repairing, or triaging code or tests; setup, profile, or package work |
 | [`herdr-control.md`](herdr-control.md) | Managed project coordination, addressing a coordinator by project/tab name, or inspecting/controlling Herdr from any app |
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
