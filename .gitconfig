@@ -122,7 +122,9 @@
   blame = delta
 
 [pull]
-    rebase = true
+    # Stop divergent pulls before VS Code Sync can rewrite local history.
+    rebase = false
+    ff = only
 
 [rerere]
     enabled = true
