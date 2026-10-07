@@ -31,7 +31,7 @@ interface Plan {
 	version: 1;
 	barrier: StepSpec[];
 	lanes: PlanLane[];
-	profiles?: Record<string, { lanes: LaneSpec[] }>;
+	profiles?: Record<string, { barrier?: StepSpec[]; lanes: LaneSpec[] }>;
 }
 
 interface StepResult {
@@ -90,6 +90,12 @@ function resolveLanes(plan: Plan, profile: string | undefined): LaneSpec[] {
 		else lanes.push({ ...lane, steps: [...lane.steps] });
 	}
 	return lanes;
+}
+
+// A profile's barrier steps run after the base barrier, before any lane.
+function resolveBarrier(plan: Plan, profile: string | undefined): StepSpec[] {
+	const extra = profile === undefined ? [] : (plan.profiles?.[profile]?.barrier ?? []);
+	return [...plan.barrier, ...extra];
 }
 
 function expandArgs(run: string[]): string[] {
@@ -247,12 +253,13 @@ async function main(): Promise<number> {
 	const options = parseArgs(process.argv.slice(2));
 	const plan = JSON.parse(readFileSync(options.planPath, "utf8")) as Plan;
 	const lanes = resolveLanes(plan, options.profile);
+	const barrier = resolveBarrier(plan, options.profile);
 	const logDir = mkdtempSync(path.join(os.tmpdir(), "repository-gate-"));
 	const runner = new StepRunner(logDir);
 	installSignalHandlers(logDir);
 	const started = performance.now();
 	try {
-		for (const step of plan.barrier) await runner.run(step, "barrier");
+		for (const step of barrier) await runner.run(step, "barrier");
 		await runLanes(lanes, options.jobs, runner);
 	} finally {
 		rmSync(logDir, { recursive: true, force: true });

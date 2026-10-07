@@ -174,8 +174,10 @@ runs `bun run check:ci`: the full gate plus the public shell regressions and
 root/runtime Fallow against the immutable commit recorded by the triggering
 event. `tooling/repository-gate.ts` runs
 [the gate plan](tooling/repository-gate.json) in concurrent lanes after a
-`git diff --check` barrier; every step runs and any failure fails the gate. The
-plan owns the shell suite list. A hosted macOS runner proves
+`git diff --check` barrier; under `check:ci` the barrier also runs
+`agent-lane-receipt-test.sh`, which compares the real repository's git status
+and so must not overlap plugin builds that rewrite tracked files. Every step
+runs and any failure fails the gate. The plan owns the shell suite list. A hosted macOS runner proves
 source checks; it does not prove a personal machine installation, hook activation
 or branch-protection policy.
 

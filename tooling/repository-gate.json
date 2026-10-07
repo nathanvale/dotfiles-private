@@ -25,13 +25,15 @@
 	],
 	"profiles": {
 		"ci": {
+			"barrier": [
+				{"name": "agent-lane-receipt-test.sh", "run": ["bash", "bin/test/agent-lane-receipt-test.sh"]}
+			],
 			"lanes": [
 				{
 					"name": "shell",
 					"steps": [
 						{"name": "agent-lane-audit-test.sh", "run": ["bash", "bin/test/agent-lane-audit-test.sh"]},
 						{"name": "agent-lane-launch-test.sh", "run": ["bash", "bin/test/agent-lane-launch-test.sh"]},
-						{"name": "agent-lane-receipt-test.sh", "run": ["bash", "bin/test/agent-lane-receipt-test.sh"]},
 						{"name": "agent-lane-zsh-test.sh", "run": ["bash", "bin/test/agent-lane-zsh-test.sh"]},
 						{"name": "atuin-agent-history-test.sh", "run": ["bash", "bin/test/atuin-agent-history-test.sh"]},
 						{"name": "bun-core-install-test.sh", "run": ["bash", "bin/test/bun-core-install-test.sh"]},

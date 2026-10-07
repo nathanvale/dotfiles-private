@@ -167,6 +167,28 @@ test("a profile appends its steps to the base lane of the same name, in order", 
 	expect(result.exitCode).toBe(0);
 });
 
+test("a profile's barrier steps run after the base barrier and before every lane", async () => {
+	const root = fixtureRoot();
+	const result = await runGate(
+		root,
+		{
+			barrier: [sh("base", `touch ${root}/base`)],
+			lanes: [{ name: "alpha", steps: [sh("needs barrier", `test -f ${root}/profile || exit 4`)] }],
+			profiles: {
+				ci: {
+					barrier: [sh("profile", `test -f ${root}/base || exit 4; sleep 0.2; touch ${root}/profile`)],
+					lanes: [],
+				},
+			},
+		},
+		["--profile", "ci"],
+	);
+
+	expect(result.stdout).toContain("PASS barrier > profile");
+	expect(result.stdout).toContain("PASS alpha > needs barrier");
+	expect(result.exitCode).toBe(0);
+});
+
 test("an unknown profile refuses before any step runs", async () => {
 	const root = fixtureRoot();
 	const result = await runGate(root, { lanes: [{ name: "alpha", steps: [sh("one", `touch ${root}/ran`)] }] }, [
