@@ -16,22 +16,22 @@ afterEach(() => {
 	for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-type Leg = [plugin: string, shard: number, shards: number];
+type Leg = [plugin: string, shard: number | string, shards: number];
+type Scripts = Record<string, string>;
 
-function fixtureRepository(plugins: readonly string[], legs: readonly Leg[]): string {
+const SCRIPTS = { test: "bun test $PLUGIN_TEST_SHARD", typecheck: "tsc --noEmit" };
+
+function fixtureRepository(plugins: Record<string, Scripts>, legs: readonly Leg[]): string {
 	const root = mkdtempSync(path.join(tmpdir(), "plugin-test-shards-"));
 	fixtureRoots.push(root);
 	mkdirSync(path.join(root, "tooling"));
 	for (const file of ["plugin-tests.ts", "plugin-test-shards.ts"]) {
 		copyFileSync(path.join(repoRoot, "tooling", file), path.join(root, "tooling", file));
 	}
-	for (const plugin of plugins) {
+	for (const [plugin, scripts] of Object.entries(plugins)) {
 		const pluginRoot = path.join(root, "config/agents/plugins", plugin);
 		mkdirSync(pluginRoot, { recursive: true });
-		writeFileSync(
-			path.join(pluginRoot, "package.json"),
-			JSON.stringify({ scripts: { test: "bun test", typecheck: "tsc --noEmit" } }),
-		);
+		writeFileSync(path.join(pluginRoot, "package.json"), JSON.stringify({ scripts }));
 	}
 	const include = legs.map(([plugin, shard, shards]) => `          - { plugin: ${plugin}, shard: ${shard}, shards: ${shards} }`);
 	mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
@@ -56,9 +56,10 @@ const COMPLETE: Leg[] = [
 	["beta", 1, 2],
 	["beta", 2, 2],
 ];
+const PLUGINS = { alpha: SCRIPTS, beta: SCRIPTS };
 
 test("a matrix with every discovered plugin's shards exactly once passes", () => {
-	const { exit, output } = runGuard(fixtureRepository(["alpha", "beta"], COMPLETE));
+	const { exit, output } = runGuard(fixtureRepository(PLUGINS, COMPLETE));
 
 	expect(output).toContain("PASS: 3 plugin shard leg(s) cover 2 plugin(s)");
 	expect(exit).toBe(0);
@@ -67,21 +68,51 @@ test("a matrix with every discovered plugin's shards exactly once passes", () =>
 test.each([
 	{
 		name: "a missing shard leg",
-		plugins: ["alpha", "beta"],
+		plugins: PLUGINS,
 		legs: COMPLETE.slice(0, 2),
 		error: "beta: matrix shards are [1] but 2 shard(s) need exactly [1, 2]",
 	},
 	{
 		name: "a duplicate shard leg",
-		plugins: ["alpha", "beta"],
+		plugins: PLUGINS,
 		legs: [...COMPLETE.slice(0, 2), ["beta", 1, 2] as Leg],
 		error: "beta: matrix shards are [1, 1] but 2 shard(s) need exactly [1, 2]",
 	},
 	{
 		name: "a new tested plugin without a leg",
-		plugins: ["alpha", "beta", "gamma"],
+		plugins: { ...PLUGINS, gamma: SCRIPTS },
 		legs: COMPLETE,
 		error: "gamma: test:plugins runs its tests but the workflow matrix has no leg for it",
+	},
+	{
+		name: "a leg for a plugin test:plugins does not discover",
+		plugins: PLUGINS,
+		legs: [...COMPLETE, ["gamma", 1, 1] as Leg],
+		error: "gamma: the workflow matrix runs it but test:plugins does not discover it",
+	},
+	{
+		name: "legs that disagree on the shard count",
+		plugins: PLUGINS,
+		legs: [...COMPLETE.slice(0, 2), ["beta", 2, 3] as Leg],
+		error: "beta: matrix legs disagree on the shard count (2, 3)",
+	},
+	{
+		name: "a malformed leg",
+		plugins: PLUGINS,
+		legs: [...COMPLETE, ["beta", "one", 2] as Leg],
+		error: 'matrix leg {"plugin":"beta","shard":"one","shards":2} needs a string plugin and integer shard and shards',
+	},
+	{
+		name: "a tested plugin without a typecheck script",
+		plugins: { ...PLUGINS, alpha: { test: SCRIPTS.test } },
+		legs: COMPLETE,
+		error: "alpha: the workflow typechecks every matrix plugin, so it must declare scripts.typecheck",
+	},
+	{
+		name: "a sharded plugin whose test script drops the shard variable",
+		plugins: { ...PLUGINS, beta: { ...SCRIPTS, test: "bun test" } },
+		legs: COMPLETE,
+		error: "beta: its 2 matrix shards each run the whole suite because scripts.test does not pass on $PLUGIN_TEST_SHARD",
 	},
 ])("$name fails the guard and names the gap", ({ plugins, legs, error }) => {
 	const { exit, output } = runGuard(fixtureRepository(plugins, legs));

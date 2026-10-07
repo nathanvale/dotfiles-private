@@ -5,11 +5,14 @@ import { discoverPluginCheckSteps, type PluginCheckStep } from "./plugin-tests.t
 // The repository-checks workflow runs plugin checks as matrix legs instead of
 // one `test:plugins` call. This guard keeps that matrix equal to the plugins
 // `test:plugins` discovers, with every shard of every plugin present once, so
-// splitting the work across jobs can never drop a plugin or a shard.
+// splitting the work across jobs can never drop a plugin or a shard. A plugin
+// split into several shards must pass PLUGIN_TEST_SHARD to `bun test`, or every
+// leg would run its whole suite.
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const WORKFLOW_RELATIVE_PATH = ".github/workflows/repository-checks.yml";
 const MATRIX_JOB = "plugin-tests";
+const SHARD_VARIABLE = /\$\{?PLUGIN_TEST_SHARD\b/;
 
 interface ShardLeg {
 	plugin: string;
@@ -55,7 +58,14 @@ function shardSetErrors(plugin: string, legs: ShardLeg[]): string[] {
 	if (shards < 1 || seen.join(",") !== expected.join(",")) {
 		return [`${plugin}: matrix shards are [${seen.join(", ")}] but ${shards} shard(s) need exactly [${expected.join(", ")}]`];
 	}
-	return [];
+	return shards > 1 ? shardPassErrors(plugin, shards) : [];
+}
+
+function shardPassErrors(plugin: string, shards: number): string[] {
+	const manifestPath = path.join(repoRoot, "config/agents/plugins", plugin, "package.json");
+	const testScript: unknown = JSON.parse(readFileSync(manifestPath, "utf8")).scripts?.test;
+	if (typeof testScript === "string" && SHARD_VARIABLE.test(testScript)) return [];
+	return [`${plugin}: its ${shards} matrix shards each run the whole suite because scripts.test does not pass on $PLUGIN_TEST_SHARD`];
 }
 
 function coverageErrors(steps: PluginCheckStep[], legs: ShardLeg[]): string[] {

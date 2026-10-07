@@ -177,7 +177,8 @@ matrix runs each plugin's tests as `bun test --shard` legs (the leg sets
 `PLUGIN_TEST_SHARD`, which each plugin's `test` script passes on), with only the
 signed fixtures that plugin consumes, and typechecks each plugin once;
 `check:core` fails when that matrix stops matching what `test:plugins`
-discovers. The `repository-checks` job passes only when every job and leg
+discovers, or when a plugin split into several shards stops passing
+`PLUGIN_TEST_SHARD` on. The `repository-checks` job passes only when every job and leg
 succeeded, so it remains the single result to require. A hosted macOS runner
 proves source checks; it does not prove a personal machine installation, hook
 activation or branch-protection policy.
