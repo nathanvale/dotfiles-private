@@ -141,61 +141,6 @@ jobs:
           grep -Fq 'source=Notarized Developer ID' <<< "$assessment"
           grep -Fq 'origin=Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$assessment"
           printf 'CONNECTORS_TEST_OP_PACKAGE=%s\n' "$package" >> "$GITHUB_ENV"
-      - name: Run the complete repository gate
-        run: bun run check
-      - name: Check the audit's public shell processes
+      - name: Run the complete repository gate in concurrent lanes
         if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
-        shell: bash
-        run: |
-          set -uo pipefail
-          failures=0
-          failed_suites=()
-          suites=(
-            bin/test/agent-lane-audit-test.sh
-            bin/test/agent-lane-launch-test.sh
-            bin/test/agent-lane-receipt-test.sh
-            bin/test/agent-lane-zsh-test.sh
-            bin/test/atuin-agent-history-test.sh
-            bin/test/bun-core-install-test.sh
-            bin/test/claude-native-install-test.sh
-            bin/test/cloudflare-access-headers-test.sh
-            bin/test/codex-ambient-credential-boundary-test.sh
-            bin/test/codex-managed-install-test.sh
-            bin/test/generic-credential-consumer-test.sh
-            bin/test/ghh-test.sh
-            bin/test/git-effective-behavior-test.sh
-            bin/test/lm-studio-ensure-test.sh
-            bin/test/profile-link-parity-test.sh
-            bin/test/setup-completion-test.sh
-            bin/test/setup-state-recovery-test.sh
-            bin/test/symlinks-manage-test.sh
-            bin/test/symlinks-real-directory-test.sh
-            bin/test/toolchain-apply-test.sh
-            bin/test/toolchain-bootstrap-test.sh
-            bin/test/toolchain-status-test.sh
-            bin/test/with-one-password-token-test.sh
-            bin/test/work-profile-slug-parity-test.sh
-            bin/test/zsh-effective-behavior-test.sh
-            bin/test/zsh-startup-silence-test.sh
-            bin/test/zsh-work-profile-boundary-test.sh
-          )
-          for suite in "${suites[@]}"; do
-            if bash "$suite"; then
-              :
-            else
-              status=$?
-              failures=$((failures + 1))
-              failed_suites+=("$suite (exit $status)")
-            fi
-          done
-          if (( failures > 0 )); then
-            printf 'Shell regression suite failures (%d):\n' "$failures" >&2
-            printf '  %s\n' "${failed_suites[@]}" >&2
-            exit 1
-          fi
-      - name: Compare root and runtime Fallow against the event commit
-        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
-        shell: bash
-        run: |
-          bun run --silent quality:fallow --changed-since "$COMPARISON_BASE"
-          bun run --silent quality:fallow:runtime -- --base "$COMPARISON_BASE"
+        run: bun run check:ci
