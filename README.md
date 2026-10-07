@@ -169,9 +169,13 @@ nested stdout/stderr are retained in separate mode-restricted files.
 
 The [Repository checks workflow](.github/workflows/repository-checks.yml) owns
 continuous verification on pull requests and main. It uses the Bun version in
-`package.json`, prepares independent dependencies, runs the existing full gate
-and public shell regressions, and compares root/runtime Fallow against the
-immutable commit recorded by the triggering event. A hosted macOS runner proves
+`package.json`, prepares independent dependencies and signed fixtures, then
+runs `bun run check:ci`: the full gate plus the public shell regressions and
+root/runtime Fallow against the immutable commit recorded by the triggering
+event. `tooling/repository-gate.ts` runs
+[the gate plan](tooling/repository-gate.json) in concurrent lanes after a
+`git diff --check` barrier; every step runs and any failure fails the gate. The
+plan owns the shell suite list. A hosted macOS runner proves
 source checks; it does not prove a personal machine installation, hook activation
 or branch-protection policy.
 
