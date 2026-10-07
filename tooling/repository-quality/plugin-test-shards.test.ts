@@ -66,6 +66,45 @@ test("a matrix with every discovered plugin's shards exactly once passes", () =>
 });
 
 test.each([
+	"bun test $PLUGIN_TEST_SHARD",
+	"bun test ${PLUGIN_TEST_SHARD}",
+	'bun test "$PLUGIN_TEST_SHARD"',
+	'bun test "${PLUGIN_TEST_SHARD}"',
+	"bun run build && bun test packages/example/tests $PLUGIN_TEST_SHARD",
+	"bun test $PLUGIN_TEST_SHARD packages/example/tests",
+	"bun run build; bun test $PLUGIN_TEST_SHARD",
+	"bun test $PLUGIN_TEST_SHARD && echo done",
+	"bun\ttest\t$PLUGIN_TEST_SHARD",
+])("a shard argument in %s passes the guard", (script) => {
+	const plugins = { ...PLUGINS, beta: { ...SCRIPTS, test: script } };
+	const { exit, output } = runGuard(fixtureRepository(plugins, COMPLETE));
+
+	expect(output).toContain("PASS: 3 plugin shard leg(s) cover 2 plugin(s)");
+	expect(exit).toBe(0);
+});
+
+test.each([
+	"echo $PLUGIN_TEST_SHARD && bun test",
+	'bun test; echo "$PLUGIN_TEST_SHARD"',
+	"bun test && echo $PLUGIN_TEST_SHARD",
+	"bun test || echo $PLUGIN_TEST_SHARD",
+	"bun test | echo $PLUGIN_TEST_SHARD",
+	"bun test & echo $PLUGIN_TEST_SHARD",
+	"bun test\necho $PLUGIN_TEST_SHARD",
+	"echo bun test $PLUGIN_TEST_SHARD",
+	"bun test prefix$PLUGIN_TEST_SHARD",
+	"bun test $PLUGIN_TEST_SHARD_SUFFIX",
+	"bun test '$PLUGIN_TEST_SHARD'",
+	"bun test \\$PLUGIN_TEST_SHARD",
+])("a shard variable outside a bun test argument in %s fails the guard", (script) => {
+	const plugins = { ...PLUGINS, beta: { ...SCRIPTS, test: script } };
+	const { exit, output } = runGuard(fixtureRepository(plugins, COMPLETE));
+
+	expect(output).toContain("beta: its 2 matrix shards each run the whole suite because scripts.test does not pass on $PLUGIN_TEST_SHARD");
+	expect(exit).toBe(1);
+});
+
+test.each([
 	{
 		name: "a missing shard leg",
 		plugins: PLUGINS,

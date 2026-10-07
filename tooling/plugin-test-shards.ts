@@ -12,7 +12,7 @@ import { discoverPluginCheckSteps, type PluginCheckStep } from "./plugin-tests.t
 const repoRoot = path.resolve(import.meta.dir, "..");
 const WORKFLOW_RELATIVE_PATH = ".github/workflows/repository-checks.yml";
 const MATRIX_JOB = "plugin-tests";
-const SHARD_VARIABLE = /\$\{?PLUGIN_TEST_SHARD\b/;
+const SHARDED_BUN_TEST = /(?:^|[;&|\r\n])\s*bun[ \t]+test[ \t]+(?:[^;&|\r\n]*[ \t])?(?:\$(?:PLUGIN_TEST_SHARD|\{PLUGIN_TEST_SHARD\})|"\$(?:PLUGIN_TEST_SHARD|\{PLUGIN_TEST_SHARD\})")(?=[ \t;&|\r\n]|$)/;
 
 interface ShardLeg {
 	plugin: string;
@@ -64,7 +64,7 @@ function shardSetErrors(plugin: string, legs: ShardLeg[]): string[] {
 function shardPassErrors(plugin: string, shards: number): string[] {
 	const manifestPath = path.join(repoRoot, "config/agents/plugins", plugin, "package.json");
 	const testScript: unknown = JSON.parse(readFileSync(manifestPath, "utf8")).scripts?.test;
-	if (typeof testScript === "string" && SHARD_VARIABLE.test(testScript)) return [];
+	if (typeof testScript === "string" && SHARDED_BUN_TEST.test(testScript)) return [];
 	return [`${plugin}: its ${shards} matrix shards each run the whole suite because scripts.test does not pass on $PLUGIN_TEST_SHARD`];
 }
 
