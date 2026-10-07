@@ -23,7 +23,7 @@ with no arguments to see the cached dashboard and next commands.
 ```
 
 If `.venv` does not exist, run `"$SKILL_DIR/scripts/bootstrap.sh"` first
-(one-time; needs network + git + Xcode command line tools).
+(per installed plugin version; needs network + git + Xcode command line tools).
 
 ## Searching: use QMD, not `search`
 

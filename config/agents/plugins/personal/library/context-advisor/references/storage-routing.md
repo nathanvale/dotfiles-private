@@ -3,8 +3,8 @@
 Use this reference when a skill, agent, helper, or human needs durable context
 placement advice.
 
-Keep `skills/context-advisor/SKILL.md` as the advisor front door.
-Use `docs/agents/skills.md#skill-work-routing` when placement work crosses a
+Keep [Context Advisor](../SKILL.md) as the advisor front door.
+Use the repository's `docs/agents/skills.md#personal-work` when placement work crosses a
 skill content, topology, CLI, or runtime branch.
 
 This map advises context placement. It does not own content, mutate stores, or manage runtime state.
@@ -295,5 +295,5 @@ second vault as a fallback.
 - If the context is project tracker state or unresolved work state, patch the scoped TASKS.md or project tracker.
 - If accepted storage choice requires skill content, topology, a runtime-backed
   capability, or a new or changed agent-facing CLI surface, follow
-  `docs/agents/skills.md#skill-work-routing`.
+  the repository's `docs/agents/skills.md#personal-work`.
 - If the context is only hot startup guidance, patch hot startup guidance and point to the durable owner.

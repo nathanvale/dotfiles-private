@@ -15,7 +15,7 @@ setup fails, a command errors, or output looks wrong.
 - **Full Disk Access** may be required for the calling process (Terminal, the
   editor, Claude Code) to read the container. System Settings → Privacy &
   Security → Full Disk Access.
-- **First run only:** network, `git`, and a C build toolchain (Xcode command
+- **First run of each installed plugin version:** network, `git`, and a C build toolchain (Xcode command
   line tools). The bootstrap clones from GitHub and builds wheels. This is the
   only network the skill uses, and it never goes to Microsoft.
 

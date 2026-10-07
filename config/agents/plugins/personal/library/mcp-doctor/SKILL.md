@@ -12,7 +12,7 @@ makes a server look configured but dead; this finds it and names the fix.
 ## Owner Paths
 
 - Health check script: `$SKILL_DIR/scripts/mcp-doctor.ts`, where `SKILL_DIR` is this skill's directory.
-- Secret injection owner: `skills/one-password/SKILL.md`.
+- Secret injection owner: [one-password](../one-password/SKILL.md).
 - Runtime/discovery engine: `mcporter` CLI (`mcporter list`).
 
 ## Entry-Screen Route

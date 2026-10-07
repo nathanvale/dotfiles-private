@@ -100,7 +100,7 @@ Refresh a Markdown session register only when the user asks. Follow
 - Own discovery, filtering, preview, selection, opening, and explicit register
   refresh.
 - Do not classify sessions into projects or promote ideas into project records.
-  Route that to `skills/session-recovery/SKILL.md`.
+  Route that to [session-recovery](../session-recovery/SKILL.md).
 - Do not archive, unarchive, rename, pin, continue, or message a session unless
   the user separately asks.
 

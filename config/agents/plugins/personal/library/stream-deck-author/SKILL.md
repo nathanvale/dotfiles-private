@@ -12,7 +12,7 @@ layouts, buttons, icons, scripts, or pages through `mcporter`.
 Default target: the virtual MCP/AI Stream Deck only.
 
 Do not use for live execution. Hand off existing-action execution to
-`skills/stream-deck-use/SKILL.md`.
+[stream-deck-use](../stream-deck-use/SKILL.md).
 
 ## Owner Paths
 
@@ -22,7 +22,7 @@ Do not use for live execution. Hand off existing-action execution to
 - MCP config owner: `/Users/nathanvale/.config/mcporter/mcporter.json`.
 - Managed config path: `/Users/nathanvale/code/dotfiles/config/mcporter/mcporter.json`.
 - Command schema owner: `mcporter list streamdeck-author --schema --timeout 60000`.
-- Execution handoff: `skills/stream-deck-use/SKILL.md`.
+- Execution handoff: [stream-deck-use](../stream-deck-use/SKILL.md).
 
 ## Intent Classification
 
@@ -32,7 +32,7 @@ Do not use for live execution. Hand off existing-action execution to
    proposed layout; do not write.
 3. Apply requested -> require explicit approval after preview, back up the page
    directory, write the page, restart Stream Deck, and verify.
-4. Execute existing action requested -> hand off to `skills/stream-deck-use/SKILL.md`.
+4. Execute existing action requested -> hand off to [stream-deck-use](../stream-deck-use/SKILL.md).
 
 ## Workflow
 
@@ -86,7 +86,7 @@ mcporter call streamdeck-author.streamdeck_read_page \
 - Call `streamdeck_write_page` with `auto_quit_app=true` only after approval.
 - Call `streamdeck_restart_app` after writes.
 - Verify with `streamdeck_read_page`.
-- Hand off to `skills/stream-deck-use/SKILL.md` for exposed-action verification.
+- Hand off to [stream-deck-use](../stream-deck-use/SKILL.md) for exposed-action verification.
 
 ## Home Assistant Gotchas
 
@@ -152,7 +152,7 @@ target, risk, or write authority. Bold exactly one recommended default.
 2. User asks to build/update -> preview proposed layout first; wait for explicit
    apply approval.
 3. User approves apply -> back up, write, restart, verify, then hand off to
-   `skills/stream-deck-use/SKILL.md`.
+   [stream-deck-use](../stream-deck-use/SKILL.md).
 4. Missing virtual deck -> blocked; enable MCP Deck in Stream Deck preferences.
 
 ## Verification

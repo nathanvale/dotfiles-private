@@ -13,7 +13,7 @@ Do not configure Codex, Claude Code, or other MCP clients directly. `mcporter`
 is the single MCP configuration surface for this workflow.
 
 Do not use for Stream Deck layout authoring, button creation, icons, scripts, or
-profile writes. Hand those requests to `skills/stream-deck-author/SKILL.md`.
+profile writes. Hand those requests to [stream-deck-author](../stream-deck-author/SKILL.md).
 
 ## Owner Paths
 
@@ -23,8 +23,8 @@ profile writes. Hand those requests to `skills/stream-deck-author/SKILL.md`.
 - Managed config path: `/Users/nathanvale/code/dotfiles/config/mcporter/mcporter.json`.
 - MCP discovery, config checks, and calls: `mcporter` CLI.
 - MCPorter docs owner: Context7 `/steipete/mcporter`.
-- MCP diagnosis: `skills/mcp-doctor/SKILL.md`.
-- Authoring handoff: `skills/stream-deck-author/SKILL.md`.
+- MCP diagnosis: [mcp-doctor](../mcp-doctor/SKILL.md).
+- Authoring handoff: [stream-deck-author](../stream-deck-author/SKILL.md).
 - Runtime: Node.js 18+; package `@elgato/mcp-server`.
 - Stream Deck owner: Stream Deck app 7.4+ with MCP Deck enabled.
 
@@ -38,7 +38,7 @@ profile writes. Hand those requests to `skills/stream-deck-author/SKILL.md`.
    it through `mcporter`.
 4. Action descriptions requested -> help write short natural-language
    descriptions for keys in the `MCP Actions` profile.
-5. Authoring requested -> hand off to `skills/stream-deck-author/SKILL.md`.
+5. Authoring requested -> hand off to [stream-deck-author](../stream-deck-author/SKILL.md).
 6. Broken or missing tools -> run `mcporter` discovery, then hand off to
    `mcp-doctor` for cross-client diagnosis.
 

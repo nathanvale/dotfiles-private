@@ -1,7 +1,7 @@
 # GitHub Review Workflow
 
 Load this file only after selecting a route in
-`skills/codex-code-review/SKILL.md`.
+[Codex Code Review](../SKILL.md).
 
 ## Common Gate
 

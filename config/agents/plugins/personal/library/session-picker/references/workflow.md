@@ -3,7 +3,7 @@
 Use this reference for source merging, previews, snapshots, and explicit
 register refresh.
 Command flags, result fields, and error categories remain owned by
-`skills/session-picker/scripts/archived-sessions.ts` and its `--help` output.
+[archived-sessions.ts](../scripts/archived-sessions.ts) and its `--help` output.
 
 ## Source Merge
 
@@ -16,7 +16,7 @@ Command flags, result fields, and error categories remain owned by
 4. Read local Codex task-list metadata directly through the bundled adapter.
    Keep raw
    history parsing with `runtime/session-corpus/` and recovery classification
-   with `skills/session-recovery/`.
+   with [session-recovery](../../session-recovery/SKILL.md).
 5. Map both sources to session ID, title, summary, source, archive state, last
    activity, project or working directory, and host ID when supplied.
 6. Deduplicate by session ID. Preserve the app's host ID and current metadata.
@@ -35,7 +35,7 @@ Source availability is part of the result:
 
 ## Snapshot Lifecycle
 
-- Owner: `skills/session-picker/scripts/archived-sessions.ts` and its `--help`
+- Owner: [archived-sessions.ts](../scripts/archived-sessions.ts) and its `--help`
   output.
 - Default owner path: `$XDG_STATE_HOME/session-picker/session-index.json`, with
   `~/.local/state` as the XDG fallback.

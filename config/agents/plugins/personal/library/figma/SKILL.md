@@ -16,7 +16,7 @@ Do not use for generic design work without Figma or Storybook-only work.
 
 - Vocabulary: `CONTEXT.md`.
 - MCP discovery engine: `mcporter` CLI.
-- MCP diagnosis: `skills/mcp-doctor/SKILL.md`.
+- MCP diagnosis: [mcp-doctor](../mcp-doctor/SKILL.md).
 - State machine: `references/figma-mcp-state-machine.md`.
 - Design-to-code workflow: `references/design-to-code-workflow.md`.
 - Code Connect workflow: `references/code-connect-workflow.md`.

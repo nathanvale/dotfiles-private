@@ -76,7 +76,7 @@
     "config/agents/plugins/personal/library/bitbucket": {
       "name": "bitbucket-scripts",
       "bin": {
-        "bb": "./src/cli.ts",
+        "bb": "./dist/cli.js",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -137,7 +137,7 @@
     "config/agents/plugins/personal/library/xero": {
       "name": "@local/xero-skill",
       "bin": {
-        "quarter-ledger": "./scripts/quarter-ledger.ts",
+        "quarter-ledger": "./dist/quarter-ledger.js",
       },
       "devDependencies": {
         "@types/bun": "catalog:",

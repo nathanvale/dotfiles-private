@@ -44,16 +44,16 @@ Use the Core Pattern Set for every repository-test artifact change. Add only pro
 
 ## Specialist Profile Index
 
-- Public executables, streams, exit status, signals, timeouts, or process ownership: `skills/test-design/references/process-and-cli.md`.
-- Rendered UI, browser navigation, accessibility, extensions, or browser identity: `skills/test-design/references/browser-and-ui.md`.
-- Durable state, concurrency, ownership, idempotency, crash injection, or recovery: `skills/test-design/references/state-concurrency-recovery.md`.
-- Packaging, installation, activation, host UI, live-host, or hosted delivery: `skills/test-design/references/installation-host-hosted.md`.
-- Bun, Node, CI, operating systems, shells, paths, permissions, or platform compatibility: `skills/test-design/references/runtime-ci-platform.md`.
-- Runner mode, isolation, concurrency, cancellation, cleanup, transforms, selectors, reporters, or test-double lifecycle: read `skills/test-design/references/runner-execution.md` only when runner execution semantics can change the confidence claim.
+- Public executables, streams, exit status, signals, timeouts, or process ownership: [process-and-cli](process-and-cli.md).
+- Rendered UI, browser navigation, accessibility, extensions, or browser identity: [browser-and-ui](browser-and-ui.md).
+- Durable state, concurrency, ownership, idempotency, crash injection, or recovery: [state-concurrency-recovery](state-concurrency-recovery.md).
+- Packaging, installation, activation, host UI, live-host, or hosted delivery: [installation-host-hosted](installation-host-hosted.md).
+- Bun, Node, CI, operating systems, shells, paths, permissions, or platform compatibility: [runtime-ci-platform](runtime-ci-platform.md).
+- Runner mode, isolation, concurrency, cancellation, cleanup, transforms, selectors, reporters, or test-double lifecycle: read [runner-execution](runner-execution.md) only when runner execution semantics can change the confidence claim.
 
 ## Provenance
 
-Read `skills/test-design/references/influences.md` only when reviewing rule provenance or refreshing research-backed guidance.
+Read [influences](influences.md) only when reviewing rule provenance or refreshing research-backed guidance.
 
 ## Vocabulary
 
