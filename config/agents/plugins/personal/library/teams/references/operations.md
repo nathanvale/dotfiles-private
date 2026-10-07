@@ -21,9 +21,11 @@ setup fails, a command errors, or output looks wrong.
 
 ## Bootstrap
 
+Set `SKILL_DIR` to the directory containing the loaded Teams `SKILL.md`.
+
 ```bash
-skills/teams/scripts/bootstrap.sh          # idempotent; no-op when complete
-skills/teams/scripts/bootstrap.sh --force  # rebuild from scratch
+"$SKILL_DIR/scripts/bootstrap.sh"          # idempotent; no-op when complete
+"$SKILL_DIR/scripts/bootstrap.sh" --force  # rebuild from scratch
 ```
 
 The script probes the full load-bearing import chain

@@ -15,14 +15,14 @@ they live outside this skill directory, in `~/code/dotfiles/bin/`.
 
 ## First Safe Action
 
-Run the CLI with no arguments — it prints a dashboard of what is cached and
-which command to use next.
+Set `SKILL_DIR` to the directory containing this loaded `SKILL.md`. Run the CLI
+with no arguments to see the cached dashboard and next commands.
 
 ```bash
-skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py
+"$SKILL_DIR/.venv/bin/python" "$SKILL_DIR/scripts/teams_cli.py"
 ```
 
-If `.venv` does not exist, run `skills/teams/scripts/bootstrap.sh` first
+If `.venv` does not exist, run `"$SKILL_DIR/scripts/bootstrap.sh"` first
 (one-time; needs network + git + Xcode command line tools).
 
 ## Searching: use QMD, not `search`
@@ -59,7 +59,7 @@ qmd query "who raised concerns about the deploy" -c teams
 qmd query "bulk print decisions" -c teams -c repo-pos-yellow   # chat + project docs
 
 # scoped keyword recall — fast, deterministic
-skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py \
+"$SKILL_DIR/.venv/bin/python" "$SKILL_DIR/scripts/teams_cli.py" \
   search "deploy" --since 2026-07-20 --from "Sonny" --json
 ```
 
@@ -88,7 +88,7 @@ path is the corpus root and not a phantom subdirectory.)
 Discover the command surface instead of guessing from this file:
 
 ```bash
-skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py commands --json
+"$SKILL_DIR/.venv/bin/python" "$SKILL_DIR/scripts/teams_cli.py" commands --json
 ```
 
 Common routes:
@@ -279,12 +279,13 @@ only if `whoami` reports low confidence.
 - **Sending**: `~/code/dotfiles/bin/teams-send` and `~/code/dotfiles/bin/teams-reply`
   (each `--help` is the contract); shared helpers in
   `~/code/dotfiles/bin/lib/teams-automation.sh`. That lib reads `TEAMS_SKILL`
-  (default `~/.claude/skills/teams`) to resolve conversation names through this
-  skill's venv, so sending breaks if the venv is missing.
+  (default `~/code/dotfiles/config/agents/plugins/personal/library/teams`) to resolve conversation names through this
+  skill's venv, so sending breaks if the venv is missing. Set `TEAMS_SKILL="$SKILL_DIR"`
+for `teams-send` or `teams-reply` when using this loaded plugin payload.
 
 ## Verification
 
 ```bash
-skills/teams/.venv/bin/python skills/teams/scripts/teams_cli.py doctor --json
-skills/teams/.venv/bin/python -m pytest skills/teams/scripts/teams_reader_test.py -q
+"$SKILL_DIR/.venv/bin/python" "$SKILL_DIR/scripts/teams_cli.py" doctor --json
+"$SKILL_DIR/.venv/bin/python" -m pytest "$SKILL_DIR/scripts/teams_reader_test.py" -q
 ```

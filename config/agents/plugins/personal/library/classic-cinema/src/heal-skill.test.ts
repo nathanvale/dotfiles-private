@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
 	CLI_DIAGNOSTIC_FLAGS,
 	parseCommandFacadeContract,
@@ -247,4 +250,36 @@ describe("heal-skill runtime", () => {
 		expect(envelope.data.explanation.checkId).toBe("booking-log-valid");
 		expect(envelope.data.explanation.explanation).toContain("auto-repair");
 	});
+});
+
+
+test("bundled test check verifies development dependencies and reports isolated payloads unverified", async () => {
+	const skillRoot = resolve(import.meta.dir, "..");
+	const scratchRoot = mkdtempSync(join(tmpdir(), "cinema-health-"));
+	try {
+		const copiedRoot = join(scratchRoot, "library", "classic-cinema");
+		cpSync(skillRoot, copiedRoot, { recursive: true, filter: (source) => !source.split("/").includes("node_modules") });
+		for (const [root, expectedExit, expectedStatus, expectedSummary] of [
+			[skillRoot, 0, "ok", "all 4 test suites pass"],
+			[copiedRoot, 1, "finding", "source-workspace tests require the development checkout"],
+		] as const) {
+			const process = Bun.spawn(["bun", "--no-install", join(root, "dist", "heal-skill.js"), "check", "--only", "tests", "--json"], {
+				cwd: scratchRoot,
+				env: { ...globalThis.process.env, XDG_STATE_HOME: join(scratchRoot, "state") },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const stdout = await new Response(process.stdout).text();
+			const stderr = await new Response(process.stderr).text();
+			expect(await process.exited).toBe(expectedExit);
+			expect(stderr).toBe("");
+			const findings = JSON.parse(stdout).data.findings;
+			expect(findings).toHaveLength(1);
+			expect(findings[0].checkId).toBe("tests");
+			expect(findings[0].status).toBe(expectedStatus);
+			expect(findings[0].summary).toBe(expectedSummary);
+		}
+	} finally {
+		rmSync(scratchRoot, { recursive: true, force: true });
+	}
 });

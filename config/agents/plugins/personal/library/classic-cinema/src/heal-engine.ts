@@ -82,12 +82,21 @@ const TEST_FILES = [
 	"src/booking-log.test.ts",
 ] as const;
 
+function sourceTestDependenciesAvailable(): boolean {
+	try {
+		Bun.resolveSync("@side-quest/cli-command-facade", SKILL_ROOT);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function checkTests(): Promise<Finding> {
 	// Route through the test-runner skill, never raw `bun test` (code-quality rule).
 	// Run the full suite — verifying only one file would let a broken sibling read
 	// as healthy.
 	const runner = join(SKILL_ROOT, "..", "test-runner", PACKAGED ? "dist" : "src", "test-runner.sh");
-	if (PACKAGED) {
+	if (PACKAGED && !sourceTestDependenciesAvailable()) {
 		return {
 			checkId: "tests",
 			status: "finding",
