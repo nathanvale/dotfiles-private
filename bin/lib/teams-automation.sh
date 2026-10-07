@@ -126,7 +126,7 @@ teams_require_conversation() {
 
 # --- conversation resolution ---------------------------------------------
 
-TEAMS_SKILL="${TEAMS_SKILL:-$HOME/.claude/skills/teams}"
+TEAMS_SKILL="${TEAMS_SKILL:-$HOME/code/dotfiles/config/agents/plugins/personal/library/teams}"
 TEAMS_PY="$TEAMS_SKILL/.venv/bin/python"
 TEAMS_CLI="$TEAMS_SKILL/scripts/teams_cli.py"
 

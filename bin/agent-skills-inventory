@@ -12,7 +12,7 @@ from collections import Counter
 
 
 HOME = os.path.expanduser("~")
-DOTFILES_ROOT = os.path.join(HOME, "code", "dotfiles")
+DOTFILES_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 LEGACY_SOURCE = os.path.join(DOTFILES_ROOT, ".agents", "skills")
 PERSONAL_SOURCE = os.path.join(
     DOTFILES_ROOT, "config", "agents", "skills", "personal"
@@ -34,10 +34,14 @@ ADDRESSES = {
     "claude": os.path.join(HOME, ".claude", "skills"),
     "codex": os.path.join(HOME, ".codex", "skills"),
 }
-LOCK_CANDIDATES = [
-    os.path.join(LEGACY_SOURCE, ".skill-lock.json"),
-    os.path.join(HOME, ".agents", ".skill-lock.json"),
-]
+REVIEWED_LOCK_PATH = os.path.join(
+    DOTFILES_ROOT, "config", "agents", "skills", ".skill-lock.json"
+)
+MACHINE_LOCK_PATH = (
+    os.path.join(os.environ["XDG_STATE_HOME"], "skills", ".skill-lock.json")
+    if os.environ.get("XDG_STATE_HOME")
+    else os.path.join(HOME, ".agents", ".skill-lock.json")
+)
 
 
 def load_json(path):
@@ -55,11 +59,26 @@ def normalize_config_path(path):
 
 
 def load_lock():
-    for candidate in LOCK_CANDIDATES:
-        if os.path.exists(candidate):
-            payload = load_json(candidate)
-            return payload.get("skills", {}), os.path.realpath(candidate)
-    return {}, None
+    reviewed = {
+        name: metadata
+        for name, metadata in load_json(REVIEWED_LOCK_PATH).get("skills", {}).items()
+        if metadata.get("source") != "mattpocock/skills"
+    }
+    machine = (
+        load_json(MACHINE_LOCK_PATH).get("skills", {})
+        if os.path.exists(MACHINE_LOCK_PATH)
+        else {}
+    )
+    native = {
+        name: metadata
+        for name, metadata in machine.items()
+        if metadata.get("source") == "mattpocock/skills"
+    }
+    return {**reviewed, **native}, (
+        os.path.realpath(MACHINE_LOCK_PATH)
+        if os.path.exists(MACHINE_LOCK_PATH)
+        else REVIEWED_LOCK_PATH
+    )
 
 
 def git_object_hash(kind, payload):
@@ -135,27 +154,6 @@ def entry_count(root, excluded_top_level_entries=None):
     return count
 
 
-def protected_root_exclusions(relative_path, declaration):
-    excluded = declaration.get("excludedTopLevelEntries", [])
-    if not isinstance(excluded, list):
-        return None
-    seen = set()
-    for name in excluded:
-        if (
-            not isinstance(name, str)
-            or not name
-            or "\0" in name
-            or name in {".", ".."}
-            or os.path.basename(name) != name
-            or name in seen
-        ):
-            return None
-        seen.add(name)
-    if excluded and (
-        relative_path != ".codex/skills" or excluded != [".system"]
-    ):
-        return None
-    return excluded
 
 
 def path_kind(path):
@@ -185,22 +183,24 @@ class Inventory:
         codex_skill_registrations,
     ):
         self.topology = topology
-        self.personal = topology.get("personal", {})
         self.project_only = topology.get("projectOnly", {})
         self.third_party = topology.get("thirdParty", {})
         self.retired = set(topology.get("retired", []))
         self.locked = locked
         self.lock_path = lock_path
+        self.native = {
+            name for name, metadata in locked.items()
+            if metadata.get("source") == "mattpocock/skills"
+        }
         self.skill_overrides = skill_overrides
         self.codex_skill_registrations = codex_skill_registrations
-        self.protected_manifest = topology.get("protectedHarness")
         self.protected_harness = None
         self.entries = []
         self.issues = []
 
-    def codex_registration_states(self, name):
+    def codex_registration_states(self, name, address="agents"):
         expected = normalize_config_path(
-            os.path.join(ADDRESSES["agents"], name, "SKILL.md")
+            os.path.join(ADDRESSES[address], name, "SKILL.md")
         )
         return [
             registration.get("enabled", True)
@@ -208,8 +208,8 @@ class Inventory:
             if normalize_config_path(registration.get("path", "")) == expected
         ]
 
-    def codex_activation(self, name):
-        states = self.codex_registration_states(name)
+    def codex_activation(self, name, address="agents"):
+        states = self.codex_registration_states(name, address)
         return "disabled" if states and all(state is False for state in states) else "enabled"
 
     def issue(self, code, address, name, message):
@@ -291,6 +291,8 @@ class Inventory:
             if address == "claude" and self.skill_overrides.get(name) == "off"
             else "enabled"
         )
+        if address == "codex":
+            activation = self.codex_activation(name, "codex")
         harness_activation = {address: activation} if address != "dotfiles" else {}
         if address == "agents":
             harness_activation["codex"] = self.codex_activation(name)
@@ -406,26 +408,8 @@ class Inventory:
             row["content_agreement"] = "missing-target"
             self.attach(row, "dangling-symlink", "live address has no resolved target")
             return
-        if name in self.personal:
-            expected = os.path.realpath(os.path.join(PERSONAL_SOURCE, name))
-            row.update(
-                provenance="personal-transitional",
-                source_owner="dotfiles",
-                source_path=expected,
-                content_agreement="match" if target == expected else "mismatch",
-            )
-            if kind != "symlink":
-                self.attach(
-                    row,
-                    "personal-not-tracking-link",
-                    "personal live address is not a Tracking Link",
-                )
-            if target != expected:
-                self.attach(
-                    row,
-                    "wrong-personal-target",
-                    "personal live address resolves to the wrong source",
-                )
+        if name in self.native:
+            self.classify_native(row)
             return
         if name in self.third_party:
             declaration = self.third_party[name]
@@ -467,19 +451,6 @@ class Inventory:
                 self.attach(row, "content-mismatch", "payload differs from lock hash")
             if agreement == "unverified":
                 self.attach(row, "content-unverified", "lock content could not be verified")
-            return
-        if is_within(target, PERSONAL_SOURCE):
-            row.update(
-                provenance="personal-undeclared",
-                source_owner="dotfiles",
-                source_path=target,
-                content_agreement="match",
-            )
-            self.attach(
-                row,
-                "undeclared-personal-source",
-                "personal source has no topology declaration",
-            )
             return
         if is_within(target, THIRD_PARTY_SOURCE):
             row.update(
@@ -525,7 +496,20 @@ class Inventory:
             return
         self.attach(row, "unknown-provenance", "entry has no declared source owner")
 
+    def classify_native(self, row):
+        row.update(
+            provenance="third-party-installer-owned",
+            source_owner="mattpocock/skills",
+            source_path=row["resolved_target"],
+            content_agreement="installer-owned",
+            lock_hash=self.locked[row["name"]].get("skillFolderHash"),
+            observed_git_tree_sha1=git_tree_hash(row["resolved_target"]),
+        )
+
     def classify_codex(self, row):
+        if row["name"] in self.native:
+            self.classify_live(row)
+            return
         if row["filesystem_kind"] == "symlink" and not os.path.exists(
             row["resolved_target"]
         ):
@@ -557,10 +541,8 @@ class Inventory:
 
     def check_declarations(self):
         allowed_addresses = {"agents", "claude"}
-        allowed_disabled_harnesses = {"codex"}
         project_names = set(self.project_only)
         for other_class, names in (
-            ("personal", set(self.personal)),
             ("third-party", set(self.third_party)),
             ("retired", self.retired),
             ("third-party lock", set(self.locked)),
@@ -642,126 +624,8 @@ class Inventory:
                             name,
                             "project-only skill must not have a user-scope live address",
                         )
-        declared = set(self.personal)
-        if os.path.isdir(PERSONAL_SOURCE):
-            for name in sorted(os.listdir(PERSONAL_SOURCE)):
-                if name not in declared:
-                    self.issue(
-                        "undeclared-personal-source",
-                        "personal-source",
-                        name,
-                        "personal source has no topology declaration",
-                    )
-        for name, declaration in sorted(self.personal.items()):
-            source = os.path.realpath(os.path.join(PERSONAL_SOURCE, name))
-            if not os.path.isdir(source):
-                self.issue(
-                    "missing-personal-source",
-                    "personal-source",
-                    name,
-                    f"declared source is missing: {source}",
-                )
-            addresses = declaration.get("addresses", [])
-            disabled_addresses = set(declaration.get("disabledAddresses", []))
-            disabled_harnesses = set(declaration.get("disabledHarnesses", []))
-            if not disabled_addresses.issubset(set(addresses)):
-                self.issue(
-                    "disabled-address-not-live",
-                    "topology",
-                    name,
-                    "disabled address is not present in the live-address declaration",
-                )
-            unsupported_disabled = disabled_addresses - {"claude"}
-            for address in sorted(unsupported_disabled):
-                self.issue(
-                    "unsupported-disabled-address",
-                    address,
-                    name,
-                    "only Claude skillOverrides currently owns disabled skill state",
-                )
-            claude_disabled = self.skill_overrides.get(name) == "off"
-            declared_claude_disabled = "claude" in disabled_addresses
-            if claude_disabled and not declared_claude_disabled:
-                self.issue(
-                    "undeclared-disabled-address",
-                    "claude",
-                    name,
-                    "Claude disables this declared live address but the topology does not",
-                )
-            if declared_claude_disabled and not claude_disabled:
-                self.issue(
-                    "missing-disabled-override",
-                    "claude",
-                    name,
-                    "topology declares Claude disabled but skillOverrides does not",
-                )
-            unsupported_harnesses = disabled_harnesses - allowed_disabled_harnesses
-            for harness in sorted(unsupported_harnesses):
-                self.issue(
-                    "unsupported-disabled-harness",
-                    harness,
-                    name,
-                    "only Codex shared-agent activation is currently supported",
-                )
-            if "codex" in disabled_harnesses and "agents" not in addresses:
-                self.issue(
-                    "disabled-harness-not-live",
-                    "codex",
-                    name,
-                    "Codex activation requires a declared shared-agent address",
-                )
-            codex_states = self.codex_registration_states(name)
-            if len(set(codex_states)) > 1:
-                self.issue(
-                    "conflicting-harness-registration",
-                    "codex",
-                    name,
-                    "Codex has conflicting enabled states for the shared-agent path",
-                )
-            codex_disabled = self.codex_activation(name) == "disabled"
-            declared_codex_disabled = "codex" in disabled_harnesses
-            if codex_disabled and not declared_codex_disabled:
-                self.issue(
-                    "undeclared-disabled-harness",
-                    "codex",
-                    name,
-                    "Codex disables this shared-agent skill but the topology does not",
-                )
-            if declared_codex_disabled and not codex_disabled:
-                self.issue(
-                    "missing-disabled-harness-state",
-                    "codex",
-                    name,
-                    "topology declares Codex disabled but its registration does not",
-                )
-            for address in addresses:
-                if address not in allowed_addresses:
-                    self.issue(
-                        "unknown-live-address",
-                        address,
-                        name,
-                        "personal declaration names an unsupported address",
-                    )
-                    continue
-                live = os.path.join(ADDRESSES[address], name)
-                if not os.path.lexists(live):
-                    self.issue(
-                        "missing-live-address",
-                        address,
-                        name,
-                        "declared personal Tracking Link is missing",
-                    )
-            for address in allowed_addresses - set(addresses):
-                live = os.path.join(ADDRESSES[address], name)
-                if os.path.lexists(live):
-                    self.issue(
-                        "undeclared-live-address",
-                        address,
-                        name,
-                        "personal skill is live at an undeclared address",
-                    )
         declared_third_party = set(self.third_party)
-        for name in sorted(set(self.locked) - declared_third_party):
+        for name in sorted(set(self.locked) - declared_third_party - self.native):
             self.issue(
                 "undeclared-third-party-lock",
                 "third-party-lock",
@@ -897,6 +761,8 @@ class Inventory:
             paths = [
                 os.path.join(LEGACY_SOURCE, name),
                 os.path.join(PERSONAL_SOURCE, name),
+                os.path.join(DOTFILES_ROOT, "config", "agents", "plugins", "personal", "library", name),
+                os.path.join(DOTFILES_ROOT, "config", "agents", "plugins", "personal", "optional", name),
                 *(os.path.join(root, name) for root in ADDRESSES.values()),
             ]
             if os.path.isdir(THIRD_PARTY_SOURCE):
@@ -924,7 +790,7 @@ class Inventory:
         codex_names = {
             row["name"] for row in self.entries if row["address"] == "codex"
         }
-        for name in sorted(agents_names & codex_names):
+        for name in sorted((agents_names & codex_names) - self.native):
             self.issue(
                 "codex-duplicate-name",
                 "codex",
@@ -933,96 +799,24 @@ class Inventory:
             )
 
     def check_protected_harness(self):
-        manifest = self.protected_manifest
-        if not manifest:
-            return
-        algorithm = manifest.get("algorithm")
-        version = manifest.get("version")
-        roots = manifest.get("roots")
-        if algorithm != "git-tree-sha1" or version != 1 or not isinstance(roots, list):
-            self.issue(
-                "protected-manifest-invalid",
-                "protected-harness",
-                None,
-                "protected Harness manifest must use git-tree-sha1 version 1 and a roots list",
-            )
-            return
-
+        """Observe operation fences without comparing a permanent baseline."""
         observed_roots = []
-        for expected in roots:
-            relative_path = expected.get("path") if isinstance(expected, dict) else None
-            if not isinstance(relative_path, str) or not relative_path:
-                self.issue(
-                    "protected-manifest-invalid",
-                    "protected-harness",
-                    None,
-                    "protected Harness root must declare a relative home path",
-                )
-                continue
-            normalized = os.path.normpath(relative_path)
-            if (
-                os.path.isabs(relative_path)
-                or normalized != relative_path
-                or normalized == ".."
-                or normalized.startswith(".." + os.sep)
-            ):
-                self.issue(
-                    "protected-manifest-invalid",
-                    "protected-harness",
-                    relative_path,
-                    "protected Harness root path must stay relative to HOME",
-                )
-                continue
-
-            excluded_entries = protected_root_exclusions(relative_path, expected)
-            if excluded_entries is None:
-                self.issue(
-                    "protected-manifest-invalid",
-                    "protected-harness",
-                    relative_path,
-                    "only .codex/skills may exclude its single .system entry",
-                )
-                continue
-
+        for relative_path, excluded in (
+            (".codex/skills", [".system"]),
+            (".codex/plugins/cache", []),
+        ):
             root = os.path.join(HOME, relative_path)
-            excluded_set = set(excluded_entries)
-            count = entry_count(root, excluded_set)
-            digest = git_tree_hash(root, excluded_set)
             observed = {
                 "path": relative_path,
-                "entryCount": count,
-                "gitTreeSha1": digest,
+                "entryCount": entry_count(root, set(excluded)),
+                "gitTreeSha1": git_tree_hash(root, set(excluded)),
             }
-            if excluded_entries:
-                observed["excludedTopLevelEntries"] = excluded_entries
+            if excluded:
+                observed["excludedTopLevelEntries"] = excluded
             observed_roots.append(observed)
-            if count is None or digest is None:
-                self.issue(
-                    "protected-root-missing",
-                    "protected-harness",
-                    relative_path,
-                    f"protected Harness root is missing or unreadable: {root}",
-                )
-                continue
-            expected_count = expected.get("entryCount")
-            if count != expected_count:
-                self.issue(
-                    "protected-entry-count-drift",
-                    "protected-harness",
-                    relative_path,
-                    f"expected {expected_count} entries, observed {count}",
-                )
-            expected_digest = expected.get("gitTreeSha1")
-            if digest != expected_digest:
-                self.issue(
-                    "protected-tree-hash-drift",
-                    "protected-harness",
-                    relative_path,
-                    f"expected {expected_digest}, observed {digest}",
-                )
         self.protected_harness = {
-            "algorithm": algorithm,
-            "version": version,
+            "algorithm": "git-tree-sha1",
+            "version": 1,
             "roots": observed_roots,
         }
 

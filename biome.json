@@ -5,7 +5,7 @@
 		"includes": [
 			"**",
 			"!**/docs/**/*.html",
-			"!config/agents/skills/personal/classic-cinema/references/assets/ticket-template.html",
+			"!config/agents/plugins/personal/library/classic-cinema/references/assets/ticket-template.html",
 			"!config/herdr/plugins",
 			"!**/actions/assets",
 			"!**/dist",
@@ -23,7 +23,7 @@
 			"!config/uv",
 			"!config/fish",
 			"!misc",
-			"!config/agents/skills/personal/last30days/scripts/lib/vendor",
+			"!config/agents/plugins/personal/library/last30days/scripts/lib/vendor",
 			"!pnpm-lock.yaml",
 			"!PROJECT_INDEX.json",
 			"!.worktrees",
