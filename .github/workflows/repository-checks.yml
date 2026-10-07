@@ -113,7 +113,10 @@ jobs:
         include:
           - plugin: connectors
             shard: 1
-            shards: 1
+            shards: 2
+          - plugin: connectors
+            shard: 2
+            shards: 2
           - plugin: my-second-brain-playground
             shard: 1
             shards: 2
