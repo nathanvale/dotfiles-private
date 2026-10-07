@@ -120,9 +120,8 @@
   tree, or stage with `git add .` or `git add -A`.
 - Dirty or untracked work: treat it as owned until proven disposable. Preserve
   it before removing a worktree or branch.
-- For Homebrew changes, edit
-  `$HOME/code/dotfiles/config/brew/Brewfile` first and follow the dotfiles
-  repository instructions. Avoid ad hoc package-state drift.
+- For Homebrew changes, follow the package instructions in
+  `$HOME/code/dotfiles/CODING_STANDARDS.md` before editing package state.
 - Mac storage investigation or cleanup: read
   `$HOME/code/dotfiles/docs/agents/mac-storage.md`.
 - Use configured keychain or 1Password-backed wrappers for credentials. Never

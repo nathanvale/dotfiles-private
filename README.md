@@ -169,11 +169,19 @@ nested stdout/stderr are retained in separate mode-restricted files.
 
 The [Repository checks workflow](.github/workflows/repository-checks.yml) owns
 continuous verification on pull requests and main. It uses the Bun version in
-`package.json`, prepares independent dependencies, runs the existing full gate
-and public shell regressions, and compares root/runtime Fallow against the
-immutable commit recorded by the triggering event. A hosted macOS runner proves
-source checks; it does not prove a personal machine installation, hook activation
-or branch-protection policy.
+`package.json` and prepares independent dependencies in every job. The
+`repository-gate` job runs `bun run check:core` (the full gate except plugin
+tests), the public shell regressions, and compares root/runtime Fallow against
+the immutable commit recorded by the triggering event. The `plugin-tests`
+matrix runs each plugin's tests as `bun test --shard` legs (the leg sets
+`PLUGIN_TEST_SHARD`, which each plugin's `test` script passes on), with only the
+signed fixtures that plugin consumes, and typechecks each plugin once;
+`check:core` fails when that matrix stops matching what `test:plugins`
+discovers, or when a plugin split into several shards stops passing
+`PLUGIN_TEST_SHARD` on. The `repository-checks` job passes only when every job and leg
+succeeded, so it remains the single result to require. A hosted macOS runner
+proves source checks; it does not prove a personal machine installation, hook
+activation or branch-protection policy.
 
 ### Add new symlinks
 Edit `bin/dotfiles/symlinks/symlinks_manage.sh` and add to the `symlinks` array.

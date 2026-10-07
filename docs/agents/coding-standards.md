@@ -31,7 +31,8 @@ file or any package standards file.
 - Declare every script invoked by a hook, `SKILL.md`, `package.json` script, launchd job, or shell as a runtime root in `.fallowrc.json` `entry`; never delete it as dead, because doing so breaks its invoking path.
 - Place committed build bundles under an `ignorePatterns` glob.
 - Give every inline `fallow-ignore` a human-readable reason; use it only for a genuine false positive.
-- Close out each code-changing turn per the `AGENTS.md` Proof section.
+- Close out each code-changing turn per
+  [repository proof](../../CODING_STANDARDS.md#proof).
 
 ### Independent oracle: no tautological tests
 
