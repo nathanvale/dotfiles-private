@@ -13,7 +13,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  repository-checks:
+  # `bun run check` is `check:core` plus `test:plugins`. This job runs
+  # `check:core` and the shell regressions; `plugin-tests` runs each plugin's
+  # test and typecheck routes as matrix legs, and `check:core` fails when that
+  # matrix stops matching the plugins `test:plugins` discovers.
+  repository-gate:
     runs-on: macos-15
     timeout-minutes: 30
     env:
@@ -29,34 +33,6 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
-      - name: Prepare the pinned Bun CLI template
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-        shell: bash
-        env:
-          TEMPLATE_DEPLOY_KEY: ${{ secrets.CLI_TEMPLATE_DEPLOY_KEY }}
-          TEMPLATE_REVISION: 7f6d95017e051c23e978f5d7f7542732b799dfdc
-        run: |
-          if [[ -z "$TEMPLATE_DEPLOY_KEY" ]]; then
-            echo "CLI_TEMPLATE_DEPLOY_KEY is required to read the pinned private template." >&2
-            exit 1
-          fi
-          ssh_root="$RUNNER_TEMP/cli-template-ssh"
-          template_root="$RUNNER_TEMP/bun-typescript-template"
-          install -d -m 0700 "$ssh_root"
-          printf '%s\n' "$TEMPLATE_DEPLOY_KEY" > "$ssh_root/key"
-          chmod 0600 "$ssh_root/key"
-          trap 'rm -f "$ssh_root/key"' EXIT
-          ssh-keyscan -t ed25519 github.com > "$ssh_root/known_hosts" 2>/dev/null
-          chmod 0600 "$ssh_root/known_hosts"
-          test "$(ssh-keygen -lf "$ssh_root/known_hosts" -E sha256 | awk '{print $2}')" = \
-            "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
-          git init --quiet "$template_root"
-          git -C "$template_root" remote add origin git@github.com:nathanvale/bun-typescript-template.git
-          GIT_SSH_COMMAND="ssh -i $ssh_root/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_root/known_hosts" \
-            git -C "$template_root" fetch --quiet --depth=1 origin "$TEMPLATE_REVISION"
-          git -C "$template_root" checkout --quiet --detach FETCH_HEAD
-          test "$(git -C "$template_root" rev-parse HEAD)" = "$TEMPLATE_REVISION"
-          printf 'BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT=%s\n' "$template_root" >> "$GITHUB_ENV"
       - name: Validate the event's immutable comparison base
         shell: bash
         run: |
@@ -68,81 +44,8 @@ jobs:
       - name: Prepare root and independently locked dependencies
         id: preparation
         run: bun run prepare:check -- --receipt-dir "$RUNNER_TEMP/dotfiles-preparation"
-      - name: Prepare the official MCPorter process fixture
-        shell: bash
-        run: |
-          set -euo pipefail
-          fixture_dir="$RUNNER_TEMP/connectors-mcporter-release"
-          mkdir -m 0700 "$fixture_dir"
-          curl --fail --location --silent --show-error \
-            'https://github.com/openclaw/mcporter/releases/download/v0.14.0/mcporter_0.14.0_darwin_arm64.tar.gz' \
-            --output "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz"
-          curl --fail --location --silent --show-error \
-            'https://github.com/openclaw/mcporter/releases/download/v0.14.0/provenance.json' \
-            --output "$fixture_dir/provenance.json"
-          printf '%s  %s\n' \
-            '4e4a0c579219ffc0da07ed95196c2c25f278b0d432d232c9554ee43118f5150b' \
-            "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz" \
-            '7a4256c6a3a921e2319386c3142ec33b4f0b5d693af5c652fe97ee884f30f2ab' \
-            "$fixture_dir/provenance.json" | shasum -a 256 -c -
-          /usr/bin/tar -xzf "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz" -C "$fixture_dir" mcporter
-          printf '%s  %s\n' \
-            '01d99ede8b6a88dd282eaeda2afb7086dca5bdbc04c05c8c21744703575adb27' \
-            "$fixture_dir/mcporter" | shasum -a 256 -c -
-          printf 'CONNECTORS_OFFICIAL_RELEASE_FIXTURE=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
-      - name: Prepare the signed official mise fixture for Connectors setup
-        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          fixture_root="$RUNNER_TEMP/connectors-mise-fixture"
-          install -d -m 0700 "$fixture_root/downloads"
-          release="https://github.com/jdx/mise/releases/download/v2026.9.12"
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
-            "$release/SHASUMS256.txt" --output "$fixture_root/downloads/SHASUMS256.txt"
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
-            "$release/SHASUMS256.txt.minisig" --output "$fixture_root/downloads/SHASUMS256.txt.minisig"
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
-            "$release/mise-v2026.9.12-macos-arm64.tar.xz" --output "$fixture_root/downloads/mise.tar.xz"
-          mise_binary="$(XDG_STATE_HOME="$fixture_root/state" CONNECTORS_MISE_FIXTURE_ROOT="$fixture_root" bun -e '
-            import { installVerifiedMise } from "./config/agents/plugins/connectors/bin/setup/mise.ts";
-            const root = process.env.CONNECTORS_MISE_FIXTURE_ROOT;
-            if (!root) throw new Error("fixture root missing");
-            const result = installVerifiedMise({
-              archiveFile: `${root}/downloads/mise.tar.xz`,
-              manifestFile: `${root}/downloads/SHASUMS256.txt`,
-              signatureFile: `${root}/downloads/SHASUMS256.txt.minisig`,
-              stateDirectory: `${root}/state/connectors/setup/mise`,
-            });
-            if (!result.ok) throw new Error(`official mise fixture verification failed: ${result.reason}`);
-            console.log(result.executable);
-          ')"
-          printf 'CONNECTORS_TEST_MISE_BINARY=%s\n' "$mise_binary" >> "$GITHUB_ENV"
-          printf 'CONNECTORS_TEST_MISE_RELEASE_DIR=%s\n' "$fixture_root/downloads" >> "$GITHUB_ENV"
-      - name: Prepare the signed official op fixture for compiled setup
-        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          fixture_root="$RUNNER_TEMP/connectors-op-fixture"
-          install -d -m 0700 "$fixture_root"
-          package="$fixture_root/op_apple_universal_v2.39.0.pkg"
-          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
-            'https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg' \
-            --output "$package"
-          printf '%s  %s\n' \
-            'bde261468f3232484e2738e337e39c674c11a4537f4c6ed314f933eae558a405' \
-            "$package" | shasum -a 256 -c -
-          signature="$(/usr/sbin/pkgutil --check-signature "$package")"
-          grep -Fq 'Status: signed by a developer certificate issued by Apple for distribution' <<< "$signature"
-          grep -Fq 'Notarization: trusted by the Apple notary service' <<< "$signature"
-          grep -Fq 'Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$signature"
-          assessment="$(/usr/sbin/spctl --assess --type install -vv "$package" 2>&1)"
-          grep -Fq 'source=Notarized Developer ID' <<< "$assessment"
-          grep -Fq 'origin=Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$assessment"
-          printf 'CONNECTORS_TEST_OP_PACKAGE=%s\n' "$package" >> "$GITHUB_ENV"
-      - name: Run the complete repository gate
-        run: bun run check
+      - name: Run the repository gate except plugin test suites
+        run: bun run check:core
       - name: Check the audit's public shell processes
         if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
         shell: bash
@@ -199,3 +102,172 @@ jobs:
         run: |
           bun run --silent quality:fallow --changed-since "$COMPARISON_BASE"
           bun run --silent quality:fallow:runtime -- --base "$COMPARISON_BASE"
+
+  plugin-tests:
+    name: plugin-tests (${{ matrix.plugin }} ${{ matrix.shard }}/${{ matrix.shards }})
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - plugin: connectors
+            shard: 1
+            shards: 2
+          - plugin: connectors
+            shard: 2
+            shards: 2
+          - plugin: my-second-brain-playground
+            shard: 1
+            shards: 2
+          - plugin: my-second-brain-playground
+            shard: 2
+            shards: 2
+    env:
+      CI: "true"
+    steps:
+      - name: Check out the candidate and comparison history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the repository's Bun version
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Prepare the pinned Bun CLI template
+        if: ${{ matrix.plugin == 'my-second-brain-playground' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        shell: bash
+        env:
+          TEMPLATE_DEPLOY_KEY: ${{ secrets.CLI_TEMPLATE_DEPLOY_KEY }}
+          TEMPLATE_REVISION: 7f6d95017e051c23e978f5d7f7542732b799dfdc
+        run: |
+          if [[ -z "$TEMPLATE_DEPLOY_KEY" ]]; then
+            echo "CLI_TEMPLATE_DEPLOY_KEY is required to read the pinned private template." >&2
+            exit 1
+          fi
+          ssh_root="$RUNNER_TEMP/cli-template-ssh"
+          template_root="$RUNNER_TEMP/bun-typescript-template"
+          install -d -m 0700 "$ssh_root"
+          printf '%s\n' "$TEMPLATE_DEPLOY_KEY" > "$ssh_root/key"
+          chmod 0600 "$ssh_root/key"
+          trap 'rm -f "$ssh_root/key"' EXIT
+          ssh-keyscan -t ed25519 github.com > "$ssh_root/known_hosts" 2>/dev/null
+          chmod 0600 "$ssh_root/known_hosts"
+          test "$(ssh-keygen -lf "$ssh_root/known_hosts" -E sha256 | awk '{print $2}')" = \
+            "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
+          git init --quiet "$template_root"
+          git -C "$template_root" remote add origin git@github.com:nathanvale/bun-typescript-template.git
+          GIT_SSH_COMMAND="ssh -i $ssh_root/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_root/known_hosts" \
+            git -C "$template_root" fetch --quiet --depth=1 origin "$TEMPLATE_REVISION"
+          git -C "$template_root" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$template_root" rev-parse HEAD)" = "$TEMPLATE_REVISION"
+          printf 'BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT=%s\n' "$template_root" >> "$GITHUB_ENV"
+      - name: Prepare root and independently locked dependencies
+        id: preparation
+        run: bun run prepare:check -- --receipt-dir "$RUNNER_TEMP/dotfiles-preparation"
+      - name: Prepare the official MCPorter process fixture
+        if: ${{ matrix.plugin == 'connectors' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_dir="$RUNNER_TEMP/connectors-mcporter-release"
+          mkdir -m 0700 "$fixture_dir"
+          curl --fail --location --silent --show-error \
+            'https://github.com/openclaw/mcporter/releases/download/v0.14.0/mcporter_0.14.0_darwin_arm64.tar.gz' \
+            --output "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz"
+          curl --fail --location --silent --show-error \
+            'https://github.com/openclaw/mcporter/releases/download/v0.14.0/provenance.json' \
+            --output "$fixture_dir/provenance.json"
+          printf '%s  %s\n' \
+            '4e4a0c579219ffc0da07ed95196c2c25f278b0d432d232c9554ee43118f5150b' \
+            "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz" \
+            '7a4256c6a3a921e2319386c3142ec33b4f0b5d693af5c652fe97ee884f30f2ab' \
+            "$fixture_dir/provenance.json" | shasum -a 256 -c -
+          /usr/bin/tar -xzf "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz" -C "$fixture_dir" mcporter
+          printf '%s  %s\n' \
+            '01d99ede8b6a88dd282eaeda2afb7086dca5bdbc04c05c8c21744703575adb27' \
+            "$fixture_dir/mcporter" | shasum -a 256 -c -
+          printf 'CONNECTORS_OFFICIAL_RELEASE_FIXTURE=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
+      - name: Prepare the signed official mise fixture for Connectors setup
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' && matrix.plugin == 'connectors' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="$RUNNER_TEMP/connectors-mise-fixture"
+          install -d -m 0700 "$fixture_root/downloads"
+          release="https://github.com/jdx/mise/releases/download/v2026.9.12"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            "$release/SHASUMS256.txt" --output "$fixture_root/downloads/SHASUMS256.txt"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            "$release/SHASUMS256.txt.minisig" --output "$fixture_root/downloads/SHASUMS256.txt.minisig"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            "$release/mise-v2026.9.12-macos-arm64.tar.xz" --output "$fixture_root/downloads/mise.tar.xz"
+          # shellcheck disable=SC2016 # Bun, not the shell, expands the JavaScript template literals.
+          mise_binary="$(XDG_STATE_HOME="$fixture_root/state" CONNECTORS_MISE_FIXTURE_ROOT="$fixture_root" bun -e '
+            import { installVerifiedMise } from "./config/agents/plugins/connectors/bin/setup/mise.ts";
+            const root = process.env.CONNECTORS_MISE_FIXTURE_ROOT;
+            if (!root) throw new Error("fixture root missing");
+            const result = installVerifiedMise({
+              archiveFile: `${root}/downloads/mise.tar.xz`,
+              manifestFile: `${root}/downloads/SHASUMS256.txt`,
+              signatureFile: `${root}/downloads/SHASUMS256.txt.minisig`,
+              stateDirectory: `${root}/state/connectors/setup/mise`,
+            });
+            if (!result.ok) throw new Error(`official mise fixture verification failed: ${result.reason}`);
+            console.log(result.executable);
+          ')"
+          printf 'CONNECTORS_TEST_MISE_BINARY=%s\n' "$mise_binary" >> "$GITHUB_ENV"
+          printf 'CONNECTORS_TEST_MISE_RELEASE_DIR=%s\n' "$fixture_root/downloads" >> "$GITHUB_ENV"
+      - name: Prepare the signed official op fixture for compiled setup
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' && matrix.plugin == 'connectors' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="$RUNNER_TEMP/connectors-op-fixture"
+          install -d -m 0700 "$fixture_root"
+          package="$fixture_root/op_apple_universal_v2.39.0.pkg"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            'https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg' \
+            --output "$package"
+          printf '%s  %s\n' \
+            'bde261468f3232484e2738e337e39c674c11a4537f4c6ed314f933eae558a405' \
+            "$package" | shasum -a 256 -c -
+          signature="$(/usr/sbin/pkgutil --check-signature "$package")"
+          grep -Fq 'Status: signed by a developer certificate issued by Apple for distribution' <<< "$signature"
+          grep -Fq 'Notarization: trusted by the Apple notary service' <<< "$signature"
+          grep -Fq 'Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$signature"
+          assessment="$(/usr/sbin/spctl --assess --type install -vv "$package" 2>&1)"
+          grep -Fq 'source=Notarized Developer ID' <<< "$assessment"
+          grep -Fq 'origin=Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$assessment"
+          printf 'CONNECTORS_TEST_OP_PACKAGE=%s\n' "$package" >> "$GITHUB_ENV"
+      - name: Run this shard of the plugin's tests
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        working-directory: config/agents/plugins/${{ matrix.plugin }}
+        env:
+          PLUGIN_TEST_SHARD: --shard=${{ matrix.shard }}/${{ matrix.shards }}
+        run: bun run test
+      - name: Typecheck the plugin once
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' && matrix.shard == 1 }}
+        working-directory: config/agents/plugins/${{ matrix.plugin }}
+        run: bun run typecheck
+
+  # The single required result. It runs even when a job above fails or is
+  # cancelled, and passes only when every job and every matrix leg succeeded.
+  repository-checks:
+    if: ${{ always() }}
+    needs: [repository-gate, plugin-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every repository check job to succeed
+        shell: bash
+        env:
+          GATE_RESULT: ${{ needs.repository-gate.result }}
+          PLUGIN_TESTS_RESULT: ${{ needs.plugin-tests.result }}
+        run: |
+          printf 'repository-gate: %s\nplugin-tests: %s\n' "$GATE_RESULT" "$PLUGIN_TESTS_RESULT"
+          if [[ "$GATE_RESULT" != success || "$PLUGIN_TESTS_RESULT" != success ]]; then
+            echo "Every repository check job must succeed." >&2
+            exit 1
+          fi

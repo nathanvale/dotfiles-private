@@ -5,9 +5,9 @@
 	"type": "module",
 	"scripts": {
 		"build": "bun run build:cli && bun run build:helper",
-		"build:cli": "bun build ./bin/connectors.ts --compile --target=bun-darwin-arm64 --outfile bin/connectors --minify",
+		"build:cli": "bun build ./bin/connectors.ts --compile --target=bun-darwin-arm64 --outfile bin/connectors --minify && codesign --force --sign - bin/connectors",
 		"build:helper": "xcrun clang -arch arm64 -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -framework Security -framework CoreFoundation bin/setup/keychain-helper.c -o bin/connectors-keychain-setup",
-		"test": "bun run build && bun test",
+		"test": "bun run build && bun test $PLUGIN_TEST_SHARD",
 		"typecheck": "../../../../node_modules/.bin/tsc --noEmit -p tsconfig.json"
 	}
 }

@@ -6,9 +6,11 @@
 // literals, never re-derived by importing bin/connectors.ts's own
 // envelope-building code.
 import { describe, expect, test } from "bun:test";
-import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { assertEnvelope, buildInternalFailureEnvelope } from "../bin/connectors.ts";
+import { compileFrontDoor } from "./compile-front-door.ts";
 import { startLoopbackMcpStub } from "./fixtures/loopback-mcp-stub.ts";
 import { createBundle, createFakeMcporterBinDir, createFixtureAuthorityBinDir, FRONT_DOOR, PLUGIN_ROOT, runFrontDoor } from "./harness.ts";
 
@@ -562,4 +564,34 @@ describe("compiled front door: per-Skill resolution (Q11a)", () => {
 		expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
 		expect(JSON.parse(stdout).result).toMatchObject({ commandIdentity: "connectors.discovery", outcome: "success" });
 	});
+});
+
+// Bun's compiled output carries an invalid linker signature. Once such a file
+// has run, the kernel kills any process that maps its pages, so git died
+// (exit 137, cs_invalid_page) re-hashing the tracked front door after a build
+// and a test run. The build re-signs ad hoc; Apple's codesign verdict and a
+// git read after an exec are the independent observables.
+describe("compiled front door: signature", () => {
+	function assertSignedAndReadableAfterExec(binary: string): void {
+		const verified = Bun.spawnSync(["/usr/bin/codesign", "--verify", "--strict", binary], { stdout: "pipe", stderr: "pipe" });
+		expect({ code: verified.exitCode, stderr: verified.stderr.toString() }).toEqual({ code: 0, stderr: "" });
+		expect(Bun.spawnSync([binary, "--help"], { env: { HOME: os.tmpdir(), PATH: "/usr/bin:/bin" }, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+		const read = Bun.spawnSync(["git", "hash-object", binary], { stdout: "pipe", stderr: "pipe" });
+		expect({ code: read.exitCode, signal: read.signalCode ?? null }).toEqual({ code: 0, signal: null });
+	}
+
+	test("the shipped front door carries a valid signature and stays readable by git after it runs", () => {
+		assertSignedAndReadableAfterExec(FRONT_DOOR);
+	});
+
+	test("a test-compiled front door is signed exactly as the build signs the shipped one", () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "connectors-signed-compile-"));
+		try {
+			const binary = path.join(root, "connectors");
+			compileFrontDoor(path.join(PLUGIN_ROOT, "bin", "connectors.ts"), binary);
+			assertSignedAndReadableAfterExec(binary);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	}, 60_000);
 });

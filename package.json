@@ -30,7 +30,9 @@
 	"keywords": [],
 	"scripts": {
 		"biome:check": "biome check --diagnostic-level=error .",
-		"check": "git diff --check && bun run biome:check && bun run typecheck && bun run test && bun run test:hooks && bun run --silent test:plugins && bun run test:quality:repository && bun run --silent quality:fallow && bun run --silent quality:fallow:runtime",
+		"check": "bun run check:core && bun run --silent test:plugins",
+		"check:core": "git diff --check && bun run --silent check:plugin-shards && bun run biome:check && bun run typecheck && bun run test && bun run test:hooks && bun run test:quality:repository && bun run --silent quality:fallow && bun run --silent quality:fallow:runtime",
+		"check:plugin-shards": "bun run tooling/plugin-test-shards.ts",
 		"check:write": "biome check --write .",
 		"lint": "biome lint --diagnostic-level=error .",
 		"lint:fix": "biome lint --write .",
@@ -43,7 +45,7 @@
 		"test": "bun run --filter '*' test",
 		"test:hooks": "bun test config/agents/claude/hooks",
 		"test:plugins": "bun run tooling/plugin-tests.ts",
-		"test:quality:repository": "bun test tooling/repository-quality/workspace-manifest.test.ts tooling/fallow-runtime-audit.test.ts tooling/repository-quality/plugin-tests.test.ts tooling/repository-quality/plugin-preparation.test.ts tooling/plugin-preparation.test.ts tooling/repository-quality/typescript-ownership.test.ts tooling/repository-quality/personal-plugin.test.ts",
+		"test:quality:repository": "bun test tooling/repository-quality/workspace-manifest.test.ts tooling/fallow-runtime-audit.test.ts tooling/repository-quality/plugin-tests.test.ts tooling/repository-quality/plugin-test-shards.test.ts tooling/repository-quality/plugin-preparation.test.ts tooling/plugin-preparation.test.ts tooling/repository-quality/typescript-ownership.test.ts tooling/repository-quality/personal-plugin.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json && bun run --filter '*' typecheck",
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows",
 		"personal:build": "bun run --filter bitbucket-scripts --filter classic-cinema-scripts --filter session-recovery-scripts --filter test-runner-scripts --filter worktree-scripts --filter @local/xero-skill --filter imazing-archive --filter xero-history build:bundle"
