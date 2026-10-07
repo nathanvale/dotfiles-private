@@ -1,7 +1,7 @@
 // Public process seam for the Vault Steward CLI 2.0 front door: spawn `src/main.ts` (or $VAULT_STEWARD_COMMAND) against
 // the fixtures of harness.ts with a pinned environment, parse the one stdout envelope through a test-owned shape, and
 // derive the catalogue observation the station tests compare. Nothing here reads the production catalogue.
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { type Fixture, write } from "./harness.ts"
 
@@ -129,5 +129,18 @@ export async function waitForBarrierArrival(path: string): Promise<void> {
 	while (!existsSync(arrival)) {
 		if (Date.now() >= deadline) throw new Error(`barrier ${path} was not reached within 10 s`)
 		await Bun.sleep(10)
+	}
+}
+
+// A barrier child blocks in a synchronous wait with no deadline and cannot handle SIGTERM there, so a test that fails
+// before writing the release would leave it running forever. Run the held phase, then always write the releases in
+// order and await the held processes: a failing assertion before that await would let the fixture cleanup delete a
+// release before the child's next poll sees it. The 10 s bound only detects a child hung past its release.
+export async function whileHeld<T>(releases: readonly string[], holders: readonly Promise<unknown>[], held: () => Promise<T>): Promise<T> {
+	try {
+		return await held()
+	} finally {
+		for (const release of releases) writeFileSync(release, "release\n")
+		await Promise.race([Promise.allSettled(holders), Bun.sleep(10_000)])
 	}
 }

@@ -1,8 +1,8 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { rmSync, writeFileSync } from "node:fs"
+import { rmSync } from "node:fs"
 import { join } from "node:path"
 import { cleanupFixtures, fixture, git, write } from "../helpers/harness.ts"
-import { candidate, must, preview, steward, stewardAsync, stewardEnvironment, waitForBarrierArrival } from "../helpers/steward.ts"
+import { candidate, must, preview, steward, stewardAsync, stewardEnvironment, waitForBarrierArrival, whileHeld } from "../helpers/steward.ts"
 
 // S5 is a real-process consequence test: the candidate is rebased, another candidate integrates while it is held
 // before its fast-forward, and the first process proves the failed fast-forward before restoring its own commit.
@@ -21,11 +21,12 @@ test("S5: a failed fast-forward after rebase restores the original candidate, so
 	const secondPreview = preview(f, second)
 	const release = join(f.root, "ff-release")
 	const paused = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", firstPreview, "--worktree", first], { ...stewardEnvironment(f), VAULT_STEWARD_FAULT: `barrier=before-ff-merge:${release}` })
-	await waitForBarrierArrival(release)
-	// S5 fault model: a losing legacy reclaimer removed the lock; another candidate may now integrate first.
-	rmSync(join(f.vault, ".git", "vault-note-commits.lock"), { recursive: true, force: true })
-	expect((await stewardAsync(f.vault, ["finish", "--apply", "--preview-id", secondPreview, "--worktree", second], stewardEnvironment(f))).envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
-	writeFileSync(release, "release\n")
+	await whileHeld([release], [paused], async () => {
+		await waitForBarrierArrival(release)
+		// S5 fault model: a losing legacy reclaimer removed the lock; another candidate may now integrate first.
+		rmSync(join(f.vault, ".git", "vault-note-commits.lock"), { recursive: true, force: true })
+		expect((await stewardAsync(f.vault, ["finish", "--apply", "--preview-id", secondPreview, "--worktree", second], stewardEnvironment(f))).envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
+	})
 	const failed = await paused
 	expect(failed.envelope?.result).toMatchObject({ causeCode: "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED", transactionState: "unchanged" })
 	expect(git(first, "rev-parse", "HEAD")).toBe(original)

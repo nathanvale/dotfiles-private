@@ -2,7 +2,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { cleanupFixtures, fixture, git, installRewriteHook, lockFiles, write } from "../helpers/harness.ts"
-import { apply, candidate, data, integrate, must, preview, run, stewardAsync, stewardEnvironment, waitForBarrierArrival, waitForOwner } from "../helpers/steward.ts"
+import { apply, candidate, data, integrate, must, preview, run, stewardAsync, stewardEnvironment, waitForBarrierArrival, waitForOwner, whileHeld } from "../helpers/steward.ts"
 
 // The Vault Steward CLI 2.0 journeys through real child processes: preview and apply binding (CONTRACT.md 3.8), the
 // no-changes plan, receipts and diagnostics custody, two-process safety for apply and recover (one effect, the other
@@ -73,9 +73,10 @@ test("two applies of one preview produce exactly one integration; the other refu
 	const release = join(f.root, "apply-release")
 	// The holder releases only after the contender's public busy envelope is observed.
 	const holder = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-held:${release}` })
-	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"))
-	const second = await stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], env)
-	writeFileSync(release, "release\n")
+	const second = await whileHeld([release], [holder], async () => {
+		await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"))
+		return await stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], env)
+	})
 	const first = await holder
 	expect(first.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(second.envelope?.result.causeCode).toBe("TRANSIENT_INTEGRATION_BUSY")
@@ -99,14 +100,19 @@ test("two CLI applies against a dead lock recheck under the reclaim mutex: one c
 	const release = join(f.root, "reclaim-release")
 	const published = join(f.root, "reclaimer-published")
 	const juror = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-judged:${published}` })
-	// Start the reclaimer only after the juror has judged the dead owner. Started together, a late juror can find the
-	// lock path empty between the reclaimer's rename and re-create, take the lock itself and skip the recheck under test.
-	await waitForBarrierArrival(published)
-	const reclaimer = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-held:${release}` })
-	await waitForOwner(join(lock, "owner.json"), deadOwner)
-	// Only the reclaimer can change the dead owner record. That witness releases the juror from lock-judged.
-	writeFileSync(published, "published\n")
-	writeFileSync(release, "release\n")
+	// Only the reclaimer can change the dead owner record. That witness releases the juror from lock-judged, then the
+	// reclaimer from lock-held.
+	const holders = [juror]
+	const { reclaimer } = await whileHeld([published, release], holders, async () => {
+		// Start the reclaimer only after the juror has judged the dead owner. Started together, a late juror can find the
+		// lock path empty between the reclaimer's rename and re-create, take the lock itself and skip the recheck under test.
+		await waitForBarrierArrival(published)
+		const started = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-held:${release}` })
+		holders.push(started)
+		await waitForOwner(join(lock, "owner.json"), deadOwner)
+		// Wrapped so the held phase does not await the reclaimer, which finishes only after its release.
+		return { reclaimer: started }
+	})
 	const [jurorResult, reclaimerResult] = await Promise.all([juror, reclaimer])
 	expect(reclaimerResult.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(jurorResult.envelope?.result.causeCode).toBe("SUCCESS_UNCHANGED")
@@ -122,10 +128,11 @@ test("a second apply that starts after consumption refuses consumed while the fi
 	const env = stewardEnvironment(f)
 	const release = join(f.root, "consume-release")
 	const first = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=after-consume:${release}` })
-	await waitForBarrierArrival(release)
-	// bindPreview runs outside the lock: the consumed record is visible before the lock is released
-	const second = run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree])
-	writeFileSync(release, "release\n")
+	const second = await whileHeld([release], [first], async () => {
+		await waitForBarrierArrival(release)
+		// bindPreview runs outside the lock: the consumed record is visible before the lock is released
+		return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree])
+	})
 	expect(second.envelope?.result.causeCode).toBe("DOMAIN_PREVIEW_CONSUMED")
 	expect((await first).envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
@@ -138,13 +145,13 @@ test("an apply bound before the lock refuses stale when a newer preview supersed
 	const env = stewardEnvironment(f)
 	const release = join(f.root, "lock-release")
 	const apply = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", first, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=after-lock:${release}` })
-	await waitForBarrierArrival(release)
-	// preview runs outside the lock: the candidate is amended and a newer record replaces the bound one while the apply is held
-	write(worktree, "projects/demo/GOAL.md", "# Goal\n\nRevised.\n")
-	git(worktree, "commit", "--amend", "--no-edit", "--all")
-	const amended = git(worktree, "rev-parse", "HEAD")
-	const second = preview(f, worktree)
-	writeFileSync(release, "release\n")
+	const { amended, second } = await whileHeld([release], [apply], async () => {
+		await waitForBarrierArrival(release)
+		// preview runs outside the lock: the candidate is amended and a newer record replaces the bound one while the apply is held
+		write(worktree, "projects/demo/GOAL.md", "# Goal\n\nRevised.\n")
+		git(worktree, "commit", "--amend", "--no-edit", "--all")
+		return { amended: git(worktree, "rev-parse", "HEAD"), second: preview(f, worktree) }
+	})
 	expect(second).not.toBe(first)
 	const stale = await apply
 	expect(stale.exitCode).toBe(3)
@@ -180,9 +187,10 @@ test("a crash between the fast-forward and the receipt is recoverable: inspect r
 	const staleOwner = readFileSync(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), "utf8")
 	const release = join(f.root, "recover-release")
 	const holder = stewardAsync(f.vault, ["recover", "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=before-receipt:${release}` })
-	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), staleOwner)
-	const second = await stewardAsync(f.vault, ["recover", "--worktree", worktree], env)
-	writeFileSync(release, "release\n")
+	const second = await whileHeld([release], [holder], async () => {
+		await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), staleOwner)
+		return await stewardAsync(f.vault, ["recover", "--worktree", worktree], env)
+	})
 	const first = await holder
 	expect(first.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(first.envelope?.result.effects.completed).toEqual(["completion.receipt", "completion.ref"])
