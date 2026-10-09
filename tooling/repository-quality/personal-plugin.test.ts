@@ -7,7 +7,7 @@ const repoRoot = resolve(import.meta.dir, "../..");
 const pluginRoot = join(repoRoot, "config/agents/plugins/personal");
 // Independent oracle: preserved identities from the pre-migration discovery matrix.
 const codexNames = [
-	"agent-reliability-guardrails", "apple-reminders", "bestie", "bitbucket", "ci-testbed",
+	"agent-reliability-guardrails", "apple-reminders", "bestie", "ci-testbed",
 	"classic-cinema", "codex-code-review", "context-advisor", "context-unhobble-audit",
 	"design-parity-session", "figma", "gh-account-switch", "heal-skill", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "last30days", "mcp-doctor", "notion", "one-password",
@@ -24,7 +24,6 @@ const claudeNames = [
 	"test-design", "test-runner", "timesheets", "work-music", "worktree", "xero", "xero-cash-coding",
 ];
 const bundleEntries = [
-	"bitbucket/dist/cli.js", "bitbucket/dist/generate-openapi-baseline.js",
 	"classic-cinema/dist/list-movies.js", "classic-cinema/dist/check-availability.js",
 	"classic-cinema/dist/parse-tickets.js", "classic-cinema/dist/pick-seats.js",
 	"classic-cinema/dist/fill-ticket.js", "classic-cinema/dist/heal-skill.js",
@@ -63,6 +62,7 @@ test("native manifests preserve the independent per-Harness enabled sets", () =>
 	expect(claude.skills.map((entry: string) => entry.split("/").at(-1)).sort()).toEqual(claudeNames);
 	for (const entry of claude.skills) expect(existsSync(join(pluginRoot, entry, "SKILL.md"))).toBe(true);
 	expect(existsSync(join(pluginRoot, "optional/fix-microphone/SKILL.md"))).toBe(true);
+	expect(existsSync(join(pluginRoot, "library/bitbucket"))).toBe(false);
 	expect(existsSync(join(pluginRoot, "skills"))).toBe(false);
 	expect(existsSync(join(repoRoot, "config/agents/skills/personal"))).toBe(false);
 });

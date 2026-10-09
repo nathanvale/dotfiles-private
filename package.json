@@ -12,7 +12,6 @@
 		".agents/runtime/cli-command-facade",
 		".agents/runtime/cli-test-fixtures",
 		".agents/runtime/session-corpus",
-		"config/agents/plugins/personal/library/bitbucket",
 		"config/agents/plugins/personal/library/classic-cinema",
 		"config/agents/plugins/personal/library/session-recovery",
 		"config/agents/plugins/personal/library/test-runner",
@@ -48,7 +47,7 @@
 		"test:quality:repository": "bun test tooling/repository-quality/workspace-manifest.test.ts tooling/fallow-runtime-audit.test.ts tooling/repository-quality/plugin-tests.test.ts tooling/repository-quality/plugin-test-shards.test.ts tooling/repository-quality/plugin-preparation.test.ts tooling/plugin-preparation.test.ts tooling/repository-quality/typescript-ownership.test.ts tooling/repository-quality/personal-plugin.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json && bun run --filter '*' typecheck",
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows",
-		"personal:build": "bun run --filter bitbucket-scripts --filter classic-cinema-scripts --filter session-recovery-scripts --filter test-runner-scripts --filter worktree-scripts --filter @local/xero-skill --filter imazing-archive --filter xero-history build:bundle"
+		"personal:build": "bun run --filter classic-cinema-scripts --filter session-recovery-scripts --filter test-runner-scripts --filter worktree-scripts --filter @local/xero-skill --filter imazing-archive --filter xero-history build:bundle"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.15",
