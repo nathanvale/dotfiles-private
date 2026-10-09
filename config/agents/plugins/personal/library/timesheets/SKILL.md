@@ -8,8 +8,8 @@ description: "Prepare Nathan's weekly FastTrack360 and OnCore drafts in personal
 Prepare a requested portal or both Friday drafts. Nathan has standing draft
 authority for normal working weeks: Monday through Friday, OnCore one Standard
 Day per day, FastTrack360 Standard 09:00 to 17:00 with no breaks, 40 hours total.
-Keep submission separate. For a scheduled run, read
-[references/friday.md](references/friday.md) before opening either portal.
+Keep submission separate. Before using standing draft authority, read
+[references/friday.md](references/friday.md) and complete its exception check.
 
 ## Portal
 
@@ -53,10 +53,10 @@ cookies, authentication-bearing URLs, browser identifiers, and screenshots.
    signals before reading timesheet data.
 2. `proposing`: identify the requested period from its canonical list row.
    Verify the contract or placement, editable state, and existing rows.
-3. `draft authority`: for an ordinary current week, apply the standing pattern
-   without another question. Obtain confirmation for exceptions or conflicting
-   saved rows, not routine empty rows. An ad hoc supplied pattern also grants
-   draft authority for its stated period.
+3. `draft authority`: after checking exceptions, apply the standing pattern
+   for an ordinary current week without another question. Obtain confirmation
+   for exceptions or conflicting saved rows, not routine empty rows. An ad hoc
+   supplied pattern also grants draft authority for its stated period.
 4. `writing`: apply only the confirmed draft entries. Re-observe after an
    uncertain action. Repeat only after positive proof that it had no effect.
 5. `reviewing`: save and reopen the draft through the canonical list. Verify

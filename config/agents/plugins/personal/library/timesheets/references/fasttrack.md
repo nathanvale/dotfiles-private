@@ -27,7 +27,8 @@ historical detail, or opened period detail is not the canonical target.
 - Use the closest prior `Submitted` row only when its contract or placement
   matches. Offer its work days, attendance type, start and end times, and
   breaks as suggestions.
-- Ask Nathan for values when no matching prior submission exists.
+- Ask Nathan only for required values absent from the standing or explicitly
+  supplied pattern. Submitted history is optional for a normal-week draft.
 - Use standing draft authority for the normal pattern; confirm only a changed
   pattern or an exception.
 - Interpret `9 to 5` as `09:00` to `17:00`. Interpret `no breaks` as no break

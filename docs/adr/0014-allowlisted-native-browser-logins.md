@@ -30,7 +30,7 @@ This reopens the attended-login branch, not native browser attachment.
 ## Decision
 
 Recommend the shared Module under `one-password`, with the user-owned local
-whitelist at `~/.config/browser-automation/logins.json`. The Interface fills
+whitelist at `~/.local/state/browser-automation/logins.json`. The Interface fills
 approved username/password fields through a native Harness Tab. It neither
 opens a second browser connection nor performs a business submission.
 

@@ -19,6 +19,9 @@ period. A login page, report, or opened period detail is not the canonical targe
 - In Reports > Submitted Timesheets, select the same contract or placement and
   run the report. Offer the closest prior submitted row's units, unit type, and
   rate as suggestions.
+- To verify an already submitted current week, use `Submitted timesheets
+  awaiting approval`. The all-timesheets date-range query can omit a pending
+  week; its empty result does not prove the week is unsubmitted.
 - Ask Nathan for values when no matching prior submission exists.
 - Use standing draft authority for the normal Friday pattern. Verify the rate
   against the same contract's submitted history; confirm only an exception,
@@ -29,10 +32,10 @@ period. A login page, report, or opened period detail is not the canonical targe
 - Verify the opened detail shows the selected contract or placement, exact
   period, and editable state.
 - Inspect the complete existing grid before writing.
-- For an empty grid, add the confirmed rows.
+- Fill absent authorised rows when all existing rows match the intended draft.
 - For an exact match, make no edit and continue to draft review.
-- For a partial or different grid, show the exact delta and obtain confirmation
-  before editing.
+- For a conflicting grid, show the exact delta and obtain confirmation before
+  editing. Preserve unexplained rows.
 - Stop on a duplicate, unexplained row, wrong period, or mismatched total.
 - For each confirmed absent date, select the rate, enter units and its mapped
   note, then issue one Insert.

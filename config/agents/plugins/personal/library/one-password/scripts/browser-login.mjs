@@ -108,39 +108,65 @@ function credential(item, id) {
 	return value;
 }
 
-// The caller supplies native Harness locators, not another browser connection.
-// readItemOverride is a test seam; production callers use wrapper custody above.
-/** @param {{login: string, profile: string, tab: {url: () => Promise<string | undefined>}, fields: Array<{id: 'username' | 'password', locator: NativeLocator}>, whitelistPath?: string, readItemOverride?: (entry: LoginEntry) => Promise<unknown>}} options */
-export async function fillBrowserLogin({
-	login, profile, tab, fields,
-	whitelistPath = join(homedir(), ".config/browser-automation/logins.json"),
-	readItemOverride = readItem,
-}) {
+/** @param {Array<{id: string, selector: string}>} fields */
+function validateFields(fields) {
+	requireValue(Array.isArray(fields) && fields.length > 0 && fields.length <= 2,
+		"invalid-fields");
+	const ids = fields.map((field) => field.id);
+	requireValue(ids.every((id) => id === "username" || id === "password") &&
+		new Set(ids).size === ids.length && fields.every((field) =>
+			typeof field.selector === "string" && field.selector.trim().length > 0), "invalid-fields");
+}
+
+/** @param {NativeTab} tab @param {Array<{id: string, selector: string}>} fields */
+async function observeFields(tab, fields) {
+	const valid = await tab.playwright.evaluate((targets) => {
+		const elements = targets.map((target) => document.querySelectorAll(target.selector));
+		return elements.every((matches, index) => matches.length === 1 &&
+			matches[0].tagName === "INPUT" &&
+			(targets[index].id === "password" ? matches[0].getAttribute("type") === "password" :
+				[null, "text", "email", "tel"].includes(matches[0].getAttribute("type")))) &&
+			new Set(elements.map((matches) => matches[0])).size === targets.length;
+	}, fields);
+	requireValue(valid === true, "invalid-or-shared-input");
+	const locators = fields.map((field) => tab.playwright.locator(field.selector));
+	for (const locator of locators) {
+		requireValue(await locator.count() === 1 && await locator.isVisible() &&
+			await locator.isEnabled(), "ambiguous-or-hidden-field");
+	}
+	return locators;
+}
+
+/** @typedef {{url: () => Promise<string | undefined>, playwright: {evaluate: (fn: (targets: Array<{id: string, selector: string}>) => boolean, arg: Array<{id: string, selector: string}>) => Promise<boolean>, locator: (selector: string) => NativeLocator}}} NativeTab */
+/** @param {{login: string, cua: {listBrowsers: (options: {emit: boolean}) => Promise<Array<{id: string, profileName?: string}>>, getBrowser: (selector: {id: string}) => Promise<{tabs: {get: (id: string) => Promise<NativeTab>}}>}, browserId: string, tabId: string, fields: Array<{id: 'username' | 'password', selector: string}>}} options */
+export async function fillBrowserLogin(options) {
 	let effect = "none";
 	let stage = "whitelist-read-failed";
 	try {
-		const entry = selectLogin(await loadWhitelist(whitelistPath), login, profile);
+		const { login, cua, browserId, tabId, fields } = options;
+		requireValue(Object.keys(options).every((key) =>
+			["login", "cua", "browserId", "tabId", "fields"].includes(key)), "invalid-options");
+		const whitelist = await loadWhitelist(join(homedir(), ".local/state/browser-automation/logins.json"));
 		stage = "native-observation-failed";
+		const matches = (await cua.listBrowsers({ emit: false })).filter((browser) => browser.id === browserId);
+		requireValue(matches.length === 1, "wrong-profile");
+		const entry = selectLogin(whitelist, login, matches[0].profileName ?? "");
+		const browser = await cua.getBrowser({ id: browserId });
+		const tab = await browser.tabs.get(tabId);
 		assertOrigin(await tab.url(), entry.origin);
-		requireValue(Array.isArray(fields) && fields.length > 0 && fields.length <= 2,
-			"invalid-fields");
+		validateFields(fields);
 		const ids = fields.map((field) => field.id);
-		requireValue(ids.every((id) => id === "username" || id === "password") &&
-			new Set(ids).size === ids.length, "invalid-fields");
-		for (const field of fields) {
-			requireValue(await field.locator.count() === 1 &&
-				await field.locator.isVisible() && await field.locator.isEnabled(),
-				"ambiguous-or-hidden-field");
-		}
+		await observeFields(tab, fields);
 		stage = "credential-custody-failed";
-		const item = record(await readItemOverride(entry));
+		const item = record(await readItem(entry));
 		validateItem(item, entry);
 		const values = fields.map((field) => credential(item, field.id));
 		stage = "native-fill-failed";
 		for (let index = 0; index < fields.length; index++) {
 			assertOrigin(await tab.url(), entry.origin);
+			const locators = await observeFields(tab, fields);
 			effect = "partial-or-unknown";
-			await fields[index].locator.fill(values[index]);
+			await locators[index].fill(values[index]);
 		}
 		return { status: "filled", effect: "filled", fields: ids };
 	} catch (error) {
