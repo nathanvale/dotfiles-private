@@ -20,8 +20,9 @@ period. A login page, report, or opened period detail is not the canonical targe
   run the report. Offer the closest prior submitted row's units, unit type, and
   rate as suggestions.
 - Ask Nathan for values when no matching prior submission exists.
-- Confirm the period, dates, units, rate, and each optional note mapped to its
-  date or row.
+- Use standing draft authority for the normal Friday pattern. Verify the rate
+  against the same contract's submitted history; confirm only an exception,
+  changed rate, or note that needs Nathan's wording.
 
 ## Draft
 
@@ -45,10 +46,10 @@ period. A login page, report, or opened period detail is not the canonical targe
 
 ## Native confirmation and proof
 
-Tell Nathan to watch the visible browser during submission. After approval,
-dispatch one Submit click and wait while the native dialog blocks the page.
-Nathan accepts or declines the irreversible submission dialog. Stop on an
-absent, unexpected, or declined dialog.
+After screenshot approval, dispatch one Submit click. Accept the expected native
+confirmation only when it describes the same approved timesheet; it is part of
+that single attempt, not a second routine question. Stop on an unexpected or
+declined dialog, or an uncertain outcome.
 
 After acceptance, observe the same tab and verify the success message. Open
 Reports > Submitted Timesheets, select the same contract or placement, and run

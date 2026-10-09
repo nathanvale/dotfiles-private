@@ -17,13 +17,15 @@ Browser Use are retired by
 - Codex `@Chrome` unavailable for a signed-in task: stop and ask Nathan to
   connect Chrome. `@Browser` has none of his sessions, so it is not a
   substitute for signed-in work.
-- A skill that names its own surface keeps it: `timesheets` uses `@Browser`
-  unless Nathan asks for `@Chrome`.
+- A skill that names its own surface keeps it. `timesheets` uses personal
+  `@Chrome` for the Friday workflow.
 
 ## Boundary
 
-- Nathan completes sign-in, 1Password, CAPTCHA, passkey, device-trust, and
-  recovery prompts. Resume only after he returns the same visible tab.
+- Nathan completes sign-in unless he has authorised the workflow's
+  exact allowlisted username/password login. That scoped exception is owned by
+  [one-password login reference](../../config/agents/plugins/personal/library/one-password/references/browser-login.md).
+  CAPTCHA, MFA, passkey, device-trust and recovery remain human handoffs.
 - Stay in the visible task tab, plus a child tab the task workflow opens in
   the same native browser.
 - Take a fresh page observation after navigation, page replacement, or any
