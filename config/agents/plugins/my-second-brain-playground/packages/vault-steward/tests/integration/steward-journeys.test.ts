@@ -193,7 +193,7 @@ test("a crash between the fast-forward and the receipt is recoverable: inspect r
 	})
 	const first = await holder
 	expect(first.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
-	expect(first.envelope?.result.effects.completed).toEqual(["completion.receipt", "completion.ref"])
+	expect(first.envelope?.result.effects.completed).toEqual(["completion.receipt", "completion.ref", "remote.push"])
 	expect(second.envelope?.result.causeCode).toBe("TRANSIENT_INTEGRATION_BUSY")
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
 	const commit = git(f.vault, "rev-parse", "main")
@@ -284,7 +284,7 @@ test("a rebased commit with an unadmitted path is refused DOMAIN_CANDIDATE_INVAL
 	const refused = run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree])
 	expect(refused.exitCode).toBe(3)
 	expect(refused.stderr).toBe("")
-	expect(refused.envelope?.result).toMatchObject({ commandIdentity: "vault-steward.finish-apply", outcome: "refused", causeCode: "DOMAIN_CANDIDATE_INVALID", transactionState: "unchanged", effects: { completed: [], remaining: ["completion.receipt", "completion.ref", "main.fast-forward"], uncertain: [], inventoryComplete: true }, handoff: { owner: "operator", resource: { kind: "candidate-worktree", id: worktree } } })
+	expect(refused.envelope?.result).toMatchObject({ commandIdentity: "vault-steward.finish-apply", outcome: "refused", causeCode: "DOMAIN_CANDIDATE_INVALID", transactionState: "unchanged", effects: { completed: [], remaining: ["completion.receipt", "completion.ref", "main.fast-forward", "remote.push"], uncertain: [], inventoryComplete: true }, handoff: { owner: "operator", resource: { kind: "candidate-worktree", id: worktree } } })
 	expect(refused.envelope?.message).toMatch(/rebased commit [a-f0-9]{40} changes projects\/demo\/GOAL\.md, unexpected\.md/)
 	expect(git(worktree, "rev-parse", "HEAD")).toBe(committed)
 	expect(git(worktree, "status", "--porcelain")).toBe("")

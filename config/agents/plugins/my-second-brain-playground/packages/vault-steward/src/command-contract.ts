@@ -15,7 +15,7 @@ export const RETRY_DELAY_MS = 2_000
 
 export type Outcome = "success" | "refused" | "failed"
 export type WireTransactionState = "unchanged" | "completed" | "partially-completed" | "unknown"
-export type EffectClass = "inspect" | "repository-local"
+export type EffectClass = "inspect" | "repository-local" | "external"
 type GuidanceArm = "next" | "handoff"
 const cause = <C extends FailureClass | null, O extends Outcome, S extends WireTransactionState, R extends boolean, G extends GuidanceArm>(failureClass: C, outcome: O, transactionState: S, retryable: R, guidance: G) =>
 	({ failureClass, outcome, transactionState, retryable, guidance }) as const
@@ -123,11 +123,11 @@ const COMMAND_DECLARATIONS = defineCommands([
 	{ commandIdentity: "vault-steward.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage", routes: [{ route: "help", word: "help", allowedOptions: ["help", "json"], requiredOptions: ["help"] }] },
 	{ commandIdentity: "vault-steward.discovery", route: ["--discover"], effectClass: "inspect", summary: "Describe the commands and the contract", routes: [{ route: "discover", word: "discovery", allowedOptions: ["discover", "json"], requiredOptions: ["discover"] }] },
 	{ commandIdentity: "vault-steward.command-discovery", route: ["--discover-command"], effectClass: "inspect", summary: "Describe the possible outcomes of one selected command", routes: [{ route: "command-discovery", word: "command-discovery", allowedOptions: ["discover-command", "json"], requiredOptions: ["discover-command"] }] },
-	{ commandIdentity: "vault-steward.begin", route: ["begin"], effectClass: "repository-local", summary: "Create a detached candidate worktree for the admitted paths", routes: [{ route: "begin", word: "begin", allowedOptions: ["json", "vault", "path", "preview"], requiredOptions: ["path"] }] },
-	{ commandIdentity: "vault-steward.finish-preview", route: ["finish", "--preview"], effectClass: "repository-local", summary: "Validate the candidate, create its commit, and record the integration plan", routes: [{ route: "finish-preview", word: "finish", allowedOptions: ["json", "preview", "worktree", "message"], requiredOptions: ["preview", "worktree", "message"] }] },
-	{ commandIdentity: "vault-steward.finish-apply", route: ["finish", "--apply"], effectClass: "repository-local", summary: "Integrate an unconsumed preview into canonical main under the lock", routes: [{ route: "finish-apply", word: "finish", allowedOptions: ["json", "apply", "preview-id", "worktree"], requiredOptions: ["apply", "preview-id", "worktree"] }] },
+	{ commandIdentity: "vault-steward.begin", route: ["begin"], effectClass: "external", summary: "Create a detached candidate worktree for the admitted paths", routes: [{ route: "begin", word: "begin", allowedOptions: ["json", "vault", "path", "preview"], requiredOptions: ["path"] }] },
+	{ commandIdentity: "vault-steward.finish-preview", route: ["finish", "--preview"], effectClass: "external", summary: "Validate the candidate, create its commit, and record the integration plan", routes: [{ route: "finish-preview", word: "finish", allowedOptions: ["json", "preview", "worktree", "message"], requiredOptions: ["preview", "worktree", "message"] }] },
+	{ commandIdentity: "vault-steward.finish-apply", route: ["finish", "--apply"], effectClass: "external", summary: "Integrate an unconsumed preview into canonical main under the lock", routes: [{ route: "finish-apply", word: "finish", allowedOptions: ["json", "apply", "preview-id", "worktree"], requiredOptions: ["apply", "preview-id", "worktree"] }] },
 	{ commandIdentity: "vault-steward.inspect", route: ["inspect"], effectClass: "inspect", summary: "Report the candidate's recovery state without writing", routes: [{ route: "inspect", word: "inspect", allowedOptions: ["json", "worktree"], requiredOptions: ["worktree"] }] },
-	{ commandIdentity: "vault-steward.recover", route: ["recover"], effectClass: "repository-local", summary: "Record completion evidence Git already proves; never replay the fast-forward", routes: [{ route: "recover", word: "recover", allowedOptions: ["json", "worktree"], requiredOptions: ["worktree"] }] },
+	{ commandIdentity: "vault-steward.recover", route: ["recover"], effectClass: "external", summary: "Record completion evidence Git already proves; never replay the fast-forward", routes: [{ route: "recover", word: "recover", allowedOptions: ["json", "worktree"], requiredOptions: ["worktree"] }] },
 ])
 
 export type CommandIdentity = (typeof COMMAND_DECLARATIONS)[number]["commandIdentity"]
@@ -179,7 +179,7 @@ export const HELP_DATA: HelpData = {
 }
 // CONTRACT.md 3.4: permanent effect exclusions published by discovery.
 const EFFECT_EXCLUSIONS: readonly string[] = [
-	"remote sync (push, fetch, publish)",
+	"remote fetch objects and tracking metadata",
 	"candidate worktree removal after the receipt",
 	"candidate rebase inside the private candidate worktree",
 	"diagnostics custody and retention",
@@ -216,7 +216,7 @@ const successShape = { outcome: z.literal("success"), failureClass: z.null(), ex
 const refusalShape = { outcome: z.literal("refused"), transactionState: z.literal("unchanged"), data: z.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: z.never().optional() }
 
 const failedBase = { outcome: z.literal("failed"), data: z.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: nonempty.optional(), ...noRetry }
-const anyClass = z.enum(["inspect", "repository-local"])
+const anyClass = z.enum(["inspect", "repository-local", "external"])
 const refusedNext = (failureClass: FailureClass, exitCode: ExitCode) =>
 	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: z.enum(causesWhere({ failureClass, outcome: "refused", guidance: "next", retryable: false })), failureClass: z.literal(failureClass), exitCode: z.literal(exitCode) })
 const refusedHandoff = (failureClass: FailureClass, exitCode: ExitCode) =>
@@ -227,13 +227,13 @@ const failedRow = (failureClass: FailureClass, exitCode: ExitCode, transactionSt
 const resultSchema = z
 	.union([
 		z.strictObject({ ...baseShape, ...successShape, effectClass: anyClass, transactionState: z.literal("unchanged"), causeCode: z.literal("SUCCESS_UNCHANGED"), effects: effectsSchema }),
-		z.strictObject({ ...baseShape, ...successShape, effectClass: z.literal("repository-local"), transactionState: z.literal("completed"), causeCode: z.literal("SUCCESS_COMPLETED"), effects: effectsSchema }),
+		z.strictObject({ ...baseShape, ...successShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("completed"), causeCode: z.literal("SUCCESS_COMPLETED"), effects: effectsSchema }),
 		refusedNext("usage", 2),
 		refusedNext("schema", 4),
 		refusedHandoff("schema", 4),
 		refusedNext("domain", 3),
 		refusedHandoff("domain", 3),
-		z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.literal("repository-local"), causeCode: z.literal("TRANSIENT_INTEGRATION_BUSY"), failureClass: z.literal("transient"), exitCode: z.literal(75), retryable: z.literal(true), retryDelayMilliseconds: positiveInteger }),
+		z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.enum(["repository-local", "external"]), causeCode: z.literal("TRANSIENT_INTEGRATION_BUSY"), failureClass: z.literal("transient"), exitCode: z.literal(75), retryable: z.literal(true), retryDelayMilliseconds: positiveInteger }),
 		failedRow("domain", 3, "unchanged", "handoff"),
 		failedRow("domain", 3, "unchanged", "next"),
 		failedRow("internal", 1, "unchanged", "handoff"),

@@ -117,13 +117,14 @@ function configPath(rt: Runtime): string {
 	return join(configRoot, "my-second-brain-playground", "vault.json")
 }
 
-// Closed config schema: exactly {schemaVersion: 1, vault: <absolute>}.
-export function configuredVaultFrom(payload: unknown): string | null {
+// Closed config schema: exactly {schemaVersion: 1, vault: <absolute or HOME-relative ~/ path>}.
+export function configuredVaultFrom(payload: unknown, home?: string): string | null {
 	if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null
 	const record = payload as { schemaVersion?: unknown; vault?: unknown }
-	if (record.schemaVersion !== 1 || typeof record.vault !== "string" || !isAbsolute(record.vault)) return null
+	if (record.schemaVersion !== 1 || typeof record.vault !== "string") return null
 	if (Object.keys(payload).sort().join(",") !== "schemaVersion,vault") return null
-	return record.vault
+	if (isAbsolute(record.vault)) return record.vault
+	return record.vault.startsWith("~/") && home && isAbsolute(home) ? resolve(home, record.vault.slice(2)) : null
 }
 
 export function configuredVault(rt: Runtime): string {
@@ -140,7 +141,7 @@ export function configuredVault(rt: Runtime): string {
 	} catch {
 		refuse("config-unparseable", { detail: path })
 	}
-	const vault = configuredVaultFrom(payload)
+	const vault = configuredVaultFrom(payload, rt.env.HOME)
 	if (vault === null) refuse("config-off-schema", { detail: path })
 	return vault
 }
