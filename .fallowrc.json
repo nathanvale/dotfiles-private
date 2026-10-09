@@ -68,6 +68,7 @@
     "config/agents/plugins/personal/library/ci-testbed/scripts/ci-repro.ts",
     "config/agents/plugins/personal/library/imessage-reader/scripts/query-imessage.ts",
     "config/agents/plugins/personal/library/mcp-doctor/scripts/mcp-doctor.ts",
+    "config/agents/plugins/personal/library/one-password/scripts/browser-login.mjs",
     "config/agents/plugins/personal/library/session-picker/scripts/archived-sessions.ts",
     "config/agents/plugins/personal/library/xero/scripts/quarter-ledger.ts",
     "config/agents/plugins/personal/library/xero-cash-coding/helper/src/cli.ts",
