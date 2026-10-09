@@ -692,7 +692,7 @@ if [[ "$PROFILE" == "server" ]]; then
     verify "LM Studio recovery agent" "[[ -f '$HOME/Library/LaunchAgents/com.nathanvale.lm-studio-ensure.plist' ]]"
     verify "Sleep disabled" "pmset_setting_is_zero sleep"
     verify "Display sleep disabled" "pmset_setting_is_zero displaysleep"
-    verify_warn "SSH enabled" "nc -z localhost 22"
+    verify_warn "SSH service loaded" "launchctl print system/com.openssh.sshd"
     verify_warn "Screen saver disabled" "[[ \$(defaults read com.apple.screensaver idleTime 2>/dev/null) == '0' ]]"
     phase_end "Server Settings"
 fi
@@ -831,10 +831,10 @@ if [[ $FAIL_COUNT -gt 0 || $WARN_COUNT -gt 0 ]]; then
                         "Fix: rm -rf /Applications/OrbStack.app && brew install --cask orbstack" \
                         "Or re-run: setup.sh --server (pre-cleanup handles this automatically)"
                     ;;
-                "SSH enabled")
-                    action "$YELLOW" "SSH" "could not verify (needs sudo)" \
+                "SSH service loaded")
+                    action "$YELLOW" "SSH" "system service is not loaded" \
                         "Fix:   sudo systemsetup -setremotelogin on" \
-                        "Check: sudo systemsetup -getremotelogin"
+                        "Check: launchctl print system/com.openssh.sshd"
                     ;;
                 "Screen saver disabled")
                     action "$YELLOW" "Screen saver" "could not verify setting" \

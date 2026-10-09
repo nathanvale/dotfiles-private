@@ -124,7 +124,6 @@ brew "anomalyco/tap/opencode", trusted: true # Open-source coding agent with loc
 # CLOUD & INFRASTRUCTURE (all profiles)
 # =============================================================================
 brew "awscli"                  # AWS CLI
-brew "az"                      # Azure CLI
 brew "flyctl"                  # Fly.io CLI
 brew "ghq"                     # Remote repository management
 
@@ -153,6 +152,7 @@ brew "mdserve"                 # Markdown preview server for AI coding agents
 # =============================================================================
 cask "1password-cli"           # 1Password CLI (op)
 cask "gcloud-cli"              # Google Cloud CLI
+cask "azure-cli"               # Azure CLI (migrated from the az formula)
 
 # =============================================================================
 # CASKS - SHARED GUI TOOLS (all profiles - keyboard, launcher, terminal, voice)
