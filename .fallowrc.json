@@ -87,8 +87,6 @@
     "tests/type-contracts-loose.ts",
     "config/agents/plugins/connectors/bin/provider-route.ts",
     "config/agents/plugins/connectors/bin/connectors.ts",
-    "config/agents/plugins/personal/library/bitbucket/src/cli.ts",
-    "config/agents/plugins/personal/library/bitbucket/src/generate-openapi-baseline.ts",
     "config/agents/plugins/personal/library/classic-cinema/src/list-movies.ts",
     "config/agents/plugins/personal/library/classic-cinema/src/check-availability.ts",
     "config/agents/plugins/personal/library/classic-cinema/src/parse-tickets.ts",

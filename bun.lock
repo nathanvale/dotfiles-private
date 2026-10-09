@@ -73,16 +73,6 @@
       "name": "diff-toggle",
       "version": "0.3.5",
     },
-    "config/agents/plugins/personal/library/bitbucket": {
-      "name": "bitbucket-scripts",
-      "bin": {
-        "bb": "./dist/cli.js",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "typescript": "catalog:",
-      },
-    },
     "config/agents/plugins/personal/library/classic-cinema": {
       "name": "classic-cinema-scripts",
       "version": "0.0.0",
@@ -316,8 +306,6 @@
     "argparse": ["argparse@2.0.1", "", {}, "sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q=="],
 
     "array-ify": ["array-ify@1.0.0", "", {}, "sha512-c5AMf34bKdvPhQ7tBGhqkgKNUzMr4WUs+WDtC2ZUGOUncbxKMTvqxYctiseW3+L4bA8ec+GcZ6/A/FW4m8ukng=="],
-
-    "bitbucket-scripts": ["bitbucket-scripts@workspace:config/agents/plugins/personal/library/bitbucket"],
 
     "braces": ["braces@3.0.3", "", { "dependencies": { "fill-range": "7.1.1" } }, "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA=="],
 
