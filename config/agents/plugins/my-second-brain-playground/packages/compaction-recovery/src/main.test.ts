@@ -144,6 +144,9 @@ function fixture(options: { writeCheckpoint?: boolean; observedSecondsAgo?: numb
 		join(home, ".config/my-second-brain-playground/vault.json"),
 		`${JSON.stringify({ schemaVersion: 1, vault })}\n`,
 	)
+	mkdirSync(join(home, "code"))
+	symlinkSync(vault, join(home, "code", "my-second-brain-playground"))
+	write(join(home, ".config/my-second-brain-playground/vault.json"), `${JSON.stringify({ schemaVersion: 1, vault: "~/code/my-second-brain-playground" })}\n`)
 	const checkpoint = {
 		schemaVersion: 2,
 		vaultRoot: vault,
@@ -1329,7 +1332,9 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	// launcher bytes are unchanged since M2.
 	expect(fileSha256("hooks/recovery-checkpoint")).toBe("8981956b243b998942a431da595115dbab73b51c9474b5aa0db49e751636be92")
 	expect(statSync(join(pluginRoot, "hooks/recovery-checkpoint")).mode & 0o111).not.toBe(0)
-	expect(fileSha256("packages/compaction-recovery/src/recovery.py")).toBe("9c8ed0b3af16ad6eeba9d50106bbc2c5b95d903bedd29059cf1df77a68c15aa4")
+	// Original baseline reader: 9c8ed0b3af16ad6eeba9d50106bbc2c5b95d903bedd29059cf1df77a68c15aa4.
+	// The only compatibility change expands a leading ~/ against the admitted home.
+	expect(fileSha256("packages/compaction-recovery/src/recovery.py")).toBe("103f1b3d65d434ae8e316ab6579c8fa380ce210a4eab32f07a9e49119169b7b5")
 })
 
 test("the checkpoint writer atomically creates private state accepted by recover", () => {

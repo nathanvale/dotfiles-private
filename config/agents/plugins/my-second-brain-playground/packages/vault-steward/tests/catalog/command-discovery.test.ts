@@ -38,7 +38,7 @@ test("--discover --json publishes the nine commands with their literal routes an
 	expect(data.profile).toBe("complex")
 	expect(data.exitMeanings).toEqual({ "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" })
 	expect(data.signalExits).toEqual({ "130": "SIGINT", "143": "SIGTERM" })
-	expect(data.effectExclusions).toContain("remote sync (push, fetch, publish)")
+	expect(data.effectExclusions).toContain("remote fetch objects and tracking metadata")
 	expect(data.effectExclusions).toContain("candidate rebase inside the private candidate worktree")
 	const commands = (data.commands as Record<string, unknown>[]).map((command) => ({ commandIdentity: command.commandIdentity, route: command.route, effectClass: command.effectClass }))
 	expect(commands).toEqual(EXPECTED_COMMANDS.map((command) => ({ commandIdentity: command.commandIdentity, route: [...command.route], effectClass: command.effectClass })))

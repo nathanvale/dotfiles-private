@@ -2,9 +2,11 @@
 
 Status: active
 
-Vault root: `/Users/nathanvale/code/my-second-brain-playground`
+Vault root: `~/code/my-second-brain-playground`
 
-Read fallback: `/Users/nathanvale/code/my-second-brain-vault-spike`
+Resolve `~` against the current machine user's home directory.
+
+Read fallback: `~/code/my-second-brain-vault-spike`
 
 ## Lookup and fallback
 
@@ -20,7 +22,7 @@ Write new notes and updates only in the playground. When an authorized update
 concerns a spike-only note, preserve useful content and provenance in the matching
 playground family after checking for an existing owner. Leave the spike source
 intact unless an explicit migration authorizes a forwarding note. Avoid bulk
-copying or automatic synchronization.
+copying or automatic synchronization between the canonical vault and fallback.
 
 ## Entry
 

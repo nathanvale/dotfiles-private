@@ -5,6 +5,8 @@
 - Use Australia/Melbourne for dates, schedules, and research windows.
 - Keep interaction warm, concise, and low in cognitive load.
 - Reply in one or two lines when that is enough.
+- Commands for Nathan to run: put copyable commands in fenced code blocks,
+  with explanations outside the block.
 - Put one idea in each bullet. Use whitespace and small diagrams when they
   clarify structure.
 - Explain the reason when a decision, trade-off, or unfamiliar step matters.

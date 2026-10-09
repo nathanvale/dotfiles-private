@@ -39,7 +39,7 @@ const H4: Tail = [false, null, "handoff", 4]
 const H1: Tail = [false, null, "handoff", 1]
 const N1: Tail = [false, null, "next-action", 1]
 const T75: Tail = [true, 2000, "next-action", 75]
-const RL = "repository-local"
+const RL = "external"
 
 // Keep the declarations literal: the contract derives its finite StationId vocabulary from this single production owner.
 const ROWS = [
@@ -136,6 +136,19 @@ const ROWS = [
 	["vault-steward.recover", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
 	["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "declared-unreachable", RECORD_UNREACHABLE],
 	["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+
+	// Remote synchronization gates and publication evidence.
+	["vault-steward.begin", "refused", "DOMAIN_CANONICAL_NOT_READY", RL, "unchanged", ...N3, [BEGIN], "required", null],
+	["vault-steward.begin", "refused", "DOMAIN_MAIN_DIVERGED", RL, "unchanged", ...H3, HANDOFF, "required", null],
+	["vault-steward.begin", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [BEGIN], "required", null],
+	["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
+	["vault-steward.finish-preview", "refused", "DOMAIN_CANONICAL_NOT_READY", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+	["vault-steward.finish-preview", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [PREVIEW], "required", null],
+	["vault-steward.finish-preview", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
+	["vault-steward.finish-apply", "refused", "DOMAIN_MAIN_DIVERGED", RL, "unchanged", ...H3, HANDOFF, "required", null],
+	["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
+	["vault-steward.recover", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
+	["vault-steward.recover", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
 ] as const satisfies readonly Row[]
 
 export type StationIdOf<RowTuple> = RowTuple extends readonly [infer Command extends string, infer Outcome extends string, infer Cause extends string, ...readonly unknown[]] ? `["${Command}","${Outcome}","${Cause}"]` : never
