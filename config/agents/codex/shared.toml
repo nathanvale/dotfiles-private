@@ -1,0 +1,29 @@
+# Portable Codex CLI declaration. Apply with ./setup.sh codex --apply.
+# Credentials, MCP servers, project trust, history and desktop state stay local.
+schema_version = 1
+cli_release = "0.162.0"
+plugins = [
+  "personal@personal",
+  "connectors@personal",
+  "proof@personal",
+  "my-second-brain-playground@personal",
+  "compound-engineering@compound-engineering-plugin",
+]
+
+[plugin_versions]
+"compound-engineering@compound-engineering-plugin" = "3.24.0"
+
+[config]
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
+personality = "friendly"
+
+[config.features]
+hooks = true
+
+[marketplaces.personal]
+source = "dotfiles:config/agents/plugins"
+
+[marketplaces.compound-engineering-plugin]
+source = "https://github.com/EveryInc/compound-engineering-plugin.git"
+ref = "3ad9b51bceecf0158e590c882034d0398dbb9c5c"

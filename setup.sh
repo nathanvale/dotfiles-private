@@ -1347,6 +1347,7 @@ main() {
         echo "  prefs            Just apply macOS preferences"
         echo "  status           Show current symlink status"
         echo "  verify           Run installation verification"
+        echo "  codex            Sync Codex: --preview, --apply, or --check [--json]"
         echo ""
         echo "Options:"
         echo "  --desktop, -d    Desktop workstation profile - default"
@@ -1479,6 +1480,15 @@ main() {
                 ;;
             verify)
                 run_verify "$@"
+                ;;
+            codex)
+                local option
+                for option in "$@"; do
+                    if [[ "$option" == "--apply" ]]; then
+                        require_canonical_activation_checkout
+                    fi
+                done
+                run_setup_child python3 "$setup_script_dir/bin/dotfiles/codex_sync.py" "$@"
                 ;;
         esac
     }
@@ -1658,12 +1668,18 @@ main() {
             log_warn "After restart, you can use: claude 'Help me debug...'"
         fi
 
-        local managed_codex="$HOME/.codex/packages/standalone/current/codex"
+        local managed_codex="$HOME/.codex/packages/standalone/current/bin/codex"
+        local codex_release
+        codex_release="$(sed -n 's/^cli_release = "\([0-9][0-9.]*\)"$/\1/p' "$DOTFILES_DIR/config/agents/codex/shared.toml")"
+        if [[ ! "$codex_release" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            log_error "Invalid shared Codex release declaration"
+            return 1
+        fi
         log "Installing managed Codex CLI..."
 
-        if [[ -x "$managed_codex" ]]; then
+        if [[ -x "$managed_codex" ]] && [[ "$("$managed_codex" --version)" == "codex-cli $codex_release" ]]; then
             log "Managed Codex already installed"
-        elif curl -fsSL https://chatgpt.com/codex/install.sh | sh &&
+        elif curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh -s -- --release "$codex_release" &&
              [[ -x "$managed_codex" ]]; then
             log "Managed Codex installed successfully"
         else
@@ -1873,6 +1889,8 @@ main() {
 
         install_symlinks
         install_prefs
+        log "Applying shared Codex settings and plugins..."
+        run_setup_child python3 "$DOTFILES_DIR/bin/dotfiles/codex_sync.py" --apply
 
         log "Configuration: COMPLETE"
     }
@@ -2172,7 +2190,7 @@ main() {
                 esac
                 shift 2
                 ;;
-            symlinks|prefs|status|verify)
+            symlinks|prefs|status|verify|codex)
                 subcommand="$1"
                 shift
                 subcommand_args=("$@")
@@ -2264,7 +2282,13 @@ main() {
     }
 
     # Read-only subcommands do not create state or acquire the mutation lock.
-    if [[ "$subcommand" == status || "$subcommand" == verify ]]; then
+    local codex_apply=false
+    if [[ "$subcommand" == codex ]]; then
+        for option in "${subcommand_args[@]}"; do
+            [[ "$option" == --apply ]] && codex_apply=true
+        done
+    fi
+    if [[ "$subcommand" == status || "$subcommand" == verify || ( "$subcommand" == codex && "$codex_apply" == false ) ]]; then
         if [[ ${#subcommand_args[@]} -gt 0 ]]; then
             run_subcommand "$subcommand" "${subcommand_args[@]}"
         else

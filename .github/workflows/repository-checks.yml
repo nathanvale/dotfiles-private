@@ -96,6 +96,9 @@ jobs:
             printf '  %s\n' "${failed_suites[@]}" >&2
             exit 1
           fi
+      - name: Check shared Codex setup processes
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        run: python3 bin/test/codex-sync-test.py
       - name: Compare root and runtime Fallow against the event commit
         if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
         shell: bash
