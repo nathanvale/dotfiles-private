@@ -31,6 +31,8 @@ When reusable template proof is missing, follow the roadmap's small native sampl
 
 Inspect the active native document and preserve Nathan's unsaved edits before changing it. Work in a separately versioned chapter file with retained linked assets. Use the configured native computer-control route; inspect exact output receipts after an uncertain operation before retrying it.
 
+Clear inherited local text overrides when applying chapter styles; keep emoji font overrides scoped to their exact characters. Use native automatic page-number markers and check the exported numbers and footer spacing.
+
 Save, reopen and export the candidate. Compare native readbacks with exact selected copy, source extents and art hashes. Check title roles, captions, meaningful whitespace, links, fonts, overset, actual facing relationships and the ending. Inspect all exported pages for rhythm and clipping, plus difficult text and art at useful scale. A no-overset result alone does not prove a complete or correct chapter.
 
 Show Nathan the actual candidate and make focused revisions within his feedback. Record his creative verdict separately from source, image, Unicode and print qualifications. A chapter accepted as a design reference does not establish whole-book acceptance or a default chapter length.
