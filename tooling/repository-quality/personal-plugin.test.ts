@@ -7,7 +7,7 @@ const repoRoot = resolve(import.meta.dir, "../..");
 const pluginRoot = join(repoRoot, "config/agents/plugins/personal");
 // Independent oracle: preserved identities from the pre-migration discovery matrix.
 const codexNames = [
-	"agent-reliability-guardrails", "apple-reminders", "bestie", "bitbucket", "ci-testbed",
+	"agent-reliability-guardrails", "apple-reminders", "bestie", "bestie-chapter-design", "bitbucket", "ci-testbed",
 	"classic-cinema", "codex-code-review", "context-advisor", "context-unhobble-audit",
 	"design-parity-session", "figma", "gh-account-switch", "heal-skill", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "mcp-doctor", "notion", "one-password",
@@ -17,7 +17,7 @@ const codexNames = [
 	"xero", "xero-cash-coding",
 ];
 const claudeNames = [
-	"bestie", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor",
+	"bestie", "bestie-chapter-design", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor",
 	"design-parity-session", "fix-microphone", "gh-account-switch", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "one-password", "pattern-referee",
 	"peekaboo", "resume-handoff", "session-picker", "storybook-matrix", "summarize",
