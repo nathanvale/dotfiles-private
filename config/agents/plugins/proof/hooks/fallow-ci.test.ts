@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, test } from 'bun:test'
 import {
@@ -228,5 +228,122 @@ describe('fallow-ci PreToolUse', () => {
 		})
 		expect(run.exitCode).toBe(0)
 		expect(wasInvoked(dir, 'fallow')).toBe(false)
+	})
+})
+
+describe('fallow-ci runner resolution', () => {
+	const LEGACY_FLAG_ERROR = JSON.stringify({
+		error: true,
+		message: "error: unexpected argument '--type-aware' found",
+		exit_code: 2,
+	})
+
+	/** A fake `pnpm` on PATH that appends each argv line to `argsFile`, then runs `body`. */
+	async function installFakeLauncher(argsFile: string, body: string): Promise<string> {
+		const binDir = await makeTempDir('proof-fallow-launcher-')
+		const launcher = join(binDir, 'pnpm')
+		writeFileSync(launcher, `#!/bin/sh\necho "$@" >> '${argsFile}'\n${body}\n`)
+		chmodSync(launcher, 0o755)
+		return binDir
+	}
+
+	async function setupPinnedRepo(dir: string, fallowServer: unknown): Promise<void> {
+		initRepo(dir)
+		writeFileSync(join(dir, '.fallowrc.json'), '{}\n')
+		if (fallowServer) {
+			writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { fallow: fallowServer } }))
+		}
+		writeFileSync(join(dir, 'committed.ts'), 'export const a = 1\n')
+		git(dir, 'add', '.')
+		git(dir, 'commit', '-q', '-m', 'init')
+		writeFileSync(join(dir, 'dirty.ts'), 'export const b = 1\n')
+	}
+
+	const pinnedServer = { command: 'pnpm', args: ['dlx', '--package', 'fallow@9.9.9', 'fallow-mcp'] }
+
+	test('audits through the pinned .mcp.json launcher and blocks a fail verdict', async () => {
+		const dir = await makeTempDir('proof-fallow-pinned-fail-')
+		const argsFile = join(dir, '.launcher-args')
+		await setupPinnedRepo(dir, pinnedServer)
+		const binDir = await installFakeLauncher(argsFile, `echo '${failReport()}'\nexit 1`)
+
+		const run = await runHook(HOOK_PATH, { hook_event_name: 'Stop', cwd: dir }, [], {
+			PATH: `${binDir}:${process.env.PATH ?? ''}`,
+		})
+		expect(run.exitCode).toBe(2)
+		const envelope = JSON.parse(run.stderr) as FallowEnvelope
+		expect(envelope.event).toBe('Stop')
+		expect(envelope.errors[0]?.message).toBe('[dead_code.unused_exports] oldApi')
+		const args = readFileSync(argsFile, 'utf8')
+		expect(args.startsWith('dlx --package fallow@9.9.9 fallow audit ')).toBe(true)
+		expect(args).toContain('--gate new-only')
+		expect(args).toContain('--changed-since HEAD')
+	})
+
+	test('passes a clean pinned audit with no stderr', async () => {
+		const dir = await makeTempDir('proof-fallow-pinned-pass-')
+		const argsFile = join(dir, '.launcher-args')
+		await setupPinnedRepo(dir, pinnedServer)
+		const binDir = await installFakeLauncher(argsFile, `echo '{"verdict":"pass"}'\nexit 0`)
+
+		const run = await runHook(HOOK_PATH, { hook_event_name: 'Stop', cwd: dir }, ['--harness=codex'], {
+			PATH: `${binDir}:${process.env.PATH ?? ''}`,
+		})
+		expect(run.exitCode).toBe(0)
+		expect(run.stdout).toBe('{}')
+		expect(run.stderr).toBe('')
+		expect(readFileSync(argsFile, 'utf8')).toContain('fallow audit')
+	})
+
+	test('retries once without type-aware flags when the pinned Fallow predates them', async () => {
+		const dir = await makeTempDir('proof-fallow-pinned-legacy-')
+		const argsFile = join(dir, '.launcher-args')
+		await setupPinnedRepo(dir, pinnedServer)
+		const legacyOutput = join(dir, '.legacy-output')
+		writeFileSync(legacyOutput, LEGACY_FLAG_ERROR)
+		const body = [
+			'case "$*" in',
+			`  *--type-aware*) cat '${legacyOutput}'; exit 2 ;;`,
+			`  *) echo '${failReport()}'; exit 1 ;;`,
+			'esac',
+		].join('\n')
+		const binDir = await installFakeLauncher(argsFile, body)
+
+		const run = await runHook(HOOK_PATH, { hook_event_name: 'Stop', cwd: dir }, [], {
+			PATH: `${binDir}:${process.env.PATH ?? ''}`,
+		})
+		expect(run.exitCode).toBe(2)
+		const calls = readFileSync(argsFile, 'utf8').trim().split('\n')
+		expect(calls).toHaveLength(2)
+		expect(calls[0]).toContain('--type-aware')
+		expect(calls[1]).not.toContain('--type-aware')
+		expect(calls[1]).toContain('--gate new-only')
+	})
+
+	test('reports an explicit no-runner skip for a marker without a local or pinned Fallow', async () => {
+		const dir = await makeTempDir('proof-fallow-norunner-')
+		await setupPinnedRepo(dir, null)
+
+		const run = await runHook(HOOK_PATH, { hook_event_name: 'Stop', cwd: dir }, ['--harness=codex'])
+		expect(run.exitCode).toBe(0)
+		expect(run.stdout).toBe('{}')
+		const envelope = JSON.parse(run.stderr) as SkippedEnvelope
+		expect(envelope.tool).toBe('fallow-ci')
+		expect(envelope.status).toBe('skipped')
+		expect(envelope.reason).toBe('no-runner')
+	})
+
+	test('treats an unpinned .mcp.json launcher as no runner and never invokes it', async () => {
+		const dir = await makeTempDir('proof-fallow-unpinned-')
+		const argsFile = join(dir, '.launcher-args')
+		await setupPinnedRepo(dir, { command: 'pnpm', args: ['dlx', '--package', 'fallow@latest', 'fallow-mcp'] })
+		const binDir = await installFakeLauncher(argsFile, 'exit 1')
+
+		const run = await runHook(HOOK_PATH, { hook_event_name: 'Stop', cwd: dir }, [], {
+			PATH: `${binDir}:${process.env.PATH ?? ''}`,
+		})
+		expect(run.exitCode).toBe(0)
+		expect((JSON.parse(run.stderr) as SkippedEnvelope).reason).toBe('no-runner')
+		expect(existsSync(argsFile)).toBe(false)
 	})
 })

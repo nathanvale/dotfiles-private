@@ -5,11 +5,14 @@
  * `git commit` or `git push` and blocks only on a `fail` verdict, the
  * official Fallow gate pattern, because it is the one layer an agent cannot
  * route around. `Stop` runs the same audit against the working-tree delta.
- * Both paths exit 0 silently when the repository has no local Fallow, and
- * never block on an operational error (invalid ref, no git repo) or output
- * they cannot parse.
+ * Both paths exit 0 silently when the repository has no `.fallowrc.json`,
+ * report a `no-runner` skip when it has one but no local or exactly pinned
+ * Fallow, and never block on an operational error (invalid ref, no git repo)
+ * or output they cannot parse.
  */
 
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
 	armSelfDestruct,
 	blockWithEnvelope,
@@ -21,7 +24,9 @@ import {
 	parseHarness,
 	passStop,
 	readHookInput,
-	resolveToolContext,
+	resolveCwd,
+	resolveRepoRoot,
+	resolveRepoTool,
 	runCommand,
 	summariseFailure,
 } from './common.ts'
@@ -29,6 +34,17 @@ import {
 const FALLOW_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.css']
 const FALLOW_MARKERS = ['.fallowrc.json']
 const GIT_COMMIT_OR_PUSH = /(^|[;&|\n]\s*)git\b[^;&|\n]*\b(commit|push)\b/
+const PINNED_LAUNCHERS = new Set(['pnpm', 'npx', 'bunx'])
+const EXACT_FALLOW_PIN = /^fallow@\d+\.\d+\.\d+$/
+const TYPE_AWARE_ARGS = ['--type-aware', '--type-aware-require', 'best-effort']
+const LEGACY_TYPE_AWARE_ERROR = "unexpected argument '--type-aware'"
+const NO_RUNNER_EXCERPT =
+	'.fallowrc.json is present, but there is no node_modules/.bin/fallow and no exact fallow@x.y.z pin in .mcp.json; Fallow did not run.'
+
+interface McpServerEntry {
+	command?: unknown
+	args?: unknown
+}
 
 interface FallowFinding {
 	path?: string
@@ -72,41 +88,76 @@ function collectFindings(report: FallowAuditReport): FailureEntry[] {
 	return entries
 }
 
+/** Returns the repository root only when it carries the `.fallowrc.json` marker. */
+async function resolveFallowRepo(input: HookInput): Promise<string | null> {
+	const repoRoot = await resolveRepoRoot(resolveCwd(input))
+	if (!repoRoot) return null
+	return FALLOW_MARKERS.some((marker) => existsSync(join(repoRoot, marker))) ? repoRoot : null
+}
+
+function readMcpFallowServer(repoRoot: string): McpServerEntry | null {
+	try {
+		const config = JSON.parse(readFileSync(join(repoRoot, '.mcp.json'), 'utf8')) as {
+			mcpServers?: { fallow?: McpServerEntry }
+		}
+		return config.mcpServers?.fallow ?? null
+	} catch {
+		return null
+	}
+}
+
+/**
+ * Reuses the repository's own exact `.mcp.json` Fallow pin, such as
+ * `pnpm dlx --package fallow@2.102.0 fallow-mcp`, with the CLI bin in place
+ * of the MCP bin. A floating version or an unknown launcher is not a runner.
+ */
+function pinnedMcpRunner(repoRoot: string): string[] | null {
+	const server = readMcpFallowServer(repoRoot)
+	const command = server?.command
+	const args = server?.args
+	if (typeof command !== 'string' || !PINNED_LAUNCHERS.has(command)) return null
+	if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === 'string')) {
+		return null
+	}
+	if (args.at(-1) !== 'fallow-mcp' || !args.some((arg) => EXACT_FALLOW_PIN.test(arg))) return null
+	return [command, ...args.slice(0, -1), 'fallow']
+}
+
+/** A repo-local binary wins; otherwise the repository's exact `.mcp.json` pin. */
+function resolveFallowRunner(repoRoot: string): string[] | null {
+	const binary = resolveRepoTool(repoRoot, 'fallow', FALLOW_MARKERS)
+	return binary ? [binary] : pinnedMcpRunner(repoRoot)
+}
+
 /**
  * Forces `--gate new-only` regardless of the target repo's own `.fallowrc.json`:
  * under `--gate all`, Fallow skips the attribution pass and no finding carries
  * `introduced`, which would make `collectFindings` return nothing and fall
  * back to a raw-excerpt block on pre-existing findings instead of gating only
- * what this change introduced.
+ * what this change introduced. A pinned Fallow older than type-aware analysis
+ * rejects those flags, so the audit retries once without them.
  */
 async function runFallowAudit(
-	binary: string,
+	runner: string[],
 	repoRoot: string,
 	extraArgs: string[],
 ): Promise<CommandResult> {
-	return runCommand(
-		[
-			binary,
-			'audit',
-			'--format',
-			'json',
-			'--quiet',
-			'--type-aware',
-			'--type-aware-require',
-			'best-effort',
-			'--gate',
-			'new-only',
-			...extraArgs,
-		],
-		{ cwd: repoRoot },
-	)
+	const audit = (typeAware: string[]) =>
+		runCommand(
+			[...runner, 'audit', '--format', 'json', '--quiet', ...typeAware, '--gate', 'new-only', ...extraArgs],
+			{ cwd: repoRoot },
+		)
+	const result = await audit(TYPE_AWARE_ARGS)
+	const output = `${result.stdout}${result.stderr}`
+	return output.includes(LEGACY_TYPE_AWARE_ERROR) ? audit([]) : result
+}
+
+function reportSkip(event: string, reason: string, excerpt: string): void {
+	process.stderr.write(JSON.stringify({ tool: 'fallow-ci', event, status: 'skipped', reason, excerpt }))
 }
 
 function skipOperational(event: string, result: CommandResult): void {
-	const excerpt = (result.stderr || result.stdout).trim().slice(0, 500)
-	process.stderr.write(
-		JSON.stringify({ tool: 'fallow-ci', event, status: 'skipped', reason: 'operational', excerpt }),
-	)
+	reportSkip(event, 'operational', (result.stderr || result.stdout).trim().slice(0, 500))
 }
 
 /** Resolves once the audit verdict is known: passes, blocks (never returns), or skips. */
@@ -155,12 +206,16 @@ async function runPreToolUse(input: HookInput): Promise<void> {
 	const action = matchCommitOrPush(command)
 	if (!action) process.exit(0)
 
-	const context = await resolveToolContext(input, 'fallow', FALLOW_MARKERS)
-	if (!context) process.exit(0)
-	const { repoRoot, binary } = context
+	const repoRoot = await resolveFallowRepo(input)
+	if (!repoRoot) process.exit(0)
+	const runner = resolveFallowRunner(repoRoot)
+	if (!runner) {
+		reportSkip('PreToolUse', 'no-runner', NO_RUNNER_EXCERPT)
+		process.exit(0)
+	}
 
 	const extraArgs = action === 'commit' ? ['--changed-since', 'HEAD'] : []
-	const result = await runFallowAudit(binary, repoRoot, extraArgs)
+	const result = await runFallowAudit(runner, repoRoot, extraArgs)
 	evaluate('PreToolUse', action, result)
 	process.exit(0)
 }
@@ -168,14 +223,19 @@ async function runPreToolUse(input: HookInput): Promise<void> {
 async function runStop(input: HookInput, harness: Harness): Promise<never> {
 	if (input.stop_hook_active === true) passStop(harness)
 
-	const context = await resolveToolContext(input, 'fallow', FALLOW_MARKERS)
-	if (!context) passStop(harness)
-	const { repoRoot, binary } = context
+	const repoRoot = await resolveFallowRepo(input)
+	if (!repoRoot) passStop(harness)
 
 	const files = await changedFiles(repoRoot, FALLOW_EXTENSIONS)
 	if (files.length === 0) passStop(harness)
 
-	const result = await runFallowAudit(binary, repoRoot, ['--changed-since', 'HEAD'])
+	const runner = resolveFallowRunner(repoRoot)
+	if (!runner) {
+		reportSkip('Stop', 'no-runner', NO_RUNNER_EXCERPT)
+		passStop(harness)
+	}
+
+	const result = await runFallowAudit(runner, repoRoot, ['--changed-since', 'HEAD'])
 	evaluate('Stop', 'changed-files', result)
 	passStop(harness)
 }

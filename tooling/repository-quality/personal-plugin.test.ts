@@ -7,19 +7,19 @@ const repoRoot = resolve(import.meta.dir, "../..");
 const pluginRoot = join(repoRoot, "config/agents/plugins/personal");
 // Independent oracle: preserved identities from the pre-migration discovery matrix.
 const codexNames = [
-	"agent-reliability-guardrails", "apple-reminders", "bestie", "bitbucket", "ci-testbed",
+	"agent-reliability-guardrails", "apple-reminders", "bestie", "bestie-chapter-design", "bitbucket", "ci-testbed",
 	"classic-cinema", "codex-code-review", "context-advisor", "context-unhobble-audit",
 	"design-parity-session", "figma", "gh-account-switch", "heal-skill", "home-assistant-use",
-	"imazing-archive", "imessage-reader", "last30days", "mcp-doctor", "notion", "one-password",
+	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "mcp-doctor", "notion", "one-password",
 	"pattern-referee", "peekaboo", "resume-handoff", "retro-scrum-master", "session-picker",
 	"session-recovery", "storybook-matrix", "stream-deck-author", "stream-deck-use", "summarize",
 	"teams", "test-design", "test-runner", "timesheets", "vocab-refresh", "work-music", "worktree",
 	"xero", "xero-cash-coding",
 ];
 const claudeNames = [
-	"bestie", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor",
+	"bestie", "bestie-chapter-design", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor",
 	"design-parity-session", "fix-microphone", "gh-account-switch", "home-assistant-use",
-	"imazing-archive", "imessage-reader", "last30days", "one-password", "pattern-referee",
+	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "one-password", "pattern-referee",
 	"peekaboo", "resume-handoff", "session-picker", "storybook-matrix", "summarize",
 	"test-design", "test-runner", "timesheets", "work-music", "worktree", "xero", "xero-cash-coding",
 ];

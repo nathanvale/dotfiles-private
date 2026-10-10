@@ -6,11 +6,12 @@ quality hooks for Claude Code and Codex: `biome-ci`, `fallow-ci`, and
 matching tool locally, so the plugin can be enabled globally without breaking
 a repository that has no Biome, Fallow, or TypeScript installed.
 
-The package identity is `proof` at version `0.1.0`. Keep that identity and
+The package identity is `proof` at version `0.2.0`. Keep that identity and
 version aligned across `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
-and the `personal` marketplace entry in
-`config/agents/plugins/.claude-plugin/marketplace.json`; a version bump touches
-all three.
+`package.json`, and the `personal` marketplace entries in
+`config/agents/plugins/.claude-plugin/marketplace.json` and
+`config/agents/plugins/.agents/plugins/marketplace.json`; a version bump
+touches all five.
 
 ## Live proof
 
@@ -36,7 +37,9 @@ checkout, that is `config/agents/plugins/proof/`.
 - `fallow-ci`: `PreToolUse` on `Bash` runs `fallow audit` before a `git commit`
   or `git push` and blocks only on a `fail` verdict for introduced findings,
   the official Fallow gate pattern. `Stop` runs the same audit against the
-  working-tree delta.
+  working-tree delta. A `pass` or `warn` verdict means the change introduced
+  no gating finding; it never means the repository's inherited backlog is
+  clean.
 - `typecheck-ci`: `Stop` only. `tsc` is whole-program, so gating it on every
   edit would produce false errors from mid-edit, multi-file states. Blocks
   only on diagnostics inside the changed-file set; an error in an untouched
@@ -57,9 +60,21 @@ checkout, that is `config/agents/plugins/proof/`.
 Every hook resolves the repository root, then requires both a repo-local
 `node_modules/.bin/<tool>` binary and a marker config file (`biome.json` or
 `biome.jsonc` for Biome, `.fallowrc.json` for Fallow, `tsconfig.json` for
-TypeScript). Missing either one exits 0 silently: no error, no block, no
+TypeScript). A missing marker exits 0 silently: no error, no block, no
 stderr. This is what lets the plugin stay enabled across every repository
 Nathan works in.
+
+Fallow has one more runner. When `.fallowrc.json` exists but
+`node_modules/.bin/fallow` does not, `fallow-ci` reuses the repository's own
+`.mcp.json` Fallow server when it pins an exact `fallow@x.y.z` through
+`pnpm`, `npx`, or `bunx`, swapping the `fallow-mcp` bin for `fallow`. For
+example, `pnpm dlx --package fallow@2.102.0 fallow-mcp` becomes
+`pnpm dlx --package fallow@2.102.0 fallow audit ...`. A floating version or
+another launcher is not a runner. With the marker but no runner, the hook
+still exits 0 but writes a `status: skipped`, `reason: no-runner` envelope to
+stderr, so an inactive gate is visible rather than silent. A pinned Fallow
+older than type-aware analysis rejects `--type-aware`; the audit then retries
+once without the type-aware flags.
 
 ### Dependency-free constraint
 

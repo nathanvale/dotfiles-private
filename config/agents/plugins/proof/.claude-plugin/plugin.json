@@ -1,6 +1,6 @@
 {
   "name": "proof",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-gating Biome, Fallow, and TypeScript quality hooks that fire only in repositories carrying the tool locally.",
   "author": {
     "name": "Nathan Vale"

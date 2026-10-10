@@ -19,7 +19,7 @@
     {
       "name": "proof",
       "description": "Self-gating Biome, Fallow, and TypeScript quality hooks that fire only in repositories carrying the tool locally.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Nathan Vale"
       },
@@ -28,7 +28,7 @@
     {
       "name": "personal",
       "description": "Nathan's personal workflows for Codex and Claude Code.",
-      "version": "0.4.1",
+      "version": "0.4.3",
       "author": {
         "name": "Nathan Vale"
       },
