@@ -49,18 +49,38 @@ every exported header, credit and folio. Check field order, supported metadata,
 font, size, leading, colour, alignment and spacing. Record deviations explicitly;
 named styles and installed fonts alone do not prove consistency.
 
+## Run the checks
+
+Resolve `skill_dir` from the directory containing this loaded `SKILL.md`, then
+run `bun --no-install "$skill_dir/helper/dist/bestie-chapter-check.js" <command> --json`.
+For repository development, run `bun run --silent src/cli.ts` from `helper/`.
+Every command only reads files. `--help` lists commands and options;
+[check inputs](references/check-inputs.md) gives each file's shape. Exit 0 is
+a pass, 3 lists failed checks in `message`, and 75 means wait and rerun. A
+pass is never native execution, visual acceptance or Print PASS.
+
 ## Build and inspect
 
-Inspect the active native document and preserve Nathan's unsaved edits before changing it. Work in a separately versioned chapter file with retained linked assets. Use the configured native computer-control route; inspect exact output receipts after an uncertain operation before retrying it.
+Hold one native app owner. Capture the active document and unsaved edits before cloning it. Hand back the captured baseline and changed candidate identities, protected-page comparison and explicit app release.
 
-Clear inherited local text overrides when applying chapter styles; keep emoji font overrides scoped to their exact characters. Use native automatic page-number markers and check the exported numbers and footer spacing.
+Before any native effect, write the build binding (actual baseline or capture, source revision, selected art and copy resolution) and pass `baseline`. A refusal means the build started from the wrong document; capture and rebind instead of repairing forward. Work in a separately versioned chapter file with retained linked assets.
 
-Save, reopen and export the candidate. Compare native readbacks with exact selected copy, source extents and art hashes. Check title roles, captions, meaningful whitespace, links, fonts, overset, actual facing relationships and the ending. Inspect all exported pages for rhythm and clipping, plus difficult text and art at useful scale. A no-overset result alone does not prove a complete or correct chapter.
+Resolve the current selected copy blocks and transition decisions through their named owners. Record exact block identities before placement. Refresh them immediately before native effects and compare them with the build inputs through `copy`. Finish with native and exported-text checks against those same blocks. Place only accepted or selected blocks; an accepted beat never accepts its whole proposed pair.
+
+When the declared edit replaces a story, replace the whole native story, keep only specified formatting and exact emoji overrides, then pass `story` against the `copy` placement text. Clear inherited local overrides when applying chapter styles. After the build, pass `protected` for every untouched page.
+
+Drive native controls from fresh accessibility state. Name each operation folder; the script writes `started.txt` then `completed.txt`. Pass `dispatch` before every dispatch, including retries. After an uncertain result, inspect receipts, document state and outputs before acting; then use the already demonstrated alternative route, such as Quick Apply opening Scripts. Record an unresolved control failure separately from chapter defects.
+
+Save, reopen and export the candidate. Read back every labelled page item regardless of object class, then pass `geometry` with a contract derived from the packet's production contract and typography owner. It checks footer alignment, page-number visibility, background bleed, declared role fonts, header text and reply spacing. A frame-only overlap prompts review; only measured ink proves a collision. Installed fonts alone do not prove glyphs render. Diagnose a white band from asset pixels and frame fitting before changing accepted art.
+
+Compare native readbacks with source extents and art hashes. Check title roles, captions, links, overset, facing relationships and the ending. Inspect all exported pages for rhythm and clipping, plus difficult text, glyphs and art at useful scale; geometry passes never replace that review.
 
 Show Nathan the actual candidate and make focused revisions within his feedback. Record his creative verdict separately from source, image, Unicode and print qualifications. A chapter accepted as a design reference does not establish whole-book acceptance or a default chapter length.
 
 ## Hand back
 
-Identify the saved native file, PDF, template actually exercised, design-contract revision and source/art bindings. State pages inspected, meaningful checks, remaining choices and defects. Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
+Write one current handback record and pass `handback`: native/PDF paths and digests, actual page count, manuscript-versus-native copy standing, source extents, UI owner and release, preview state and the next ready action. Carry selected Writing Beats answers with their evidence so settled choices are never asked again. Replace stale counts and pending-question snapshots rather than appending to them. Name the template actually exercised and the design-contract revision. Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
+
+When Nathan names a retro or review procedure, follow that procedure and deliver evidence-based patches when he asks for improvements.
 
 Stop at the authorized chapter review boundary. Final integrated interiors, cover/spine, print qualification and Nathan's final acceptance follow the current Goal. Sending, ordering and spending retain their separate authority.
