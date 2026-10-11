@@ -31,6 +31,24 @@ Apply the current design system and actual approved native proof. Give each cont
 
 When reusable template proof is missing, follow the roadmap's small native sample first. Save the demonstrated parents and styles as a separate `.indt`; open it into an independent editable document and exercise ordinary text and image changes before relying on it for the chapter. Keep current print geometry and technical mechanics in the packet's InDesign research owners.
 
+## Shared typography and message headers
+
+Before every chapter build, revision or consistency review, read the book's
+style guide at
+`<configured-vault>/projects/melanie-fourth-anniversary-meme-album/design-system.md`,
+including **Shared typography and metadata contract**. That owner defines the
+named styles, fonts, measurements, colours, metadata fields and spacing.
+
+Apply its message-header and artwork-credit contract to every chapter. Use its
+distinct styles for narration, transcripts, featured messages, poems and folios.
+Preserve supported source metadata and exact emoji overrides. Resolve a necessary
+deviation through that owner and Nathan's direction before reusing it.
+
+Before handback, compare actual native text ranges with the contract and inspect
+every exported header, credit and folio. Check field order, supported metadata,
+font, size, leading, colour, alignment and spacing. Record deviations explicitly;
+named styles and installed fonts alone do not prove consistency.
+
 ## Build and inspect
 
 Inspect the active native document and preserve Nathan's unsaved edits before changing it. Work in a separately versioned chapter file with retained linked assets. Use the configured native computer-control route; inspect exact output receipts after an uncertain operation before retrying it.
