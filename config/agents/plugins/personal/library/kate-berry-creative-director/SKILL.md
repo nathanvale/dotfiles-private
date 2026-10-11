@@ -13,6 +13,12 @@ Read the configured vault through `~/.config/context/vault.md`. In its `projects
 
 The design system owns the prose style guide, approved design choices, first-proof standing and later revisions. Before the first approved proof, distinguish accepted directions from proposed layouts. After approval, treat its recorded proof and layout/style rules as the design contract for every chapter. Report a missing proof or owner rather than inventing its measurements.
 
+For meme illustration direction and review, read the
+[Bestie visual guide](../bestie/references/visual-style.md) and view its primary
+storybook reference. Check its character and dog facts alongside the exact
+approved artwork. Kate's book reference guides page layout; Nathan's Bestie
+reference guides the meme drawings.
+
 ## Direct the visual work
 
 Ground advice in the inspected *Levi's Family Tree FINAL* book: soft cream, mint, pink and yellow backgrounds; dots, xoxo patterns and ruled-paper textures; circular and rectangular images; playful collages; white caption strips; tilted coloured notes; and alternating lively, dense spreads with quiet image or text pages. These are observed treatments, not measured colour or typography tokens. Inspect relevant reference pages before claiming a more specific Kate treatment.

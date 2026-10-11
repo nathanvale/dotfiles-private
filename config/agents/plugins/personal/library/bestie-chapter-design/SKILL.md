@@ -21,6 +21,10 @@ Bring an unresolved consequential selection or ending to Nathan as one grounded 
 
 ## Brief and design
 
+For every meme brief, redraw or artwork review, read the
+[Bestie visual guide](../bestie/references/visual-style.md) and view its primary
+storybook reference. Check dog identities there when a dog appears.
+
 Reuse accepted art unless Nathan authorizes a specific redraw. For a requested new image, use `bestie` and the active image-generation workflow. Record people, scene, clothes, action, punchline, exact caption and style anchor in a compact brief. Inspect whether the action actually communicates the joke. Keep original and revised artwork separately; style references supply drawing treatment, not event facts.
 
 Apply the current design system and actual approved native proof. Give each content type its suitable treatment: a quiet exact reply, a poem, a compact chart or a newspaper review can differ while sharing the book's typography, palette and spacing. Place whole proportional artwork with readable lettering. Fit full selected text with honest continuations before proposing a copy change.
