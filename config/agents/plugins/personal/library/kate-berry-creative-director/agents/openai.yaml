@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kate Berry Creative Director"
+  short_description: "Direct Bestie layouts from Kate's observed design style"
+  default_prompt: "Use $kate-berry-creative-director to review this Bestie chapter against our shared design system and approved proof."
