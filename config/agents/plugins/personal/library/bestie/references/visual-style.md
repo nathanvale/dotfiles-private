@@ -34,6 +34,11 @@ unless Nathan extends them to another. Preserve Nathan's blue eyes when iris
 detail is shown and Melanie's established dark ponytail unless he requests a
 change. Keep skin and fabric stylized and matte.
 
+Nathan confirms his head is fully shaved on 11 October 2026. Draw a smooth,
+skin-coloured scalp and clean-shaven face. Check every Nathan figure for a
+hairline, scalp stubble, sideburns or sharply bounded dark scalp patches that
+could read as hair; correct mismatches in separately versioned artwork.
+
 ## Confirmed dogs
 
 Nathan confirms both identities on 11 October 2026:
