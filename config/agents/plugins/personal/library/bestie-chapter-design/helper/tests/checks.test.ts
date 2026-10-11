@@ -628,6 +628,42 @@ describe("dispatch: native-control duplicate guard against operation receipts", 
     expectRefused(run("dispatch", "--receipts", dir, "--now", NOW), "uncertain outcome");
   });
 
+  test("refuses a named error receipt: the r11 voice-section build failed with an uncertain effect", () => {
+    // Real r11-voice-section shape: build errored; other operations completed or errored.
+    const dir = scratch();
+    put(dir, "build-error.txt", "ReferenceError: s.charCodeAt is not a function line 18");
+    put(dir, "capture-completed.txt", "captured");
+    put(dir, "repair-completed.txt", "repaired");
+    put(dir, "emoji-repair-error.txt", "emoji repair failed");
+    const fresh = put(dir, "target.json", { capturedAt: "2026-10-11T21:59:30+11:00" });
+    expectRefused(
+      run("dispatch", "--receipts", dir, "--operation", "build", "--target", fresh, "--now", NOW),
+      "Operation build recorded an error; its effect is uncertain",
+      `operation "build" recorded an error: ${join(dir, "build-error.txt")}`,
+    );
+    expectRefused(
+      run("dispatch", "--receipts", dir, "--target", fresh, "--now", NOW),
+      "receipt folder contains named operations: build-error.txt, capture-completed.txt, emoji-repair-error.txt, repair-completed.txt",
+    );
+  });
+
+  test("refuses a bare error.txt with or without an operation name", () => {
+    const dir = scratch();
+    put(dir, "error.txt", "failed");
+    const fresh = put(dir, "target.json", { capturedAt: "2026-10-11T21:59:30+11:00" });
+    expectRefused(run("dispatch", "--receipts", dir, "--target", fresh, "--now", NOW), `recorded an error: ${join(dir, "error.txt")}`);
+    expectRefused(run("dispatch", "--receipts", dir, "--operation", "apply-r18", "--target", fresh, "--now", NOW), `recorded an error: ${join(dir, "error.txt")}`);
+  });
+
+  test("clears a new named operation beside other operations' receipts with a fresh target", () => {
+    const dir = scratch();
+    const capture = put(dir, "capture-completed.txt", "captured");
+    utimesSync(capture, at("2026-10-11T21:40:00+11:00"), at("2026-10-11T21:40:00+11:00"));
+    const fresh = put(dir, "target.json", { capturedAt: "2026-10-11T21:59:30+11:00" });
+    expectRefused(run("dispatch", "--receipts", dir, "--operation", "build-r2", "--now", NOW), "fresh accessibility target is required");
+    expectPassed(run("dispatch", "--receipts", dir, "--operation", "build-r2", "--target", fresh, "--now", NOW));
+  });
+
   test("clears an empty folder with a fresh target and refuses a stale one", () => {
     const dir = scratch();
     expectRefused(run("dispatch", "--receipts", dir, "--now", NOW), "fresh accessibility target is required");

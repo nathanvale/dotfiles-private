@@ -74,11 +74,11 @@ export const COMMANDS: CommandSpec[] = [
   ]),
   command(
     "dispatch",
-    "Refuse a native-control dispatch that already started or completed.",
+    "Refuse a native-control dispatch that already started, completed or recorded an error.",
     [
-      req("--receipts", "DIR", "Operation folder holding started.txt and completed.txt."),
+      req("--receipts", "DIR", "Operation folder holding started.txt, completed.txt or error.txt."),
       opt("--operation", "NAME", "Also match older <NAME>-started.txt receipts in a shared folder."),
-      opt("--target", "FILE", "Accessibility target readback with capturedAt."),
+      opt("--target", "FILE", "Fresh accessibility target with capturedAt. Required to clear a new dispatch; omit only to inspect existing receipts."),
       opt("--max-age-seconds", "N", "Oldest accepted target age; default 120."),
       opt("--settle-seconds", "N", "Wait window after a started receipt; default 30."),
       opt("--now", "ISO", "Evaluation time; default the current time."),

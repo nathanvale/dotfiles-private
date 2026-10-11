@@ -5,7 +5,8 @@ import { InputError, MissingInputError, readJson, record, text } from "./input.t
 import { UsageError } from "./usage.ts";
 
 /**
- * Each native operation folder holds started.txt and completed.txt. A named
+ * Each native operation folder holds started.txt and completed.txt, or
+ * error.txt when the script failed after it may have changed state. A named
  * operation also matches the older <operation>-started.txt spelling, checked
  * first so its own unfinished start is not hidden; the bare folder receipt
  * still counts, so a refusal errs towards no duplicate effect.
@@ -18,7 +19,7 @@ function receipt(dir: string, prefix: string, phase: string): string | null {
 
 function newestReceiptMs(dir: string): number {
   return readdirSync(dir)
-    .filter((name) => /(^|-)(started|completed)\.(txt|json)$/.test(name))
+    .filter((name) => /(^|-)(started|completed|error)\.(txt|json)$/.test(name))
     .map((name) => statSync(join(dir, name)).mtimeMs)
     .reduce((a, b) => Math.max(a, b), 0);
 }
@@ -84,19 +85,33 @@ function startedResult(options: DispatchOptions, started: string, unclaimed: str
   };
 }
 
+function errorResult(options: DispatchOptions, error: string): CheckResult {
+  const name = options.operation ?? "in this folder";
+  return {
+    issues: [`operation "${name}" recorded an error: ${error}.`],
+    message: `Operation ${name} recorded an error; its effect is uncertain. Inspect before any retry.`,
+    passed: false,
+    repairAction:
+      "Inspect the error receipt, native document and output files. Retry in a new operation only after they prove no effect; otherwise record the control failure and use the demonstrated alternative route.",
+  };
+}
+
 /**
  * A named operation's own receipts come first. Its unfinished start reports
  * the bare completed.txt as unclaimed rather than as its completion.
  */
 function receipts(options: DispatchOptions) {
   const dir = options.receipts;
-  const bare = { completed: receipt(dir, "", "completed"), started: receipt(dir, "", "started"), unclaimed: null };
+  const find = (prefix: string) => ({
+    completed: receipt(dir, prefix, "completed"),
+    error: receipt(dir, prefix, "error"),
+    started: receipt(dir, prefix, "started"),
+  });
+  const bare = { ...find(""), unclaimed: null };
   if (options.operation === undefined) return bare;
-  const named = `${options.operation}-`;
-  const completed = receipt(dir, named, "completed");
-  if (completed !== null) return { completed, started: null, unclaimed: null };
-  const started = receipt(dir, named, "started");
-  return started === null ? bare : { completed: null, started, unclaimed: bare.completed };
+  const named = find(`${options.operation}-`);
+  if (named.completed !== null || named.error !== null) return { ...named, unclaimed: null };
+  return named.started === null ? bare : { ...named, unclaimed: bare.completed };
 }
 
 export function checkDispatch(options: DispatchOptions): CheckResult {
@@ -106,9 +121,9 @@ export function checkDispatch(options: DispatchOptions): CheckResult {
   if (!statSync(options.receipts).isDirectory()) {
     throw new InputError(`${options.receipts} is not a receipt directory.`);
   }
-  const prefixed = readdirSync(options.receipts).filter((name) =>
-    /.+-(started|completed)\.(txt|json)$/.test(name),
-  );
+  const prefixed = readdirSync(options.receipts)
+    .filter((name) => /.+-(started|completed|error)\.(txt|json)$/.test(name))
+    .sort();
   if (options.operation === undefined && prefixed.length > 0) {
     return verdict(
       [`receipt folder contains named operations: ${prefixed.join(", ")}.`],
@@ -118,7 +133,7 @@ export function checkDispatch(options: DispatchOptions): CheckResult {
       "Name the existing operation, inspect its receipts, then rerun dispatch.",
     );
   }
-  const { completed, started, unclaimed } = receipts(options);
+  const { completed, error, started, unclaimed } = receipts(options);
   if (completed !== null) {
     return {
       issues: [`operation "${options.operation ?? "in this folder"}" already completed: ${completed}.`],
@@ -128,6 +143,7 @@ export function checkDispatch(options: DispatchOptions): CheckResult {
         "Inspect the completed receipt and its outputs. Start a new operation folder only for a deliberately new effect.",
     };
   }
+  if (error !== null) return errorResult(options, error);
   if (started !== null) return startedResult(options, started, unclaimed);
   if (options.target === undefined) {
     return verdict(

@@ -77,6 +77,8 @@ before and after readbacks; check page moves with `protected --pages`.
   `replyHeader` (`headerStyles`, `bodyStyles`, `minGap`, optional `pattern`).
   Derive values from the packet's production contract and typography owner.
 - Accessibility target (`dispatch --target`): `{ capturedAt }` as ISO time.
+  Required to clear a new dispatch; without it `dispatch` only inspects
+  existing receipts and refuses.
 - Handback (`handback --record`): `chapter`, `revision`, `native` and `pdf`
   (`path`, `sha256`), `pageCount`, `copyResolution`, `nativeStories`, `copy`
   as `[{ role, storyLabel, standing }]` with standing `placed` or
