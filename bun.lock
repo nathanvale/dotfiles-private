@@ -73,6 +73,10 @@
       "name": "diff-toggle",
       "version": "0.3.5",
     },
+    "config/agents/plugins/personal/library/bestie-chapter-design/helper": {
+      "name": "bestie-chapter-check",
+      "version": "0.1.0",
+    },
     "config/agents/plugins/personal/library/bitbucket": {
       "name": "bitbucket-scripts",
       "bin": {
@@ -153,7 +157,7 @@
     },
     "config/agents/plugins/proof": {
       "name": "proof-plugin",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "@types/bun": "catalog:",
         "typescript": "catalog:",
@@ -316,6 +320,8 @@
     "argparse": ["argparse@2.0.1", "", {}, "sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q=="],
 
     "array-ify": ["array-ify@1.0.0", "", {}, "sha512-c5AMf34bKdvPhQ7tBGhqkgKNUzMr4WUs+WDtC2ZUGOUncbxKMTvqxYctiseW3+L4bA8ec+GcZ6/A/FW4m8ukng=="],
+
+    "bestie-chapter-check": ["bestie-chapter-check@workspace:config/agents/plugins/personal/library/bestie-chapter-design/helper"],
 
     "bitbucket-scripts": ["bitbucket-scripts@workspace:config/agents/plugins/personal/library/bitbucket"],
 
