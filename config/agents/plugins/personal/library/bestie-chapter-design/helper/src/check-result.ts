@@ -8,6 +8,8 @@ export type CheckResult =
       repairAction: string;
       /** Present only when a bounded wait may change the answer. */
       retryAfterMs?: number;
+      /** Visual-review flags that would sit in data on a pass. */
+      review?: string[];
     };
 
 export function verdict(
@@ -16,7 +18,10 @@ export function verdict(
   pass: string,
   fail: string,
   repairAction: string,
+  review: string[] = [],
 ): CheckResult {
   if (issues.length === 0) return { data, message: pass, passed: true };
-  return { issues, message: fail, passed: false, repairAction };
+  return review.length
+    ? { issues, message: fail, passed: false, repairAction, review }
+    : { issues, message: fail, passed: false, repairAction };
 }

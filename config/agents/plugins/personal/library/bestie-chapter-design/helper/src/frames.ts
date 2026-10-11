@@ -18,8 +18,10 @@ export type Frame = {
   label: string;
   kind: string | undefined;
   bounds: Bounds;
-  /** Rendered text extent (PDF word bounds or native line metrics), when measured. */
+  /** Measured text extent; geometry trusts it only with a glyph-tight inkMethod. */
   ink: Bounds | undefined;
+  /** How ink was measured, for example raster-glyph or pdf-word-box. */
+  inkMethod: string | undefined;
   visible: boolean | undefined;
   fill: string | undefined;
   z: number | undefined;
@@ -33,6 +35,7 @@ function frame(value: unknown, where: string): Frame {
   return {
     bounds: bounds(item.bounds, `${where}.bounds`),
     ink: optional(item.ink, (v) => bounds(v, `${where}.ink`)),
+    inkMethod: optional(item.inkMethod, (v) => text(v, `${where}.inkMethod`)),
     fill: optional(item.fill, (v) => text(v, `${where}.fill`)),
     kind: optional(item.kind, (v) => text(v, `${where}.kind`)),
     label: text(item.label, `${where}.label`),

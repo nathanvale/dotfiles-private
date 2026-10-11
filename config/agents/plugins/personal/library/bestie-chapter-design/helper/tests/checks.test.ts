@@ -262,6 +262,71 @@ describe("story: whole-story replacement with exact emoji overrides", () => {
   });
 });
 
+describe("story: page-keyed readbacks with repeated labels", () => {
+  // Real Phone readbacks repeat heading, folio and running-footer on every page.
+  const plain = (text: string) => ({ font: "Avenir Next\tDemi Bold", style: "Bestie Section Title", text });
+  const at = (page: number, label: string, text: string) => ({ label, page, ranges: [plain(text)], text });
+  const before = {
+    stories: [
+      at(1, "folio", "\u0018"),
+      at(1, "running-footer", "THREE YEARS OF BESTIE"),
+      at(2, "folio", "\u0018"),
+      at(2, "running-footer", "THREE YEARS OF BESTIE"),
+      at(2, "heading", "Before the first call"),
+      at(3, "folio", "\u0018"),
+      at(3, "running-footer", "THREE YEARS OF BESTIE"),
+      at(3, "heading", "Old heading"),
+      at(7, "heading", "The trophy line"),
+    ],
+  };
+  const replaced = (changes: Record<string, string>) => ({
+    stories: before.stories.map((s) => {
+      const key = `p${s.page}:${s.label}`;
+      return key in changes ? at(s.page, s.label, changes[key] as string) : s;
+    }),
+  });
+
+  function check(after: unknown, target: string, beforeReadback: unknown = before) {
+    const dir = scratch();
+    return run(
+      "story",
+      "--before", put(dir, "before.json", beforeReadback),
+      "--after", put(dir, "after.json", after),
+      "--target", target,
+      "--expected", put(dir, "expected.txt", "New heading\n"),
+    );
+  }
+
+  test("accepts a page-qualified heading replacement while same-label stories on other pages stay unchanged", () => {
+    const result = check(replaced({ "p3:heading": "New heading" }), "p3:heading");
+    expectPassed(result);
+    expect(result.envelope.result.data).toEqual({ paragraphs: 1, protectedStories: 8, target: "p3:heading" });
+  });
+
+  test("refuses a change to a same-label story on another page", () => {
+    expectRefused(
+      check(replaced({ "p3:heading": "New heading", "p7:heading": "The trophy line!" }), "p3:heading"),
+      'protected story "p7:heading" text or formatting changed',
+    );
+  });
+
+  test("fails closed on a bare label that names several stories", () => {
+    expectRefused(
+      check(replaced({ "p3:heading": "New heading" }), "heading"),
+      'target "heading" is ambiguous in the before readback: p2:heading, p3:heading, p7:heading',
+    );
+  });
+
+  test("fails closed when an unpaged readback repeats a label", () => {
+    const unpaged = (r: typeof before) => ({ stories: r.stories.map(({ page: _page, ...s }) => s) });
+    const after = replaced({ "p3:heading": "New heading" });
+    expectRefused(
+      check(unpaged(after), "p3:heading", unpaged(before)),
+      'before readback has 3 stories keyed "heading"; add page to each story',
+    );
+  });
+});
+
 describe("geometry: footers, page numbers, backgrounds, role fonts and reply headers", () => {
   const CONTRACT = {
     backgroundLabels: ["background"],
@@ -359,27 +424,29 @@ describe("geometry: footers, page numbers, backgrounds, role fonts and reply hea
     );
   });
 
-  const header = (label: string, bounds: number[], text: string, ink?: number[]) => ({
+  const header = (label: string, bounds: number[], text: string, ink?: number[], inkMethod?: string) => ({
     bounds,
     label,
     page: 1,
     ranges: [{ font: "Avenir Next\tMedium", style: "Bestie Message Header", text }],
     ...(ink ? { ink } : {}),
+    ...(inkMethod ? { inkMethod } : {}),
   });
-  const body = (label: string, bounds: number[], font: string, ink?: number[]) => ({
+  const body = (label: string, bounds: number[], font: string, ink?: number[], inkMethod?: string) => ({
     bounds,
     label,
     page: 1,
     ranges: [{ font, style: "Bestie Featured Message", text: "Example reply for a layout check." }],
     ...(ink ? { ink } : {}),
+    ...(inkMethod ? { inkMethod } : {}),
   });
 
   test("fails a rendered reply collision, a header without date, mojibake, and a role-font override", () => {
     const frames = [
       ...footers(1),
       header("header-0", [152, 70, 182, 830], "Melanie · 13 May 2025 · 6:15:04 pm"),
-      body("body-0", [192, 70, 360, 830], "Georgia\tRegular", [194, 70, 358, 600]),
-      header("header-1", [356, 70, 386, 830], "Nathan · 13 May 2025 · 6:17:00 pm", [360, 70, 380, 400]),
+      body("body-0", [192, 70, 360, 830], "Georgia\tRegular", [194, 70, 358, 600], "raster-glyph"),
+      header("header-1", [356, 70, 386, 830], "Nathan · 13 May 2025 · 6:17:00 pm", [360, 70, 380, 400], "glyph-outline"),
       body("body-1", [396, 70, 430, 830], "Noto Sans Coptic\tRegular"),
       header("mobile-invitation-sender", [440, 70, 470, 830], "Melanie"),
       header("encoded-sender", [500, 70, 530, 830], "Melanie ¬∑ 11 October 2026 ¬∑ 5:58:22 pm"),
@@ -392,20 +459,78 @@ describe("geometry: footers, page numbers, backgrounds, role fonts and reply hea
       'p1 body-1 uses "Noto Sans Coptic\\tRegular"; style "Bestie Featured Message" declares "Georgia\\tRegular"',
     );
   });
-  test("passes the r16 page 7 reference: container overlap with ample measured ink gaps", () => {
-    // Foreground measured the three ink gaps; other bounds below are synthetic.
-    const frames = [
-      ...footers(1),
-      body("source-body-F-MELANIE", [285, 105, 370, 795], "Georgia\tRegular", [285, 105, 313.2, 795]),
-      header("source-meta-F-NATHAN", [355, 105, 385, 795], "Nathan · 20 November 2025 · 8:34:54 pm", [362.8, 105, 380, 500]),
-      body("source-body-F-NATHAN", [395, 105, 460, 795], "Georgia\tRegular", [397, 105, 414.2, 200]),
-      header("source-meta-H-MELANIE", [440, 105, 470, 795], "Melanie · 14 September 2026 · 9:07:10 pm", [447.8, 105, 465, 500]),
-      body("source-body-H-MELANIE", [480, 105, 565, 795], "Georgia\tRegular", [482, 105, 536.2, 795]),
-      header("source-meta-H-NATHAN", [560, 105, 590, 795], "Nathan · 14 September 2026 · 9:11:00 pm", [567.8, 105, 585, 500]),
-    ];
-    const result = check(frames);
+  // Phone r17 page 7 as read back: frames, plus ink measured two ways from the
+  // review PDF (t-0175). Font boxes come from pdftotext word bounds; raster rows
+  // from the 288 dpi render. Message text here is placeholder.
+  const PHONE_P7: [string, number[], number[], number[]][] = [
+    ["source-meta-E-MELANIE", [110, 105, 140, 795], [106.4, 105, 135.8, 408], [114.2, 105, 132.5, 408]],
+    ["source-body-E-MELANIE", [150, 105, 235, 795], [146.2, 105, 178.2, 422.5], [154.5, 105, 175, 422.5]],
+    ["source-meta-F-MELANIE", [245, 105, 275, 795], [241.4, 105, 270.8, 456.8], [249.2, 105, 267.5, 456.8]],
+    ["source-body-F-MELANIE", [285, 105, 370, 795], [281.2, 105, 313.2, 706.4], [289.5, 105, 310, 706.4]],
+    ["source-meta-F-NATHAN", [355, 105, 385, 795], [351.4, 105, 380.8, 450.5], [359.2, 105, 377.5, 450.5]],
+    ["source-body-F-NATHAN", [395, 105, 460, 795], [375.8, 105, 427.7, 165], [395.5, 105, 415.5, 165]],
+    ["source-meta-H-MELANIE", [440, 105, 470, 795], [436.4, 105, 465.8, 460.8], [444.2, 105, 462.5, 460.8]],
+    ["source-body-H-MELANIE", [480, 105, 565, 795], [476.2, 105, 536.2, 788.1], [484.8, 105, 528.2, 788.1]],
+    ["source-meta-H-NATHAN", [560, 105, 590, 795], [556.4, 105, 585.8, 454.4], [564.2, 105, 582.5, 454.4]],
+    ["source-body-H-NATHAN", [600, 105, 685, 795], [596.2, 105, 656.2, 787.7], [604.5, 105, 653, 787.7]],
+  ];
+  // Phone r13 page 9 before the r14 spacing repair: a visibly crowded reply.
+  // Only raster rows were measured here; the word-box column restates the frame.
+  const CROWDED_P9: [string, number[], number[], number[]][] = [
+    ["curated-meta-0", [103, 88, 133, 812], [103, 88, 133, 489.9], [107.2, 88, 125.5, 489.9]],
+    ["curated-body-0", [143, 88, 207, 812], [143, 88, 207, 493], [142.8, 88, 206.5, 493]],
+    ["curated-meta-1", [205, 88, 235, 812], [205, 88, 235, 483.6], [201.2, 88, 227.5, 483.6]],
+    ["curated-body-1", [245, 88, 280, 812], [245, 88, 280, 97], [249.2, 88, 260.8, 97]],
+  ];
+  const PHONE = { ...CONTRACT, replyHeader: { ...CONTRACT.replyHeader, bodyStyles: ["Bestie Featured Message"], minGap: 10 } };
+
+  function measured(page: number, rows: typeof PHONE_P7, use: "font" | "raster", inkMethod: string | undefined) {
+    return rows.map(([label, bounds, fontBox, raster]) => {
+      const ink = use === "font" ? fontBox : raster;
+      const frame = label.includes("-meta-")
+        ? header(label, bounds, "Nathan · 20 November 2025 · 8:34:54 pm", ink, inkMethod)
+        : body(label, bounds, "Georgia\tRegular", ink, inkMethod);
+      return { ...frame, page };
+    });
+  }
+  const review = (result: ReturnType<typeof run>) => (result.envelope.result.data as { containerReview: string[] }).containerReview;
+
+  test("passes the Phone page 7 reference when raster glyph ink proves the overlapping frames clear", () => {
+    const result = check([...footers(7), ...measured(7, PHONE_P7, "raster", "raster-glyph")], PHONE);
     expectPassed(result);
-    expect((result.envelope.result.data as { containerReview: string[] }).containerReview).toEqual([]);
+    expect(review(result)).toEqual([]);
+    const provenance = (result.envelope.result.data as { inkProvenance: { glyphTight: boolean; method: string }[] }).inkProvenance;
+    expect(provenance).toHaveLength(10);
+    expect(provenance.every((p) => p.glyphTight && p.method === "raster-glyph")).toBe(true);
+  });
+
+  test("never fails the Phone page 7 reference on PDF word-box ink; overlaps go to review", () => {
+    const result = check([...footers(7), ...measured(7, PHONE_P7, "font", "pdf-word-box")], PHONE);
+    expectPassed(result);
+    expect(review(result)).toEqual([
+      'p7 header "source-meta-F-NATHAN" and body "source-body-F-MELANIE" frames are -15pt apart; ink from pdf-word-box is not glyph-tight, so it cannot decide a collision. Review at useful scale or supply raster-glyph or glyph-outline ink.',
+      'p7 header "source-meta-H-MELANIE" and body "source-body-F-NATHAN" frames are -20pt apart; ink from pdf-word-box is not glyph-tight, so it cannot decide a collision. Review at useful scale or supply raster-glyph or glyph-outline ink.',
+      'p7 header "source-meta-H-NATHAN" and body "source-body-H-MELANIE" frames are -5pt apart; ink from pdf-word-box is not glyph-tight, so it cannot decide a collision. Review at useful scale or supply raster-glyph or glyph-outline ink.',
+    ]);
+  });
+
+  test("treats ink without a named method as unqualified", () => {
+    const result = check([...footers(7), ...measured(7, PHONE_P7, "font", undefined)], PHONE);
+    expectPassed(result);
+    expect(review(result)).toHaveLength(3);
+    expect(review(result)[0]).toContain("ink from an unnamed method is not glyph-tight");
+  });
+
+  test("fails the crowded r13 page 9 reply on raster glyph ink, and only reviews it on word boxes", () => {
+    expectRefused(
+      check([...footers(9), ...measured(9, CROWDED_P9, "raster", "raster-glyph")], PHONE),
+      'p9 header "curated-meta-1" and body "curated-body-0" rendered text is -5.3pt apart; minimum 10pt.',
+    );
+    const unqualified = check([...footers(9), ...measured(9, CROWDED_P9, "font", "pdf-word-box")], PHONE);
+    expectPassed(unqualified);
+    expect(review(unqualified)).toEqual([
+      'p9 header "curated-meta-1" and body "curated-body-0" frames are -2pt apart; ink from pdf-word-box is not glyph-tight, so it cannot decide a collision. Review at useful scale or supply raster-glyph or glyph-outline ink.',
+    ]);
   });
 
   test("passes a container-only overlap without ink but asks for useful-scale review", () => {
@@ -416,9 +541,24 @@ describe("geometry: footers, page numbers, backgrounds, role fonts and reply hea
     ];
     const result = check(frames);
     expectPassed(result);
-    expect((result.envelope.result.data as { containerReview: string[] }).containerReview).toEqual([
-      'p1 header "header-1" and body "body-0" frames are -4pt apart without measured ink; review at useful scale or supply ink bounds.',
+    expect(review(result)).toEqual([
+      'p1 header "header-1" and body "body-0" frames are -4pt apart without glyph-tight ink. Review at useful scale or supply raster-glyph or glyph-outline ink.',
     ]);
+  });
+
+  test("keeps review flags in the failure message when another check fails", () => {
+    const [folio, footer] = footers(1) as unknown as [Record<string, unknown>, Record<string, unknown>];
+    const frames = [
+      { ...folio, bounds: [696.5, 785, 721.5, 830] },
+      footer,
+      body("body-0", [192, 70, 360, 830], "Georgia\tRegular"),
+      header("header-1", [356, 70, 386, 830], "Nathan · 13 May 2025 · 6:17:00 pm"),
+    ];
+    expectRefused(
+      check(frames),
+      "1 issue(s): 1) p1 folio at [696.5, 785, 721.5, 830]",
+      'Also review 1 flag(s): a) p1 header "header-1" and body "body-0" frames are -4pt apart without glyph-tight ink.',
+    );
   });
 });
 
@@ -460,6 +600,25 @@ describe("dispatch: native-control duplicate guard against operation receipts", 
     expect(result.envelope.result.causeCode).toBe("TRANSIENT_NOT_STARTED");
     expect(result.envelope.result.retryable).toBe(true);
     expect(result.envelope.result.retryDelayMilliseconds).toBe(20_000);
+  });
+
+  test("reports a named operation's own unfinished start before a bare folder completion", () => {
+    const dir = scratch();
+    put(dir, "completed.txt", "done");
+    put(dir, "edge-cleanup-started.txt", "started");
+    put(dir, "edge-cleanup-completed.txt", "done");
+    const started = put(dir, "recovery2-started.txt", "started");
+    utimesSync(started, at("2026-10-11T21:50:00+11:00"), at("2026-10-11T21:50:00+11:00"));
+    expectRefused(
+      run("dispatch", "--receipts", dir, "--operation", "recovery2", "--now", NOW),
+      "Operation recovery2 has an uncertain outcome",
+      `started without completing: ${join(dir, "recovery2-started.txt")}`,
+      `bare ${join(dir, "completed.txt")} does not name this operation`,
+    );
+    expectRefused(
+      run("dispatch", "--receipts", dir, "--operation", "edge-cleanup", "--now", NOW),
+      `already completed: ${join(dir, "edge-cleanup-completed.txt")}`,
+    );
   });
 
   test("reports an uncertain outcome for an old started receipt without completion", () => {
@@ -533,6 +692,19 @@ describe("handback: one current revision whose claims match evidence", () => {
     const data = result.envelope.result.data as { pageCount: number; copy: { standing: string; nativeWords: number; manuscriptWords: number }[] };
     expect(data.pageCount).toBe(2);
     expect(data.copy).toEqual([expect.objectContaining({ manuscriptWords: 7, nativeWords: 12, standing: "pending-placement" })]);
+  });
+
+  test("addresses a repeated native story label by page and refuses a bare ambiguous label", () => {
+    const { record } = setup(OLDER);
+    const dir = scratch();
+    const at = (page: number, text: string) => ({ label: "locked-introduction", page, ranges: [{ text }], text });
+    const nativeStories = put(dir, "paged-stories.json", { stories: [at(2, OLDER), at(9, SELECTED)] });
+    const copy = (storyLabel: string) => [{ role: "introduction", standing: "pending-placement", storyLabel }];
+    expectRefused(
+      run("handback", "--record", record({ copy: copy("locked-introduction"), nativeStories })),
+      'copy role introduction story target "locked-introduction" is ambiguous in the native story readback: p2:locked-introduction, p9:locked-introduction.',
+    );
+    expectPassed(run("handback", "--record", record({ copy: copy("p2:locked-introduction"), nativeStories })));
   });
 
   test("refuses a wrong page count and a Writing Beats question both selected and open", () => {

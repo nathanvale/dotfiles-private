@@ -1,16 +1,43 @@
 import { type CheckResult, verdict } from "./check-result.ts";
 import {
   anyText,
+  InputError,
+  integer,
   type JsonRecord,
   list,
   readJson,
+  optional,
   readText,
   record,
   text,
 } from "./input.ts";
 
 /** One native story: its whole contents (including overset) and style ranges. */
-export type Story = { label: string; text: string; ranges: JsonRecord[] };
+export type Story = { label: string; page: number | undefined; text: string; ranges: JsonRecord[] };
+
+/** Stable story address: pPAGE:LABEL when the readback gives the page. */
+function storyKey(item: Story): string {
+  return item.page === undefined ? item.label : `p${item.page}:${item.label}`;
+}
+
+/**
+ * Finds one story by its key, or by a label no other story shares. Several
+ * matches fail closed: labels such as heading repeat on every page.
+ */
+export function findStory(stories: Story[], target: string, readback: string): { story?: Story; issue?: string } {
+  const matches = stories.filter((s) => storyKey(s) === target || s.label === target);
+  if (matches.length === 1) return { story: matches[0] as Story };
+  if (matches.length === 0) return {};
+  return { issue: `target "${target}" is ambiguous in the ${readback} readback: ${matches.map(storyKey).join(", ")}.` };
+}
+
+function duplicateKeyIssues(stories: Story[], readback: string): string[] {
+  const counts = new Map<string, number>();
+  for (const item of stories) counts.set(storyKey(item), (counts.get(storyKey(item)) ?? 0) + 1);
+  return [...counts]
+    .filter(([, count]) => count > 1)
+    .map(([key, count]) => `${readback} readback has ${count} stories keyed "${key}"; add page to each story.`);
+}
 
 const EMOJI_PART =
   /\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]|[\u{1F3FB}-\u{1F3FF}]|\u200D|\uFE0F|\u20E3/gu;
@@ -25,8 +52,11 @@ function onlyEmoji(value: string): boolean {
 
 function story(value: unknown, where: string): Story {
   const item = record(value, where);
+  const page = optional(item.page, (v) => integer(v, `${where}.page`));
+  if (page !== undefined && page < 1) throw new InputError(`${where}.page must be positive.`);
   return {
     label: text(item.label, `${where}.label`),
+    page,
     ranges: list(item.ranges, `${where}.ranges`).map((range, index) => {
       const entry = record(range, `${where}.ranges[${index}]`);
       anyText(entry.text, `${where}.ranges[${index}].text`);
@@ -66,11 +96,11 @@ function textIssues(target: Story, expected: string[]): string[] {
     if (want === got) continue;
     if (want === undefined) {
       return [
-        `story "${target.label}" has an extra paragraph ${index + 1} ${visible(got ?? "")} (old tail?).`,
+        `story "${storyKey(target)}" has an extra paragraph ${index + 1} ${visible(got ?? "")} (old tail?).`,
       ];
     }
     return [
-      `story "${target.label}" paragraph ${index + 1} is ${visible(got ?? "<missing>")}; expected ${visible(want)}.`,
+      `story "${storyKey(target)}" paragraph ${index + 1} is ${visible(got ?? "<missing>")}; expected ${visible(want)}.`,
     ];
   }
   return [];
@@ -90,11 +120,11 @@ function rangeIssues(target: Story, emojiFont: string | undefined): string[] {
     const emojiFontRange = emojiFont !== undefined && range.font === emojiFont;
     if (emoji && (!emojiFontRange || !onlyEmoji(value))) {
       issues.push(
-        `story "${target.label}" range ${visible(value)} mixes emoji with other text or lacks the emoji font.`,
+        `story "${storyKey(target)}" range ${visible(value)} mixes emoji with other text or lacks the emoji font.`,
       );
     } else if (emojiFontRange && !emoji) {
       issues.push(
-        `story "${target.label}" range ${visible(value)} has the emoji font but no emoji.`,
+        `story "${storyKey(target)}" range ${visible(value)} has the emoji font but no emoji.`,
       );
     } else if (!emoji) {
       const style = String(range.style ?? "");
@@ -107,7 +137,7 @@ function rangeIssues(target: Story, emojiFont: string | undefined): string[] {
   for (const [style, variants] of plainByStyle) {
     if (variants.size > 1) {
       issues.push(
-        `story "${target.label}" style "${style}" carries ${variants.size} formatting variants; clear inherited local overrides.`,
+        `story "${storyKey(target)}" style "${style}" carries ${variants.size} formatting variants; clear inherited local overrides.`,
       );
     }
   }
@@ -118,21 +148,37 @@ function consistencyIssues(stories: Story[], label: string): string[] {
   return stories.flatMap((s) =>
     s.ranges.map((r) => String(r.text)).join("") === s.text
       ? []
-      : [`${label} story "${s.label}" ranges do not reproduce its text.`],
+      : [`${label} story "${storyKey(s)}" ranges do not reproduce its text.`],
   );
 }
 
-function protectedIssues(before: Story[], after: Story[], target: string): string[] {
-  const now = new Map(after.map((s) => [s.label, JSON.stringify(s)]));
+/** Compares by unique key; callers refuse readbacks whose keys repeat. */
+function protectedIssues(before: Story[], after: Story[], target: Story | undefined): string[] {
+  const now = new Map(after.map((s) => [storyKey(s), JSON.stringify(s)]));
   return before
-    .filter((s) => s.label !== target)
+    .filter((s) => s !== target)
     .flatMap((s) => {
-      const after = now.get(s.label);
-      if (after === undefined) return [`protected story "${s.label}" was removed.`];
+      const after = now.get(storyKey(s));
+      if (after === undefined) return [`protected story "${storyKey(s)}" was removed.`];
       return after === JSON.stringify(s)
         ? []
-        : [`protected story "${s.label}" text or formatting changed.`];
+        : [`protected story "${storyKey(s)}" text or formatting changed.`];
     });
+}
+
+function targetIssues(
+  before: ReturnType<typeof findStory>,
+  after: ReturnType<typeof findStory>,
+  target: string,
+): string[] {
+  const issues = [before.issue, after.issue].filter((issue): issue is string => issue !== undefined);
+  if (after.story === undefined && after.issue === undefined) {
+    issues.push(`after readback has no story "${target}".`);
+  }
+  if (before.story && after.story && storyKey(before.story) !== storyKey(after.story)) {
+    issues.push(`target "${target}" is ${storyKey(before.story)} before and ${storyKey(after.story)} after.`);
+  }
+  return issues;
 }
 
 export function checkStory(options: {
@@ -145,23 +191,28 @@ export function checkStory(options: {
   const before = readStories(options.before);
   const after = readStories(options.after);
   const expected = expectedParagraphs(readText(options.expected));
-  const target = after.find((s) => s.label === options.target);
+  const was = findStory(before, options.target, "before");
+  const now = findStory(after, options.target, "after");
+  const duplicates = [...duplicateKeyIssues(before, "before"), ...duplicateKeyIssues(after, "after")];
   const issues = [
     ...consistencyIssues(before, "before"),
     ...consistencyIssues(after, "after"),
-    ...protectedIssues(before, after, options.target),
+    ...duplicates,
+    ...targetIssues(was, now, options.target),
   ];
-  if (target === undefined) {
-    issues.push(`after readback has no story "${options.target}".`);
-  } else {
+  if (duplicates.length === 0 && was.issue === undefined) {
+    issues.push(...protectedIssues(before, after, was.story));
+  }
+  const target = now.story;
+  if (target !== undefined) {
     issues.push(...textIssues(target, expected), ...rangeIssues(target, options.emojiFont));
   }
   return verdict(
     issues,
     {
       paragraphs: expected.length,
-      protectedStories: before.length - 1,
-      target: options.target,
+      protectedStories: before.length - (was.story ? 1 : 0),
+      target: target ? storyKey(target) : options.target,
     },
     "Replaced story equals the selected text; protected stories are unchanged.",
     "Replaced story or protected stories do not match.",

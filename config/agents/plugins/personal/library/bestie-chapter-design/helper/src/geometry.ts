@@ -223,24 +223,49 @@ function hasStyle(item: Frame, styles: string[]): boolean {
 
 type ReplyFindings = { issues: string[]; review: string[] };
 
+/**
+ * Ink methods that bound painted glyphs. Font boxes (PDF word bounds, line
+ * ascent and descent) include empty space, so they cannot prove a collision.
+ */
+const GLYPH_TIGHT_INK = ["raster-glyph", "glyph-outline"];
+
+function glyphTight(item: Frame): boolean {
+  return item.ink !== undefined && GLYPH_TIGHT_INK.includes(item.inkMethod ?? "");
+}
+
+function points(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function unqualifiedInk(frames: Frame[]): string {
+  const methods = frames
+    .filter((f) => f.ink !== undefined && !glyphTight(f))
+    .map((f) => f.inkMethod ?? "an unnamed method");
+  return methods.length
+    ? `; ink from ${[...new Set(methods)].join(" and ")} is not glyph-tight, so it cannot decide a collision.`
+    : " without glyph-tight ink.";
+}
+
 function sharesColumn(h: Frame, b: Frame): boolean {
   return b.page === h.page && b.bounds[1] < h.bounds[3] && h.bounds[1] < b.bounds[3];
 }
 
 /**
- * Rendered ink decides a collision. A container-only overlap without ink is a
- * review prompt, never a failed layout: unused frame space is not visible text.
+ * Glyph-tight ink on both frames decides a collision. Any other overlap is a
+ * review prompt, never a failed layout: frame or font-box space is not ink.
  */
 function judgePair(h: Frame, b: Frame, minGap: number, out: ReplyFindings): void {
   const pair = `p${h.page} header "${h.label}" and body "${b.label}"`;
-  if (h.ink !== undefined && b.ink !== undefined) {
-    const inkGap = gap(h.ink, b.ink);
+  if (glyphTight(h) && glyphTight(b)) {
+    const inkGap = points(gap(h.ink as Bounds, b.ink as Bounds));
     if (inkGap < minGap) out.issues.push(`${pair} rendered text is ${inkGap}pt apart; minimum ${minGap}pt.`);
     return;
   }
-  const frameGap = gap(h.bounds, b.bounds);
+  const frameGap = points(gap(h.bounds, b.bounds));
   if (frameGap < minGap) {
-    out.review.push(`${pair} frames are ${frameGap}pt apart without measured ink; review at useful scale or supply ink bounds.`);
+    out.review.push(
+      `${pair} frames are ${frameGap}pt apart${unqualifiedInk([h, b])} Review at useful scale or supply ${GLYPH_TIGHT_INK.join(" or ")} ink.`,
+    );
   }
 }
 
@@ -306,6 +331,9 @@ export function checkGeometry(snapshotPath: string, contractPath: string): Check
   const data: JsonRecord = {
     backgroundsChecked: backgrounds.map((f) => ({ kind: f.kind ?? null, label: f.label, page: f.page })),
     containerReview: reply.review,
+    inkProvenance: frames
+      .filter((f) => f.ink !== undefined)
+      .map((f) => ({ glyphTight: glyphTight(f), label: f.label, method: f.inkMethod ?? null, page: f.page })),
     pages: pages.length,
     visualReviewStillRequired: true,
   };
@@ -315,5 +343,6 @@ export function checkGeometry(snapshotPath: string, contractPath: string): Check
     "Footers, page numbers, backgrounds, role fonts, headers and reply spacing meet the contract. Useful-scale visual review is still required.",
     "Geometry contract failures found.",
     "Repair the listed frames without changing selected text or art, read back again and rerun geometry, then review pages at useful scale.",
+    reply.review,
   );
 }

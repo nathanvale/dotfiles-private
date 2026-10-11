@@ -109,7 +109,9 @@ function checkEnvelope(identity: string, result: CheckResult): Envelope {
     return success(identity, result.data, result.message, "Record this verdict with the run evidence.");
   }
   const listed = result.issues.map((issue, i) => `${i + 1}) ${issue}`).join(" ");
-  const message = `${result.message} ${result.issues.length} issue(s): ${listed}`;
+  const flags = (result.review ?? []).map((flag, i) => `${String.fromCharCode(97 + (i % 26))}) ${flag}`).join(" ");
+  const reviewed = flags ? ` Also review ${result.review?.length} flag(s): ${flags}` : "";
+  const message = `${result.message} ${result.issues.length} issue(s): ${listed}${reviewed}`;
   if (result.retryAfterMs !== undefined) {
     return envelope({
       cause: CAUSES.transient,

@@ -64,7 +64,7 @@ export const COMMANDS: CommandSpec[] = [
   command("story", "Prove a whole native story replacement and unchanged protected stories.", [
     req("--before", "FILE", "Story readback before replacement."),
     req("--after", "FILE", "Story readback after replacement."),
-    req("--target", "LABEL", "Label of the replaced story."),
+    req("--target", "KEY", "Replaced story: pPAGE:LABEL, or a label unique in both readbacks."),
     req("--expected", "FILE", "Selected text; paragraphs separated by one blank line."),
     opt("--emoji-font", "FONT", "The only permitted local font override, for emoji."),
   ]),

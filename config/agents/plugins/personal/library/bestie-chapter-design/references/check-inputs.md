@@ -15,14 +15,41 @@ Native readbacks keep the existing receipt spelling.
   `{ page, label, bounds, ranges }`, where each range is a text style range
   with `text`, `font`, `style` and other formatting. Read every labelled page
   item, whatever its class, and add `kind` (its object class), `fill`,
-  `visible`, `z` (stacking order) and `ink` (rendered text bounds) when known.
+  `visible`, `z` (stacking order), `ink` (measured text bounds) and
+  `inkMethod` when known.
 - Story readback (`story`, handback `nativeStories`):
-  `{ stories: [{ label, text, ranges }] }`. `text` is the whole story,
-  overset included, with `\r` paragraph ends; ranges reproduce it exactly.
+  `{ stories: [{ page, label, text, ranges }] }`. `page` is the page of the
+  story's first frame; `text` is the whole story, overset included, with `\r`
+  paragraph ends; ranges reproduce it exactly.
 
-Measure `ink` from PDF word bounds or native line metrics. Without it, a
-header/body frame overlap is listed in `containerReview` for useful-scale
-review instead of failing.
+### Ink provenance
+
+Only glyph-tight ink decides a reply collision. Set `inkMethod` on every frame
+with `ink`:
+
+- `raster-glyph`: painted rows of the exported page rendered at 4 px/pt or
+  finer.
+- `glyph-outline`: vector glyph outline bounds.
+
+Name any other measurement honestly, for example `pdf-word-box` for poppler
+`pdftotext -bbox` or `line-metrics` for native ascent and descent. These font
+boxes include empty space: the Phone r16 and r17 page 7 trophy-emoji line
+measures a −5 pt word-box overlap but 18 pt of clear raster gap. Font-box
+ink, unnamed ink and missing ink never fail geometry. A header/body frame
+pair closer than `minGap` is then listed in `containerReview` for useful-scale
+review. `inkProvenance` records each measured frame's method.
+
+When another geometry check fails, the envelope `data` is null; the review
+flags follow the issues in the message as `Also review N flag(s)`.
+
+### Story keys
+
+A story's key is `p<page>:<label>`, or the bare label when the readback has no
+`page`. Name the target (`story --target`, handback `storyLabel`) by key; a bare
+label works only when exactly one story carries it. Labels such as `heading`,
+`folio` and `running-footer` repeat on every page, so a readback with repeated
+keys or an ambiguous target fails closed. Keep pages identical between the
+before and after readbacks; check page moves with `protected --pages`.
 
 ## Authored records
 

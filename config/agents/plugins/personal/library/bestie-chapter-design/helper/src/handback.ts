@@ -14,7 +14,7 @@ import {
   sha256Text,
   text,
 } from "./input.ts";
-import { nativeParagraphs, readStories } from "./story.ts";
+import { findStory, nativeParagraphs, readStories } from "./story.ts";
 
 const PREVIEW_STATES = ["none", "queued", "opened", "viewed"] as const;
 const COPY_STANDINGS = ["placed", "pending-placement"] as const;
@@ -55,9 +55,9 @@ function copyStandings(root: JsonRecord, where: string) {
     const label = text(item.storyLabel, `${where}.copy[${index}].storyLabel`);
     const declared = oneOf(item.standing, COPY_STANDINGS, `${where}.copy[${index}].standing`);
     const unit = units.find((u) => u.role === role);
-    const native = stories.find((s) => s.label === label);
-    const nativeText = native ? nativeParagraphs(native.text).join("\n\n") : null;
-    return { declared, label, nativeText, role, unit };
+    const native = findStory(stories, label, "native story");
+    const nativeText = native.story ? nativeParagraphs(native.story.text).join("\n\n") : null;
+    return { ambiguity: native.issue, declared, label, nativeText, role, unit };
   });
 }
 
@@ -66,6 +66,7 @@ type Standing = ReturnType<typeof copyStandings>[number];
 function copyIssues(rows: Standing[]): string[] {
   return rows.flatMap((row) => {
     if (row.unit === undefined) return [`copy role ${row.role} is not in the copy resolution.`];
+    if (row.ambiguity !== undefined) return [`copy role ${row.role} story ${row.ambiguity}`];
     if (row.nativeText === null) return [`native story "${row.label}" is not in the story readback.`];
     const placed = row.nativeText === row.unit.text;
     if (row.declared === "placed" && !placed) {

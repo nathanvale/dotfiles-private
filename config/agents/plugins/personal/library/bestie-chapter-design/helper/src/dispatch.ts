@@ -6,13 +6,14 @@ import { UsageError } from "./usage.ts";
 
 /**
  * Each native operation folder holds started.txt and completed.txt. A named
- * operation also matches the older <operation>-started.txt spelling; the bare
- * folder receipt always counts, so a refusal errs towards no duplicate effect.
+ * operation also matches the older <operation>-started.txt spelling, checked
+ * first so its own unfinished start is not hidden; the bare folder receipt
+ * still counts, so a refusal errs towards no duplicate effect.
  */
-function receipt(dir: string, operation: string | undefined, phase: string): string | null {
-  const names = [`${phase}.txt`, `${phase}.json`];
-  if (operation !== undefined) names.push(`${operation}-${phase}.txt`, `${operation}-${phase}.json`);
-  return names.map((name) => join(dir, name)).find((path) => existsSync(path)) ?? null;
+function receipt(dir: string, prefix: string, phase: string): string | null {
+  return [`${prefix}${phase}.txt`, `${prefix}${phase}.json`]
+    .map((name) => join(dir, name))
+    .find((path) => existsSync(path)) ?? null;
 }
 
 function newestReceiptMs(dir: string): number {
@@ -62,11 +63,12 @@ export type DispatchOptions = {
   settleSeconds: number;
 };
 
-function startedResult(options: DispatchOptions, started: string): CheckResult {
+function startedResult(options: DispatchOptions, started: string, unclaimed: string | null): CheckResult {
   const remaining = statSync(started).mtimeMs + options.settleSeconds * 1000 - nowMs(options);
+  const shared = unclaimed === null ? [] : [`bare ${unclaimed} does not name this operation.`];
   if (remaining > 0) {
     return {
-      issues: [`operation "${options.operation ?? "in this folder"}" started ${started} within the ${options.settleSeconds}s settle window.`],
+      issues: [`operation "${options.operation ?? "in this folder"}" started ${started} within the ${options.settleSeconds}s settle window.`, ...shared],
       message: `Operation ${options.operation ?? "in this folder"} may still be running; wait, then rerun dispatch.`,
       passed: false,
       repairAction: "Wait for the settle window, then rerun dispatch before any retry.",
@@ -74,12 +76,27 @@ function startedResult(options: DispatchOptions, started: string): CheckResult {
     };
   }
   return {
-    issues: [`operation "${options.operation ?? "in this folder"}" started without completing: ${started}.`],
+    issues: [`operation "${options.operation ?? "in this folder"}" started without completing: ${started}.`, ...shared],
     message: `Operation ${options.operation ?? "in this folder"} has an uncertain outcome; inspect before any retry.`,
     passed: false,
     repairAction:
       "Inspect the native document and output files. Retry only after they prove no effect; otherwise record the control failure and use the demonstrated alternative route.",
   };
+}
+
+/**
+ * A named operation's own receipts come first. Its unfinished start reports
+ * the bare completed.txt as unclaimed rather than as its completion.
+ */
+function receipts(options: DispatchOptions) {
+  const dir = options.receipts;
+  const bare = { completed: receipt(dir, "", "completed"), started: receipt(dir, "", "started"), unclaimed: null };
+  if (options.operation === undefined) return bare;
+  const named = `${options.operation}-`;
+  const completed = receipt(dir, named, "completed");
+  if (completed !== null) return { completed, started: null, unclaimed: null };
+  const started = receipt(dir, named, "started");
+  return started === null ? bare : { completed: null, started, unclaimed: bare.completed };
 }
 
 export function checkDispatch(options: DispatchOptions): CheckResult {
@@ -101,8 +118,7 @@ export function checkDispatch(options: DispatchOptions): CheckResult {
       "Name the existing operation, inspect its receipts, then rerun dispatch.",
     );
   }
-  const started = receipt(options.receipts, options.operation, "started");
-  const completed = receipt(options.receipts, options.operation, "completed");
+  const { completed, started, unclaimed } = receipts(options);
   if (completed !== null) {
     return {
       issues: [`operation "${options.operation ?? "in this folder"}" already completed: ${completed}.`],
@@ -112,7 +128,7 @@ export function checkDispatch(options: DispatchOptions): CheckResult {
         "Inspect the completed receipt and its outputs. Start a new operation folder only for a deliberately new effect.",
     };
   }
-  if (started !== null) return startedResult(options, started);
+  if (started !== null) return startedResult(options, started, unclaimed);
   if (options.target === undefined) {
     return verdict(
       ["a fresh accessibility target is required before a new native dispatch."],
