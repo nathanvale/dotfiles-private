@@ -111,8 +111,9 @@ test("an unreadable input file is an internal failure with an operator handoff",
 
 test("held-open non-TTY stdin never blocks a check", async () => {
   const dir = scratch();
+  const target = put(dir, "target.json", { capturedAt: new Date().toISOString() });
   const entry = process.env.BESTIE_CHECK_ENTRY ?? join(ROOT, "src/cli.ts");
-  const child = Bun.spawn([process.execPath, "run", entry, "dispatch", "--receipts", dir, "--operation", "apply", "--json"], {
+  const child = Bun.spawn([process.execPath, "run", entry, "dispatch", "--receipts", dir, "--operation", "apply", "--target", target, "--json"], {
     stderr: "pipe",
     stdin: "pipe",
     stdout: "pipe",

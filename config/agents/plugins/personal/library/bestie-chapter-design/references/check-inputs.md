@@ -32,16 +32,20 @@ review instead of failing.
   as `[{ id, path, sha256 }]`; `copyResolution` with `path` and `sha256`.
 - Copy resolution (`copy`, handback `copyResolution`): `chapter` and `blocks`.
   Each block has `role` (`introduction`, `teaser`, `ending` or `transition`),
-  `owner`, exact `heading`, 1-based `paragraphs: [first, last]` under that
-  heading, `standing` (`accepted`, `selected` or `proposed`), `acceptance`
+  `owner`, exact `heading`, optional `section` naming its unique parent chapter
+  heading, and 1-based `paragraphs: [first, last]` under that heading.
+  Use `section` when the heading repeats elsewhere in the owner file.
+  Also record `standing` (`accepted`, `selected` or `proposed`), `acceptance`
   with `scope` (`block`, `pair` or `chapter`) and `evidence`, and the
   `sha256` of the paragraphs joined by one blank line, each unwrapped to one
-  line. A transition with `supersedes: [{ owner, heading, paragraphs }]`
+  line. A transition with `supersedes: [{ owner, section?, heading, paragraphs }]`
   replaces those paragraphs of its base block.
 - Geometry contract (`geometry --contract`): `trim`, `bleed` (`top`,
   `bottom`, `outside`, `inside`), `firstPageSide`, `tolerance`, `footer`
   bounds by `left`/`right` side and label, `footerExemptPages`, `folio`
-  (`label`, `marker`), `backgroundLabels`, optional `unpaintedFills`,
+  (`label`, `marker`), `backgroundLabels`, `requiredBackgrounds` as
+  `[{ page, label }]` for every page whose background should exist, including
+  text-frame backgrounds, optional `unpaintedFills`,
   `styleFonts` (paragraph style to declared font), optional `emojiFont`, and
   `replyHeader` (`headerStyles`, `bodyStyles`, `minGap`, optional `pattern`).
   Derive values from the packet's production contract and typography owner.

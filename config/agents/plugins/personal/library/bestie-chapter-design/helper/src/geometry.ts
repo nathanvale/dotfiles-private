@@ -26,6 +26,7 @@ type Contract = {
   footerExemptPages: number[];
   folio: { label: string; marker: string };
   backgroundLabels: string[];
+  requiredBackgrounds: { page: number; label: string }[];
   unpaintedFills: string[];
   reply: {
     headerStyles: string[];
@@ -66,6 +67,15 @@ function readContract(path: string): Contract {
   const n = (value: unknown, where: string) => numeric(value, `${path}.${where}`);
   return {
     backgroundLabels: strings(root.backgroundLabels, `${path}.backgroundLabels`),
+    requiredBackgrounds: list(root.requiredBackgrounds, `${path}.requiredBackgrounds`).map(
+      (value, index) => {
+        const where = `${path}.requiredBackgrounds[${index}]`;
+        const item = record(value, where);
+        const page = integer(item.page, `${where}.page`);
+        if (page < 1) throw new InputError(`${where}.page must be positive.`);
+        return { page, label: text(item.label, `${where}.label`) };
+      },
+    ),
     bleed: {
       bottom: n(bleed.bottom, "bleed.bottom"),
       inside: n(bleed.inside, "bleed.inside"),
@@ -279,6 +289,12 @@ export function checkGeometry(snapshotPath: string, contractPath: string): Check
   const backgrounds = frames.filter((f) => isBackground(f, contract));
   const reply = replyFindings(frames, contract);
   const issues = [
+    ...contract.requiredBackgrounds.flatMap(({ page, label }) => {
+      const found = backgrounds.filter((frame) => frame.page === page && frame.label === label);
+      return found.length === 1
+        ? []
+        : [`p${page} has ${found.length} required background "${label}" frames; expected 1.`];
+    }),
     ...pages
       .filter((p) => !contract.footerExemptPages.includes(p))
       .flatMap((p) => footerFrameIssues(frames, p, contract)),

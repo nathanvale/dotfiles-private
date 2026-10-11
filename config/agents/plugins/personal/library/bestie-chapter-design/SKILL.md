@@ -56,7 +56,7 @@ run `bun --no-install "$skill_dir/helper/dist/bestie-chapter-check.js" <command>
 For repository development, run `bun run --silent src/cli.ts` from `helper/`.
 Every command only reads files. `--help` lists commands and options;
 [check inputs](references/check-inputs.md) gives each file's shape. Exit 0 is
-a pass, 3 lists failed checks in `message`, and 75 means wait and rerun. A
+a pass, 3 means a failed check or missing input (read `causeCode`), and 75 means wait and rerun. A
 pass is never native execution, visual acceptance or Print PASS.
 
 ## Build and inspect
@@ -69,9 +69,9 @@ Resolve the current selected copy blocks and transition decisions through their 
 
 When the declared edit replaces a story, replace the whole native story, keep only specified formatting and exact emoji overrides, then pass `story` against the `copy` placement text. Clear inherited local overrides when applying chapter styles. After the build, pass `protected` for every untouched page.
 
-Drive native controls from fresh accessibility state. Name each operation folder; the script writes `started.txt` then `completed.txt`. Pass `dispatch` before every dispatch, including retries. After an uncertain result, inspect receipts, document state and outputs before acting; then use the already demonstrated alternative route, such as Quick Apply opening Scripts. Record an unresolved control failure separately from chapter defects.
+Drive native controls from fresh accessibility state. Name each operation folder; the script writes `started.txt` then `completed.txt`. Pass `dispatch` with a fresh `--target` before every new dispatch, including retries. A shared folder with named receipts needs the exact `--operation`. After an uncertain result, inspect receipts, document state and outputs before acting; then use the already demonstrated alternative route, such as Quick Apply opening Scripts. Record an unresolved control failure separately from chapter defects.
 
-Save, reopen and export the candidate. Read back every labelled page item regardless of object class, then pass `geometry` with a contract derived from the packet's production contract and typography owner. It checks footer alignment, page-number visibility, background bleed, declared role fonts, header text and reply spacing. A frame-only overlap prompts review; only measured ink proves a collision. Installed fonts alone do not prove glyphs render. Diagnose a white band from asset pixels and frame fitting before changing accepted art.
+Save, reopen and export the candidate. Read back every labelled page item regardless of object class, then pass `geometry` with a contract derived from the packet's production contract and typography owner. List every expected page background in `requiredBackgrounds` so an omitted object class fails. It checks footer alignment, page-number visibility, background bleed, declared role fonts, header text and reply spacing. A frame-only overlap prompts review; only measured ink proves a collision. Installed fonts alone do not prove glyphs render. Diagnose a white band from asset pixels and frame fitting before changing accepted art.
 
 Compare native readbacks with source extents and art hashes. Check title roles, captions, links, overset, facing relationships and the ending. Inspect all exported pages for rhythm and clipping, plus difficult text, glyphs and art at useful scale; geometry passes never replace that review.
 

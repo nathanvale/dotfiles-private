@@ -166,6 +166,61 @@ describe("copy: resolve selected blocks and refuse stale build input", () => {
     writeFileSync(chapter, CHAPTER.replace("They walk home.", "They walk home slowly."));
     expectRefused(run("copy", "--input", input, "--current", input), "only accepted or selected blocks can be placed", "owner text is now");
   });
+
+  test("resolves a repeated copy heading inside its named chapter section", () => {
+    const dir = scratch();
+    const owner = put(dir, "chapter-copy-proposals.md", [
+      "## The Big Bad Phone",
+      "",
+      "### Accepted introduction, locked copy",
+      "",
+      "They call.",
+      "",
+      "### Accepted teaser, locked copy",
+      "",
+      "The phone rings.",
+      "",
+      "## Holidays",
+      "",
+      "### Accepted introduction, locked copy",
+      "",
+      "They travel.",
+      "",
+      "### Accepted teaser, locked copy",
+      "",
+      "A week together.",
+      "",
+      "### Selected ending",
+      "",
+      "They return.",
+      "",
+    ].join("\n"));
+    const acceptance = { evidence: "selected chapter copy", scope: "block" };
+    const at = (role: string, heading: string, value: string) => ({
+      acceptance,
+      heading,
+      owner,
+      paragraphs: [1, 1],
+      role,
+      section: "Holidays",
+      sha256: sha256(value),
+      standing: "accepted",
+    });
+    const blocks = [
+      at("introduction", "Accepted introduction, locked copy", "They travel."),
+      at("teaser", "Accepted teaser, locked copy", "A week together."),
+      at("ending", "Selected ending", "They return."),
+    ];
+    const scoped = put(dir, "scoped.json", { blocks, chapter: "Holidays" });
+    expectPassed(run("copy", "--input", scoped, "--current", scoped));
+    const ambiguous = put(dir, "ambiguous.json", {
+      blocks: blocks.map(({ section: _section, ...rest }) => rest),
+      chapter: "Holidays",
+    });
+    const result = run("copy", "--input", ambiguous, "--current", ambiguous);
+    expect(result.exitCode).toBe(4);
+    expect(result.envelope.message).toContain('2 headings named "Accepted introduction, locked copy"');
+  });
 });
 
 describe("story: whole-story replacement with exact emoji overrides", () => {
@@ -210,6 +265,7 @@ describe("story: whole-story replacement with exact emoji overrides", () => {
 describe("geometry: footers, page numbers, backgrounds, role fonts and reply headers", () => {
   const CONTRACT = {
     backgroundLabels: ["background"],
+    requiredBackgrounds: [] as { page: number; label: string }[],
     bleed: { bottom: 9, inside: 0, outside: 9, top: 9 },
     emojiFont: "Apple Color Emoji\tRegular",
     firstPageSide: "right",
@@ -240,10 +296,22 @@ describe("geometry: footers, page numbers, backgrounds, role fonts and reply hea
   };
   const bg = (page: number, kind: string, bounds: number[]) => ({ bounds, fill: "Bestie Cream", kind, label: "background", page, ranges: [] });
 
-  function check(frames: unknown[]) {
+  function check(frames: unknown[], contract = CONTRACT) {
     const dir = scratch();
-    return run("geometry", "--snapshot", put(dir, "format.json", frames), "--contract", put(dir, "contract.json", CONTRACT));
+    return run("geometry", "--snapshot", put(dir, "format.json", frames), "--contract", put(dir, "contract.json", contract));
   }
+
+  test("fails when a required opener background is missing from the readback", () => {
+    const contract = {
+      ...CONTRACT,
+      requiredBackgrounds: [{ page: 1, label: "background" }],
+    };
+    expectRefused(
+      check(footers(1), contract),
+      'p1 has 0 required background "background" frames; expected 1.',
+    );
+    expectPassed(check([...footers(1), bg(1, "textFrame", [-9, 0, 774, 909])], contract));
+  });
 
   test("fails white bleed for rectangle and empty text-frame backgrounds on recto and verso", () => {
     const trim = [0, 0, 765, 900];
@@ -302,7 +370,7 @@ describe("geometry: footers, page numbers, backgrounds, role fonts and reply hea
     bounds,
     label,
     page: 1,
-    ranges: [{ font, style: "Bestie Featured Message", text: "Mwah! Thank you for your message. xxx" }],
+    ranges: [{ font, style: "Bestie Featured Message", text: "Example reply for a layout check." }],
     ...(ink ? { ink } : {}),
   });
 
@@ -325,7 +393,7 @@ describe("geometry: footers, page numbers, backgrounds, role fonts and reply hea
     );
   });
   test("passes the r16 page 7 reference: container overlap with ample measured ink gaps", () => {
-    // Foreground PDF word bounds, 11 October 2026: 49.6, 33.6 and 31.6 pt ink gaps.
+    // Foreground measured the three ink gaps; other bounds below are synthetic.
     const frames = [
       ...footers(1),
       body("source-body-F-MELANIE", [285, 105, 370, 795], "Georgia\tRegular", [285, 105, 313.2, 795]),
@@ -377,6 +445,12 @@ describe("dispatch: native-control duplicate guard against operation receipts", 
     expectRefused(run("dispatch", "--receipts", dir, "--operation", "phaseA-repair-r2", "--now", NOW), "phaseA-repair-r2-completed.txt");
   });
 
+  test("refuses prefixed receipts without their operation name", () => {
+    const dir = scratch();
+    put(dir, "phaseA-completed.txt", "done");
+    expectRefused(run("dispatch", "--receipts", dir, "--now", NOW), "receipt folder contains named operations: phaseA-completed.txt");
+  });
+
   test("asks for a bounded wait while a fresh started receipt settles", () => {
     const dir = scratch();
     const started = put(dir, "started.txt", "started");
@@ -397,6 +471,7 @@ describe("dispatch: native-control duplicate guard against operation receipts", 
 
   test("clears an empty folder with a fresh target and refuses a stale one", () => {
     const dir = scratch();
+    expectRefused(run("dispatch", "--receipts", dir, "--now", NOW), "fresh accessibility target is required");
     const fresh = put(dir, "target-fresh.json", { capturedAt: "2026-10-11T21:59:30+11:00" });
     expectPassed(run("dispatch", "--receipts", dir, "--target", fresh, "--now", NOW));
     const stale = put(dir, "target-stale.json", { capturedAt: "2026-10-11T21:50:00+11:00" });
@@ -431,7 +506,7 @@ describe("handback: one current revision whose claims match evidence", () => {
         pdf: { path: put(dir, "r16.pdf", PDF), sha256: sha256(PDF) },
         preview: { queuedAt: "2026-10-11T22:10:00+11:00", state: "queued" },
         revision: "r16",
-        sourceExtents: [{ extent: "excerpt", key: "itm_8395ed4eb72040373ba8fdf5", page: 2 }],
+        sourceExtents: [{ extent: "excerpt", key: "example_message_001", page: 2 }],
         ui: { owner: "foreground Desktop", released: true },
         writingBeats: { open: [], selected: [{ answer: "option 1", evidence: "i meant 1 not 2", question: "Q9 teaser" }] },
         ...overrides,

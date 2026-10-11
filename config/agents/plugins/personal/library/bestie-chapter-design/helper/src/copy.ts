@@ -22,6 +22,7 @@ export type Role = (typeof ROLES)[number];
 /** A paragraph range under one exact heading of a named copy owner. */
 export type BlockAddress = {
   owner: string;
+  section?: string;
   heading: string;
   paragraphs: [number, number];
 };
@@ -55,6 +56,9 @@ function address(value: unknown, where: string): BlockAddress {
   return {
     heading: text(item.heading, `${where}.heading`),
     owner: text(item.owner, `${where}.owner`),
+    ...(item.section === undefined
+      ? {}
+      : { section: text(item.section, `${where}.section`) }),
     paragraphs: [first, last],
   };
 }
@@ -91,22 +95,47 @@ export function readResolution(path: string): Resolution {
 
 function blockKey(item: BlockAddress): string {
   const [first, last] = item.paragraphs;
-  return `${item.owner}#${item.heading}¶${first}-${last}`;
+  return `${item.owner}#${item.section === undefined ? "" : `${item.section}/`}${item.heading}¶${first}-${last}`;
 }
 
-/** Paragraphs under the exact heading, unwrapped to one line each. */
-function sectionParagraphs(owner: string, heading: string): string[] {
+/** Paragraphs under an exact heading, optionally scoped to its parent section. */
+function sectionParagraphs(owner: string, heading: string, section?: string): string[] {
   const lines = readText(owner).split("\n");
-  const starts = lines.flatMap((line, index) =>
-    /^#{1,6}\s+(.*?)\s*$/.exec(line)?.[1] === heading ? [index] : [],
-  );
+  const headings = lines.flatMap((line, index) => {
+    const match = /^(#{1,6})\s+(.*?)\s*$/.exec(line);
+    return match === null
+      ? []
+      : [{ index, level: (match[1] ?? "").length, name: match[2] ?? "" }];
+  });
+  const parents = section === undefined
+    ? []
+    : headings.filter((item) => item.name === section);
+  if (section !== undefined && parents.length !== 1) {
+    throw new InputError(
+      `${owner} has ${parents.length} sections named "${section}"; expected exactly 1.`,
+    );
+  }
+  const parent = parents[0];
+  const scopeStart = parent === undefined ? 0 : parent.index + 1;
+  const scopeEnd = parent === undefined
+    ? lines.length
+    : (headings.find((item) => item.index > parent.index && item.level <= parent.level)?.index ??
+      lines.length);
+  const starts = headings
+    .filter((item) =>
+      item.index >= scopeStart &&
+      item.index < scopeEnd &&
+      item.name === heading &&
+      (parent === undefined || item.level > parent.level),
+    )
+    .map((item) => item.index);
   if (starts.length !== 1) {
     throw new InputError(
-      `${owner} has ${starts.length} headings named "${heading}"; expected exactly 1.`,
+      `${owner} has ${starts.length} headings named "${heading}"${section === undefined ? "" : ` under "${section}"`}; expected exactly 1.`,
     );
   }
   const body: string[] = [];
-  for (const line of lines.slice((starts[0] ?? 0) + 1)) {
+  for (const line of lines.slice((starts[0] ?? 0) + 1, scopeEnd)) {
     if (/^#{1,6}\s/.test(line)) break;
     body.push(line.trimEnd());
   }
@@ -118,7 +147,7 @@ function sectionParagraphs(owner: string, heading: string): string[] {
 }
 
 function addressedParagraphs(item: BlockAddress): string[] {
-  const all = sectionParagraphs(item.owner, item.heading);
+  const all = sectionParagraphs(item.owner, item.heading, item.section);
   const [first, last] = item.paragraphs;
   if (last > all.length) {
     throw new InputError(
@@ -168,6 +197,7 @@ function roleIssues(resolution: Resolution): string[] {
 function contains(outer: BlockAddress, inner: BlockAddress): boolean {
   return (
     outer.owner === inner.owner &&
+    outer.section === inner.section &&
     outer.heading === inner.heading &&
     outer.paragraphs[0] <= inner.paragraphs[0] &&
     inner.paragraphs[1] <= outer.paragraphs[1]

@@ -89,6 +89,18 @@ export function checkDispatch(options: DispatchOptions): CheckResult {
   if (!statSync(options.receipts).isDirectory()) {
     throw new InputError(`${options.receipts} is not a receipt directory.`);
   }
+  const prefixed = readdirSync(options.receipts).filter((name) =>
+    /.+-(started|completed)\.(txt|json)$/.test(name),
+  );
+  if (options.operation === undefined && prefixed.length > 0) {
+    return verdict(
+      [`receipt folder contains named operations: ${prefixed.join(", ")}.`],
+      null,
+      "",
+      "Operation identity is needed before dispatch.",
+      "Name the existing operation, inspect its receipts, then rerun dispatch.",
+    );
+  }
   const started = receipt(options.receipts, options.operation, "started");
   const completed = receipt(options.receipts, options.operation, "completed");
   if (completed !== null) {
@@ -101,6 +113,15 @@ export function checkDispatch(options: DispatchOptions): CheckResult {
     };
   }
   if (started !== null) return startedResult(options, started);
+  if (options.target === undefined) {
+    return verdict(
+      ["a fresh accessibility target is required before a new native dispatch."],
+      null,
+      "",
+      "No fresh accessibility target was supplied.",
+      "Capture the current accessibility target, then rerun dispatch with --target.",
+    );
+  }
   return verdict(
     targetIssues(options),
     { operation: options.operation ?? null, receipts: options.receipts },
