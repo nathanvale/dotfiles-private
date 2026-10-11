@@ -8,12 +8,16 @@ concepts, wording and artwork versions retain their own approval state.
 ## Primary reference
 
 Before briefing, generating, editing or reviewing a meme, view
-[first glimpse](../assets/style-references/first-glimpse-storybook-r2.png).
+[first glimpse](../assets/style-references/first-glimpse-storybook-r2.jpg).
 Pass this clean image to the image tool alongside the actual edit target.
-Its SHA-256 is
-`9bc5e70dfe6ad10ca99bf934e5c52b8f02e645b2915ce74a97f963201b7010e2`.
-It is the accepted Finding Your Person r2 drawing, without the Codex overlay
-in Nathan's later screenshot. If unavailable, report the missing reference
+This AI reference is a 1254 by 1254 JPEG, 450,433 bytes, SHA-256
+`bb00a4c91e7fb4897b07c140dc6e35458bc7ed089acaf92db0b0a260f172175c`.
+Keep bundled AI references at or below 1500 pixels on their longest edge and
+use a compact encoding with clear lines and lettering. Preserve full-resolution
+artwork separately for book production. This reference derives from the accepted
+Finding Your Person r2 PNG, SHA-256
+`9bc5e70dfe6ad10ca99bf934e5c52b8f02e645b2915ce74a97f963201b7010e2`,
+without the Codex overlay in Nathan's later screenshot. If unavailable, report the missing reference
 and retain the style direction below without claiming a visual comparison.
 
 Draw a warm, hand-drawn 2D storybook cartoon with bold, slightly irregular
