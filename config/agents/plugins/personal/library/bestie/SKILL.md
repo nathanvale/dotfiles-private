@@ -74,11 +74,11 @@ The Esther Perel-inspired profile review does not replace its meme archetype.
 
 Nathan's standing visual preferences; they override the verbatim source where they differ:
 
-- Use the flat, hand-drawn cartoon style in the
-  [visual reference guide](references/visual-style.md). Read that guide, view
-  its four bundled memes, and pass them as style references to the image tool.
-  Blend their bold ink outlines, simple expressive faces, flat warm colours
-  and subtle paper grain. This replaces the earlier large-eye, shaded look.
+- Before every meme brief, generation, edit or review, read the
+  [visual reference guide](references/visual-style.md). View and pass its
+  primary first-glimpse storybook reference to the image tool. Apply its
+  confirmed dog identities whenever a dog appears. This guide owns the
+  active style reference and character corrections.
 - Preserve the source visual canon and supplied character details. Melanie's
   default hairstyle is a black ponytail. A style variation changes the drawing
   treatment while keeping hairstyle, outfits, proportions, scene and caption
@@ -104,7 +104,7 @@ image tool. Pass only the context needed for the approved image, not entire
 profiles or message histories.
 Before calling the tool, check the prompt against the visual preferences
 above. Generate only the requested assets and number of variations. Inspect
-character details, reference-style fidelity and complete, readable caption
+character and dog details, reference-style fidelity and complete, readable caption
 text. Report any mismatch; keep corrections within the authorized generation
 scope and stop generation immediately when Nathan says to stop. Preview the
 image and caption in the conversation. Sending the result uses

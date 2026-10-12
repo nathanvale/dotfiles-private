@@ -20,6 +20,7 @@
 		"config/agents/plugins/personal/library/xero",
 		"config/agents/plugins/personal/library/xero-cash-coding/helper",
 		"config/agents/plugins/personal/library/imazing-archive/helper",
+		"config/agents/plugins/personal/library/bestie-chapter-design/helper",
 		"config/agents/plugins/proof",
 		"apps/vscode/*"
 	],
@@ -50,7 +51,7 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json && bun run --filter '*' typecheck && bun run typecheck:browser-login",
 		"typecheck:browser-login": "tsc --ignoreConfig --noEmit --allowJs --checkJs --module nodenext --moduleResolution nodenext --target es2022 --types bun --skipLibCheck config/agents/plugins/personal/library/one-password/scripts/browser-login.mjs",
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows",
-		"personal:build": "bun run --filter bitbucket-scripts --filter classic-cinema-scripts --filter session-recovery-scripts --filter test-runner-scripts --filter worktree-scripts --filter @local/xero-skill --filter imazing-archive --filter xero-history build:bundle"
+		"personal:build": "bun run --filter bitbucket-scripts --filter classic-cinema-scripts --filter session-recovery-scripts --filter test-runner-scripts --filter worktree-scripts --filter @local/xero-skill --filter imazing-archive --filter bestie-chapter-check --filter xero-history build:bundle"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.15",
