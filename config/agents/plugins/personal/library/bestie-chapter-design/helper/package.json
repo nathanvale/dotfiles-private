@@ -1,0 +1,13 @@
+{
+  "name": "bestie-chapter-check",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "biome check --diagnostic-level=error .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test tests --timeout=30000",
+    "build:bundle": "NODE_ENV=production bun build --target bun --minify-whitespace src/cli.ts --outfile dist/bestie-chapter-check.js",
+    "bestie-chapter-check": "bun --no-install dist/bestie-chapter-check.js"
+  }
+}
