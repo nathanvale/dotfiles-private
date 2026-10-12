@@ -1,6 +1,6 @@
 ---
 name: home-assistant-use
-description: Inspect, control, audit or troubleshoot Home Assistant and Apple Home, including calm household automations and physical controls.
+description: Inspect, control or troubleshoot Home Assistant and Apple Home; align device names, diagnose climate and HomeKit sync, capture logs, or inspect the home router for connectivity faults.
 ---
 
 # Home Assistant
@@ -15,17 +15,21 @@ authorize live automation changes.
   [calm operation](references/calm-operation.md).
 - For faults, unreliable controls or a setup audit, read
   [troubleshooting](references/troubleshooting.md).
+- For Sensibo or IR-controlled AC failures, read
+  [climate troubleshooting](references/climate-troubleshooting.md).
 - For a specific device action, resolve its live identity and read its current
   state before acting. Perform the requested action once, then read back its
   state so the original setting is available for a scoped rollback.
 
 ## Access and ownership
 
-Discover available HA connectors and their schemas before choosing a route.
-Prefer an existing structured connection for repeatable HA operations; use
-available browser or native-app controls when appropriate. Do not assume a
-particular MCP alias, wrapper, tool name or installation exists. Adding a new
-connector or changing authentication is separate setup work.
+For HA and the home router, use Codex's native browser controls with Nathan's
+existing personal Chrome session first. Prefer DOM controls; fall back to
+computer-use controls in Chrome when the page cannot be operated through DOM.
+Read [browser access](references/browser-access.md) for address discovery,
+sign-in and Apple Home or iPhone Mirroring comparisons. Discover existing HA
+connectors for repeatable structured operations; use only their observed schemas.
+Adding a connector or changing authentication remains separate setup work.
 
 Use configured credential providers without displaying tokens or raw
 credential-bearing configuration, including secrets.yaml and connector setup.
