@@ -68,9 +68,11 @@ Keep stroke thickness separate from total caption line width and fit.
 
 Nathan approved soft and simple frame style A on 13 October 2026 and requested
 thought bubbles. Use column A of the [original comparison](comic-frames-original-comparison.png)
-as the frame oracle, including its warm cream fill, small olive sprigs beside
-captions and restrained amber or olive emphasis rays. Nathan clarified this
-choice after the simplified sheet. Consult the [thought-bubble example](comic-frames-soft-simple.png)
+as the frame oracle for its warm cream fill, rounded shapes and thin single
+border. Nathan removed decorative olive sprigs on 13 October 2026; omit them
+from captions and bubbles even when a reference shows them. Keep restrained
+emphasis rays for speech or sound effects where useful.
+Consult the [thought-bubble example](comic-frames-soft-simple.png)
 for its cloud and trailing dots only. These sheets illustrate frame shapes; the measured
 C reference above remains the lettering-weight authority. Keep this full-size
 documentation sheet separate from compact AI drawing references.
