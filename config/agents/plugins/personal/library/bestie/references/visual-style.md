@@ -92,6 +92,41 @@ placement. Keep accents small and clear of lettering. Use a single border
 without drop shadows. Keep thought, speech and source quotation roles distinct;
 a thought bubble does not authorize an invented memory or motive.
 
+## Book colour harmony
+
+Nathan requests colour harmony with the Kate Berry-inspired InDesign pages on
+13 October 2026. Keep the approved storybook line art, caption C and frame A.
+Use the existing Bestie page palette as the colour anchor for new or explicitly
+authorized revised memes. The creative-director skill owns page composition.
+
+| Page colour | CMYK percentages | Illustration role |
+| --- | --- | --- |
+| Bestie Cream | 0, 1, 7, 0 | Caption plaques and quiet pale backgrounds |
+| Bestie Mint | 13, 0, 7, 0 | Pale open space and light background accents |
+| Bestie Blush | 0, 12, 8, 0 | Small warm background areas and affectionate accents |
+| Bestie Coral | 0, 65, 55, 0 | Restrained accent details |
+| Bestie Green | 52, 0, 26, 10 | Supporting accent details |
+
+These values are read from actual Holidays r7 and Phone r18 PDF page content,
+not claimed as Kate's original swatch definitions. Match appearance against a
+colour-managed render of the current chapter. CMYK values depend on the output
+profile; a generated RGB image or approximate screen hex does not prove a print
+colour match.
+
+Keep large background areas pale and matte so the meme sits comfortably beside
+cream, mint or blush pages. Preserve the scene's lighting and its recognizable
+colours, including skin, clothing, water and night settings. Use existing navy,
+muted blue, amber and wood tones where the scene needs them. Simplify shading
+to flat shapes and restrained grain. Reserve stronger coral and green for
+small accents; keep captions dark on cream for legibility. Preserve Nathan's
+blue eyes and scene-specific outfits.
+
+Review the whole meme beside its intended page background before acceptance.
+Keep original and accepted artwork versions recoverable. This colour direction
+does not authorize recolouring all existing memes or changing native page
+swatches. Final placement, image quality and production colour proof remain
+separate checks.
+
 ## Confirmed dogs
 
 Nathan confirms both identities on 11 October 2026:
