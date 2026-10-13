@@ -39,6 +39,57 @@ skin-coloured scalp and clean-shaven face. Check every Nathan figure for a
 hairline, scalp stubble, sideburns or sharply bounded dark scalp patches that
 could read as hair; correct mismatches in separately versioned artwork.
 
+## Caption lettering
+
+Nathan approved [caption weight C](../assets/style-references/caption-weight-c-approved.png)
+on 13 October 2026. View it alongside the drawing reference for every caption
+brief, generation, edit and review. It governs lettering weight, not scene ink.
+The 1254 by 1254 PNG has SHA-256
+`8b003b0002561cc412de0bcb35062b2ba574ab26d667e669908d975e02e60269`.
+
+Use rounded regular lettering matching C. Its headline uses Chalkboard Regular
+at a nominal 90 pixels, with a measured 61-pixel uppercase I height and an
+8-pixel central stem at 50 percent ink coverage. Other glyph strokes vary.
+Keep representative straight stems between 12 and 14 percent of the actual
+capital height, targeting 13 percent. At the reference headline size this is
+about 8 pixels, or `8 * output_width / 1254` when scaling the whole image.
+For smaller captions, scale stroke thickness with their capital height rather
+than applying the headline's 8-pixel width to every line.
+
+Measure the delivered lettering at native output size. Check at least three
+straight stems away from joins and rounded terminals. Record capital height,
+stem widths and image dimensions. Review the result at its intended book
+placement as well. A generation prompt alone does not prove these limits.
+Correct lettering that exceeds the range in a separately versioned candidate
+before approval. Preserve exact captions and approved original artwork.
+Keep stroke thickness separate from total caption line width and fit.
+
+## Comic frames
+
+Nathan approved soft and simple frame style A on 13 October 2026 and requested
+thought bubbles. Use column A of the [original comparison](comic-frames-original-comparison.png)
+as the frame oracle, including its warm cream fill, small olive sprigs beside
+captions and restrained amber or olive emphasis rays. Nathan clarified this
+choice after the simplified sheet. Consult the [thought-bubble example](comic-frames-soft-simple.png)
+for its cloud and trailing dots only. These sheets illustrate frame shapes; the measured
+C reference above remains the lettering-weight authority. Keep this full-size
+documentation sheet separate from compact AI drawing references.
+Use warm cream fills and a single gently irregular thin dark
+outline. Keep the frame family consistent across the book:
+
+- Put captions in softly rounded rectangular plaques.
+- Put spoken dialogue in rounded balloons with a curved pointed tail aimed
+  toward the speaker.
+- Put thoughts in soft cloud-shaped balloons with progressively smaller round
+  dots leading toward the thinker.
+- Put sound effects in modest soft cloud frames.
+
+Keep lettering at the approved C weight. Give every frame enough inset space
+for whole lettering and preserve its outline, tail or thought dots at final
+placement. Keep accents small and clear of lettering. Use a single border
+without drop shadows. Keep thought, speech and source quotation roles distinct;
+a thought bubble does not authorize an invented memory or motive.
+
 ## Confirmed dogs
 
 Nathan confirms both identities on 11 October 2026:
