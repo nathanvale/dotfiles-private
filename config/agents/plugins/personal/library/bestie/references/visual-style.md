@@ -143,8 +143,9 @@ General upscaling remains outside this task.
 OpenAI's [image generation documentation](https://developers.openai.com/api/docs/guides/image-generation),
 checked on 13 October 2026, gives GPT Image 2 and 2.5 API generation these
 limits: a maximum edge of 3840 pixels, dimensions divisible by 16, aspect ratio
-at most 3:1, and at most 8,294,400 pixels. Maximum square output is 2880 by 2880;
-16:9 output is 3840 by 2160. Resolutions above 2560 by 1440 are experimental.
+between 1:3 and 3:1, and between 655,360 and 8,294,400 pixels. Maximum square
+output is 2880 by 2880; 16:9 output is 3840 by 2160. Resolutions above 2560 by
+1440 are experimental.
 Verify current model and route support before use.
 
 Those API limits are not a guarantee for the built-in image tool, which may
