@@ -1,103 +1,111 @@
-# Bestie storybook visual reference
+# Bestie storybook visual contract
 
-Nathan selects the first-glimpse drawing as the primary visual oracle for all
-memes in Three Years of Bestie on 11 October 2026. Use this standing style for
-Bestie meme work unless he explicitly chooses another treatment. Individual
-concepts, wording and artwork versions retain their own approval state.
+Read this guide before every Bestie meme brief, generation, edit or review. Use
+first glimpse as the primary drawing treatment. Nathan selected it on 11 October
+2026 for Three Years of Bestie. Style approval does not approve a concept,
+caption or artwork version.
 
-## Primary reference
+## Authority
 
-Before briefing, generating, editing or reviewing a meme, view
-[first glimpse](../assets/style-references/first-glimpse-storybook-r2.jpg).
-Pass this clean image to the image tool alongside the actual edit target.
-This AI reference is a 1254 by 1254 JPEG, 450,433 bytes, SHA-256
-`bb00a4c91e7fb4897b07c140dc6e35458bc7ed089acaf92db0b0a260f172175c`.
-Keep bundled AI references at or below 1500 pixels on their longest edge and
-use a compact encoding with clear lines and lettering. Preserve full-resolution
-artwork separately for book production. This reference derives from the accepted
-Finding Your Person r2 PNG, SHA-256
-`9bc5e70dfe6ad10ca99bf934e5c52b8f02e645b2915ce74a97f963201b7010e2`,
-without the Codex overlay in Nathan's later screenshot. If unavailable, report the missing reference
-and retain the style direction below without claiming a visual comparison.
+| Decision | Owner | Apply it to |
+| --- | --- | --- |
+| Current choices and corrections | Nathan's explicit instructions | The named task and artwork |
+| Event, people, outfits, props, scene, panel sequence, action, exact caption and joke | The bound source, subject to Nathan's choices | Story content |
+| Drawing treatment | [First glimpse](../assets/style-references/first-glimpse-storybook-r2.jpg) | Characters and settings |
+| Caption weight | [Approved C](../assets/style-references/caption-weight-c-approved.png) | Lettering only |
+| Frame family | Column A of the [original comparison](comic-frames-original-comparison.png), with Nathan's corrections below | Caption, speech, thought and sound frames |
+| Page composition | The book's current design system and creative-director skill | InDesign layout |
+| Individual artwork acceptance | Nathan's approval and the book's artwork-selection note | Accepted versions and reference additions |
 
-Draw a warm, hand-drawn 2D storybook cartoon with bold, slightly irregular
-dark ink outlines, small expressive oval eyes, rounded faces, flat matte
-colour shapes, simple shadows and subtle printed-paper grain. Use warm
-cream, amber and muted olive with restrained sky blue, navy, coral or rust.
-Draw settings with the same line-and-fill treatment as the characters.
-Keep the scene, panel sequence, action and embedded wording easy to read.
+Use drawing references for treatment. Preserve first-meeting clothes within
+that scene unless Nathan extends them to another. A thought frame does not
+authorize an invented memory or motive.
 
-The reference supplies drawing treatment. The bound source and Nathan's
-choices supply the event, people, outfits, props and exact caption. Preserve
-those scene details and the joke. First-meeting clothes belong to that scene
-unless Nathan extends them to another. Preserve Nathan's blue eyes when iris
-detail is shown and Melanie's established dark ponytail unless he requests a
-change. Keep skin and fabric stylized and matte.
+## Prepare the brief
 
-Nathan confirms his head is fully shaved on 11 October 2026. Draw a smooth,
-skin-coloured scalp and clean-shaven face. Check every Nathan figure for a
-hairline, scalp stubble, sideburns or sharply bounded dark scalp patches that
-could read as hair; correct mismatches in separately versioned artwork.
+1. Bind the source, target version, chosen concept, exact caption and authorized
+   changes. Preserve accepted decisions and unrelated scene details.
+2. View first glimpse and C. For generation, pass the clean first-glimpse drawing
+   to the image tool. For an edit, include the actual target too. View frame A
+   when frames appear. If a reference is unavailable, report its path, follow
+   the written rule, and leave that visual comparison unverified.
+3. Include the applicable character and dog facts below.
+4. Establish the intended book placement when available. Request the largest
+   native image the selected route actually supports, preserving the artwork's
+   aspect ratio and whole composition. Keep the returned production master.
 
-## Caption lettering
+Follow the Bestie skill for concept and generation authority. Report route
+limitations; obtain Nathan's spending approval before switching to a paid API.
 
-Nathan approved [caption weight C](../assets/style-references/caption-weight-c-approved.png)
-on 13 October 2026. View it alongside the drawing reference for every caption
-brief, generation, edit and review. It governs lettering weight, not scene ink.
-The 1254 by 1254 PNG has SHA-256
-`8b003b0002561cc412de0bcb35062b2ba574ab26d667e669908d975e02e60269`.
+## Drawing and identity
 
-Use rounded regular lettering matching C. Its headline uses Chalkboard Regular
-at a nominal 90 pixels, with a measured 61-pixel uppercase I height and an
-8-pixel central stem at 50 percent ink coverage. Other glyph strokes vary.
-Keep representative straight stems between 12 and 14 percent of the actual
-capital height, targeting 13 percent. At the reference headline size this is
-about 8 pixels, or `8 * output_width / 1254` when scaling the whole image.
-For smaller captions, scale stroke thickness with their capital height rather
-than applying the headline's 8-pixel width to every line.
+Draw a warm, hand-drawn 2D storybook cartoon. Use bold, slightly irregular dark
+ink outlines, small expressive oval eyes, rounded faces, flat matte colour
+shapes, simple shadows and subtle printed-paper grain. Use the same treatment for settings. Keep action, panel sequence and wording easy
+to read.
 
-Measure the delivered lettering at native output size. Check at least three
-straight stems away from joins and rounded terminals. Record capital height,
-stem widths and image dimensions. Review the result at its intended book
-placement as well. A generation prompt alone does not prove these limits.
-Correct lettering that exceeds the range in a separately versioned candidate
-before approval. Preserve exact captions and approved original artwork.
-Keep stroke thickness separate from total caption line width and fit.
+Use the book palette below while preserving scene colours. Keep skin and fabric
+stylized and matte.
 
-## Comic frames
+Draw Nathan with a fully shaved, smooth skin-coloured scalp and a clean-shaven
+face, as he confirmed on 11 October 2026. Preserve his blue eyes when iris
+detail appears. Inspect every Nathan figure for a hairline, scalp stubble,
+sideburns or a sharply bounded dark scalp patch that could read as hair.
 
-Nathan approved soft and simple frame style A on 13 October 2026 and requested
-thought bubbles. Use column A of the [original comparison](comic-frames-original-comparison.png)
-as the frame oracle for its warm cream fill, rounded shapes and thin single
-border. Nathan removed decorative olive sprigs on 13 October 2026; omit them
-from captions and bubbles even when a reference shows them. Keep restrained
-emphasis rays for speech or sound effects where useful.
-Consult the [thought-bubble example](comic-frames-soft-simple.png)
-for its cloud and trailing dots only. These sheets illustrate frame shapes; the measured
-C reference above remains the lettering-weight authority. Keep this full-size
-documentation sheet separate from compact AI drawing references.
-Use warm cream fills and a single gently irregular thin dark
-outline. Keep the frame family consistent across the book:
+Preserve Melanie's established black ponytail unless Nathan requests a change.
+Keep appearance and proportions consistent across scene and expression edits.
+
+When a dog appears, brief and inspect its owner, breed, size and colour against
+these facts, confirmed on 11 October 2026:
+
+- Melanie's dog is a medium-sized black cavoodle.
+- Nathan's dog is a small white bichon frise.
+
+Melanie's black cavoodle overrides brown dogs in older references.
+
+## Caption C
+
+Use rounded regular lettering matching C, approved on 13 October 2026. Keep
+scene ink governed by first glimpse. C's headline uses Chalkboard Regular at a
+nominal 90 pixels. Its uppercase I measures 61 pixels high, with an 8-pixel
+central stem at 50 percent ink coverage. Other glyph strokes vary.
+
+Keep representative straight stems between 12 and 14 percent of actual capital
+height, targeting 13 percent. The reference headline stem is about 8 pixels,
+or `8 * output_width / 1254` when scaling the whole image. Scale smaller
+caption stems with their own capital height. Keep stem thickness separate
+from total line width and fit.
+
+Measure the delivered lettering at native output size. Sample at least three
+straight stems away from joins and rounded terminals at 50 percent ink coverage.
+Each representative sample must meet the range. Record sampled glyphs and pixel
+locations, measurement method, capital height, stem widths and image dimensions. Check exact wording
+and readability at intended placement. Correct out-of-range lettering before
+approval. A prompt does not prove delivered lettering.
+
+## Frame A
+
+Use the soft and simple family A, approved on 13 October 2026. Use warm cream fill, rounded shapes and a thin, gently irregular dark single
+border. Inset whole lettering comfortably. Use this family across the book:
 
 - Put captions in softly rounded rectangular plaques.
-- Put spoken dialogue in rounded balloons with a curved pointed tail aimed
-  toward the speaker.
+- Put speech in rounded balloons with a curved pointed tail aimed at the speaker.
 - Put thoughts in soft cloud-shaped balloons with progressively smaller round
   dots leading toward the thinker.
 - Put sound effects in modest soft cloud frames.
 
-Keep lettering at the approved C weight. Give every frame enough inset space
-for whole lettering and preserve its outline, tail or thought dots at final
-placement. Keep accents small and clear of lettering. Use a single border
-without drop shadows. Keep thought, speech and source quotation roles distinct;
-a thought bubble does not authorize an invented memory or motive.
+Omit decorative olive branches and sprigs from captions and bubbles, including
+those in references. Keep restrained emphasis rays for speech or sound effects
+where useful, small and clear of lettering. Use a single border without drop
+shadows. The [thought-bubble example](comic-frames-soft-simple.png) supplies the
+cloud and trailing dots. Keep the outline, tail and thought dots visible at
+final placement. C governs the lettering in every frame.
 
-## Book colour harmony
+## Book colour
 
-Nathan requests colour harmony with the Kate Berry-inspired InDesign pages on
-13 October 2026. Keep the approved storybook line art, caption C and frame A.
-Use the existing Bestie page palette as the colour anchor for new or explicitly
-authorized revised memes. The creative-director skill owns page composition.
+Use this palette for new or explicitly authorized revised memes, as Nathan
+requested on 13 October 2026 for harmony with the Kate Berry-inspired InDesign
+pages. Retain storybook line art, caption C and frame A.
 
 | Page colour | CMYK percentages | Illustration role |
 | --- | --- | --- |
@@ -107,46 +115,79 @@ authorized revised memes. The creative-director skill owns page composition.
 | Bestie Coral | 0, 65, 55, 0 | Restrained accent details |
 | Bestie Green | 52, 0, 26, 10 | Supporting accent details |
 
-These values are read from actual Holidays r7 and Phone r18 PDF page content,
-not claimed as Kate's original swatch definitions. Match appearance against a
-colour-managed render of the current chapter. CMYK values depend on the output
-profile; a generated RGB image or approximate screen hex does not prove a print
-colour match.
+These values come from actual Holidays r7 and Phone r18 PDF page content. They
+are not claimed as Kate's original swatch definitions. Match appearance against
+a colour-managed render of the current chapter. CMYK values depend on the
+output profile. Generated RGB artwork and approximate screen hex values do not
+prove a print colour match.
 
-Keep large background areas pale and matte so the meme sits comfortably beside
-cream, mint or blush pages. Preserve the scene's lighting and its recognizable
-colours, including skin, clothing, water and night settings. Use existing navy,
-muted blue, amber and wood tones where the scene needs them. Simplify shading
-to flat shapes and restrained grain. Reserve stronger coral and green for
-small accents; keep captions dark on cream for legibility. Preserve Nathan's
-blue eyes and scene-specific outfits.
+Keep large background areas pale and matte beside cream, mint or blush pages.
+Preserve recognizable skin, clothing, water and night colours and the scene's
+lighting. Use navy, muted blue, amber and wood tones where the scene needs them.
+Use flat shading and restrained grain, with stronger coral and green confined
+to small accents. Keep captions dark on cream.
 
 Review the whole meme beside its intended page background before acceptance.
-Keep original and accepted artwork versions recoverable. This colour direction
-does not authorize recolouring all existing memes or changing native page
-swatches. Final placement, image quality and production colour proof remain
-separate checks.
+This direction does not authorize recolouring all existing memes or changing
+native page swatches. Final placement, image quality and production colour
+proof remain separate checks.
 
-## Confirmed dogs
+## Production masters and input references
 
-Nathan confirms both identities on 11 October 2026:
+Preserve the largest actual native output as the production master. Inspect
+its dimensions and record effective PPI at the intended placement when known.
+Report unknown placement or inadequate resolution as a proof gap. Requested
+dimensions, resized pixels and changed DPI metadata do not prove native detail.
+General upscaling remains outside this task.
 
-- Melanie's dog is a medium-sized black cavoodle.
-- Nathan's dog is a small white bichon frise.
+OpenAI's [image generation documentation](https://developers.openai.com/api/docs/guides/image-generation),
+checked on 13 October 2026, gives GPT Image 2 and 2.5 API generation these
+limits: a maximum edge of 3840 pixels, dimensions divisible by 16, aspect ratio
+at most 3:1, and at most 8,294,400 pixels. Maximum square output is 2880 by 2880;
+16:9 output is 3840 by 2160. Resolutions above 2560 by 1440 are experimental.
+Verify current model and route support before use.
 
-When either dog appears, name its owner, breed, size and colour in the brief.
-Inspect the rendered dog against these facts before handing back the image.
-A brown dog in an older reference does not override Melanie's black cavoodle.
-Preserve approved artwork versions; record a mismatch and make a separately
-versioned correction within Nathan's authorized redraw scope.
+Those API limits are not a guarantee for the built-in image tool, which may
+expose fewer controls. Request the largest native output it supports and report
+the dimensions it actually returns. Preserve the whole artwork and its aspect
+ratio within the route's limits. Keep production artwork at native size. Never automatically downsize it to
+match an input reference.
 
-## Historical references
+Make compact input derivatives only when useful for the chosen route, separate
+from masters. Keep bundled AI drawing references at or below 1500 pixels on
+their longest edge, with a compact encoding and clear lines and lettering.
+Keep full-size frame documentation sheets separately. Choose derivative dimensions
+for the input route. No fixed square reference copy is required.
 
-The four references supplied on 6 October remain recoverable:
+## Reference provenance and acceptance
+
+First glimpse is a 1254 by 1254 JPEG of 450,433 bytes, SHA-256
+`bb00a4c91e7fb4897b07c140dc6e35458bc7ed089acaf92db0b0a260f172175c`.
+It derives from the accepted Finding Your Person r2 PNG, SHA-256
+`9bc5e70dfe6ad10ca99bf934e5c52b8f02e645b2915ce74a97f963201b7010e2`,
+without the Codex overlay in Nathan's later screenshot.
+
+C is a 1254 by 1254 PNG, SHA-256
+`8b003b0002561cc412de0bcb35062b2ba574ab26d667e669908d975e02e60269`.
+
+Keep the four references supplied on 6 October recoverable:
 [brain swap and heart](../assets/style-references/brain-swap-and-heart.png),
 [mystery date](../assets/style-references/mystery-date.png),
-[birthday song](../assets/style-references/birthday-song.png) and
+[birthday song](../assets/style-references/birthday-song.png), and
 [missing ingredient](../assets/style-references/missing-ingredient.png).
-They are retired from the active style-reference set. Use the primary
-first-glimpse drawing for new work. Read the book's current design system
-for page layout and its artwork-selection note for individual approvals.
+They are historical, outside the active reference set. The four recent redraws
+remain pending Nathan's approval. Keep redraw candidates out of the active
+reference set until Nathan accepts them as additional references. First glimpse
+remains primary.
+
+## Deliver the candidate
+
+Deliver the image and exact caption with the master path, actual dimensions,
+lettering measurements and placement PPI when known. Report checked drawing,
+characters, dogs, frames and page harmony, plus mismatches and missing proof.
+Distinguish visual comparison, screen colour review and production colour proof.
+
+Preserve original, candidate and accepted artwork versions. Deliver corrections
+as separate versions within the authorized scope. Mark a candidate accepted
+only after Nathan accepts that version; style approval alone does not change
+its status.
