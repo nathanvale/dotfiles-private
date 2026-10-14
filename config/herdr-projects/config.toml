@@ -70,3 +70,10 @@ model = "claude-sonnet-5"
 effort = "high"
 description = "Sonnet 5 high on Monash Foundry: EN01 lane work"
 args = ["--settings", '{"env":{"CLAUDE_CODE_USE_FOUNDRY":"1","ANTHROPIC_FOUNDRY_RESOURCE":"monash-edu-smst-ai-claude-code"}}']
+
+[profiles.claude-sonnet-monash-gpt]
+agent = "claude"
+model = "claude-sonnet-5"
+effort = "high"
+description = "Sonnet 5 on the Monash Foundry GPT resource: isolated EN02 route candidate"
+args = ["--settings", '{"env":{"CLAUDE_CODE_USE_FOUNDRY":"1","ANTHROPIC_FOUNDRY_RESOURCE":"monash-edu-esol-smst-ai-dev-gpt","ANTHROPIC_DEFAULT_SONNET_MODEL":"claude-sonnet-5","ANTHROPIC_DEFAULT_HAIKU_MODEL":"claude-sonnet-5","ANTHROPIC_API_KEY":"","ANTHROPIC_AUTH_TOKEN":"","ANTHROPIC_BASE_URL":"","ANTHROPIC_FOUNDRY_API_KEY":"","ANTHROPIC_FOUNDRY_AUTH_TOKEN":"","ANTHROPIC_FOUNDRY_BASE_URL":"","CLAUDE_CODE_USE_BEDROCK":"","CLAUDE_CODE_USE_VERTEX":""}}']
