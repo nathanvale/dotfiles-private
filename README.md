@@ -43,6 +43,12 @@ Supports `--resume` to pick up where it left off and `--start-phase N` to skip a
 The Brewfile owns desktop applications, not the Claude Code or Codex CLIs.
 After setup, run `claude` and `codex` once to complete interactive sign-in.
 
+Codex CLI settings and personal plugins are declared in
+[`config/agents/codex/shared.toml`](config/agents/codex/shared.toml).
+Use `./setup.sh codex --preview`, then `./setup.sh codex --apply` to sync an
+existing machine. [Codex setup](config/agents/codex/README.md) explains the local
+settings preserved by this operation.
+
 ## Features
 
 - **HyperFlow**: Hyper key (Right Cmd) orchestration for app switching and keyboard shortcuts

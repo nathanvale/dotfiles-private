@@ -97,6 +97,8 @@ prepare_fixture() {
     -e "s#/usr/local#$CANONICAL_INTEL_HOMEBREW_PREFIX#g" \
     "$REPO_ROOT/setup.sh" >"$FIXTURE_DOTFILES/setup.sh"
   chmod +x "$FIXTURE_DOTFILES/setup.sh"
+  cp "$REPO_ROOT/bin/test/fixtures/codex-sync-collaborator.py" \
+    "$FIXTURE_DOTFILES/bin/dotfiles/codex_sync.py"
 
   cat >"$FIXTURE_DOTFILES/bin/dotfiles/symlinks/symlinks_manage.sh" <<'EOF'
 #!/usr/bin/env bash

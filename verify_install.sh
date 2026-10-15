@@ -613,7 +613,7 @@ phase_end "Phase 1: Foundation"
 # ============================================================================
 phase_start
 verify_warn "Claude Code" "claude_code_available"
-verify_warn "Managed Codex" "[[ -x '$HOME/.codex/packages/standalone/current/codex' ]]"
+verify_warn "Managed Codex" "[[ -x '$HOME/.codex/packages/standalone/current/bin/codex' ]]"
 # Only check AI rescue marker if Claude Code itself is missing (otherwise it's noise)
 if ! claude_code_available; then
     verify_warn "AI rescue marker" "[[ -f '$STATE_DIR/ai_rescue_ready' ]]"
@@ -622,6 +622,7 @@ else
     PASS_COUNT=$((PASS_COUNT + 1))
     PHASE_PASS=$((PHASE_PASS + 1))
 fi
+verify "Shared Codex CLI setup" "python3 '$DOTFILES/bin/dotfiles/codex_sync.py' --check --json"
 phase_end "Phase 2: AI Rescue"
 
 # ============================================================================
