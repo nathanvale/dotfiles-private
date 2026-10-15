@@ -5,7 +5,7 @@
 export interface ExpectedStation {
 	failureClass: "usage" | "schema" | "domain" | "transient" | "internal" | null
 	exit: number
-	effectClass: "inspect" | "repository-local"
+	effectClass: "inspect" | "external"
 	state: "unchanged" | "completed" | "partially-completed" | "unknown"
 	retryable: boolean
 	delay: number | null
@@ -29,9 +29,9 @@ type Class = ExpectedStation["failureClass"]
 type State = ExpectedStation["state"]
 const EXIT: Record<string, number> = { usage: 2, schema: 4, domain: 3, transient: 75, internal: 1, null: 0 }
 const next = (failureClass: Class, effectClass: ExpectedStation["effectClass"], nextActions: string[], state: State = "unchanged"): ExpectedStation => ({ failureClass, exit: EXIT[String(failureClass)] as number, effectClass, state, retryable: failureClass === "transient", delay: failureClass === "transient" ? 2000 : null, guidance: "next-action", nextActions, reachability: "required" })
-const handoff = (failureClass: Exclude<Class, null>, state: State = "unchanged", reachability: ExpectedStation["reachability"] = "required"): ExpectedStation => ({ failureClass, exit: EXIT[failureClass] as number, effectClass: "repository-local", state, retryable: false, delay: null, guidance: "handoff", nextActions: [], reachability })
+const handoff = (failureClass: Exclude<Class, null>, state: State = "unchanged", reachability: ExpectedStation["reachability"] = "required"): ExpectedStation => ({ failureClass, exit: EXIT[failureClass] as number, effectClass: "external", state, retryable: false, delay: null, guidance: "handoff", nextActions: [], reachability })
 const inspectHandoff = (failureClass: Exclude<Class, null>): ExpectedStation => ({ ...handoff(failureClass), effectClass: "inspect" })
-const RL = "repository-local"
+const RL = "external"
 
 export const EXPECTED_STATIONS: readonly Spec[] = [
 	[help, "success", "SUCCESS_UNCHANGED", next(null, "inspect", [discovery])],
@@ -121,9 +121,21 @@ export const EXPECTED_STATIONS: readonly Spec[] = [
 	[recover, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", handoff("internal")],
 	[recover, "failed", "INTERNAL_UNEXPECTED_UNKNOWN", handoff("internal", "unknown", "declared-unreachable")],
 	[recover, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
+
+	[begin, "refused", "DOMAIN_CANONICAL_NOT_READY", next("domain", RL, [begin])],
+	[begin, "refused", "DOMAIN_MAIN_DIVERGED", handoff("domain")],
+	[begin, "refused", "TRANSIENT_INTEGRATION_BUSY", next("transient", RL, [begin])],
+	[begin, "failed", "INTERNAL_GIT_FAILED_UNKNOWN", handoff("internal", "unknown")],
+	[preview, "refused", "DOMAIN_CANONICAL_NOT_READY", next("domain", RL, [preview])],
+	[preview, "refused", "TRANSIENT_INTEGRATION_BUSY", next("transient", RL, [preview])],
+	[preview, "failed", "INTERNAL_GIT_FAILED_PARTIAL", handoff("internal", "partially-completed")],
+	[apply, "refused", "DOMAIN_MAIN_DIVERGED", handoff("domain")],
+	[apply, "failed", "INTERNAL_GIT_FAILED_PARTIAL", handoff("internal", "partially-completed")],
+	[recover, "failed", "INTERNAL_GIT_FAILED_PARTIAL", handoff("internal", "partially-completed")],
+	[recover, "failed", "INTERNAL_GIT_FAILED_UNKNOWN", handoff("internal", "unknown")],
 ]
 
-export const EXPECTED_STATION_COUNT = 87
+export const EXPECTED_STATION_COUNT = 98
 export const identityOf = (command: string, outcome: string, cause: string): string => JSON.stringify([command, outcome, cause])
 export const EXPECTED_BY_IDENTITY: ReadonlyMap<string, ExpectedStation> = new Map(EXPECTED_STATIONS.map(([command, outcome, cause, expected]) => [identityOf(command, outcome, cause), expected]))
 
@@ -133,9 +145,9 @@ export const EXPECTED_COMMANDS = [
 	{ commandIdentity: "vault-steward.help", route: ["--help"], effectClass: "inspect" },
 	{ commandIdentity: "vault-steward.discovery", route: ["--discover"], effectClass: "inspect" },
 	{ commandIdentity: "vault-steward.command-discovery", route: ["--discover-command"], effectClass: "inspect" },
-	{ commandIdentity: "vault-steward.begin", route: ["begin"], effectClass: "repository-local" },
-	{ commandIdentity: "vault-steward.finish-preview", route: ["finish", "--preview"], effectClass: "repository-local" },
-	{ commandIdentity: "vault-steward.finish-apply", route: ["finish", "--apply"], effectClass: "repository-local" },
+	{ commandIdentity: "vault-steward.begin", route: ["begin"], effectClass: "external" },
+	{ commandIdentity: "vault-steward.finish-preview", route: ["finish", "--preview"], effectClass: "external" },
+	{ commandIdentity: "vault-steward.finish-apply", route: ["finish", "--apply"], effectClass: "external" },
 	{ commandIdentity: "vault-steward.inspect", route: ["inspect"], effectClass: "inspect" },
-	{ commandIdentity: "vault-steward.recover", route: ["recover"], effectClass: "repository-local" },
+	{ commandIdentity: "vault-steward.recover", route: ["recover"], effectClass: "external" },
 ] as const

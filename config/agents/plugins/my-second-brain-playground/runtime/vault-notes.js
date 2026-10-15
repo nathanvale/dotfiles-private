@@ -811,8 +811,12 @@ async function resolveCanonicalRoot(args, env, root) {
   const configHome = env.XDG_CONFIG_HOME ?? path4.join(env.HOME ?? homedir(), ".config");
   try {
     const config = JSON.parse(await readFile3(path4.join(configHome, "my-second-brain-playground", "vault.json"), "utf8"));
-    if (config.schemaVersion === 1 && typeof config.vault === "string" && path4.isAbsolute(config.vault)) {
-      return config.vault;
+    if (config.schemaVersion === 1 && typeof config.vault === "string") {
+      if (path4.isAbsolute(config.vault))
+        return config.vault;
+      const home = env.HOME ?? homedir();
+      if (config.vault.startsWith("~/") && path4.isAbsolute(home))
+        return path4.resolve(home, config.vault.slice(2));
     }
   } catch {}
   return path4.resolve(root);

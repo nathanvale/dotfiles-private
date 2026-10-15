@@ -79,6 +79,11 @@ export function fixture(options: { hook?: boolean | string; hookSource?: string 
 		git(vault, "add", "--", "scripts/git-hooks/reference-transaction")
 		git(vault, "commit", "-m", "chore: hook source")
 	}
+	const remote = join(root, "remote.git")
+	git(root, "clone", "--bare", vault, remote)
+	git(vault, "remote", "add", "origin", remote)
+	git(vault, "fetch", "origin")
+	git(vault, "branch", "--set-upstream-to=origin/main", "main")
 	return { root, vault, state, initialHead: git(vault, "rev-parse", "HEAD"), hookPath }
 }
 

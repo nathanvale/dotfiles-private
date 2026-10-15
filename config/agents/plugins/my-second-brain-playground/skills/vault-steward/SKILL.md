@@ -20,19 +20,24 @@ configuration is missing or invalid, read
 ## Journey
 
 1. `begin --path <relative-path>...` creates a detached candidate worktree.
-   Edit only the admitted paths there; keep the canonical checkout unchanged.
+   Before creation the CLI fetches upstream main and fast-forwards a clean
+   canonical checkout. Dirty, divergent, offline or unconfigured vaults refuse.
+   Edit only the admitted paths in the returned candidate.
    `--preview` reports the plan and creates nothing.
 2. `finish --preview --worktree <path> --message <subject>` validates the
-   candidate, creates its one commit, and records a plan bound to the observed
+   candidate after refreshing upstream main, creates its one commit, and records a plan bound to the observed
    `main` revision. Read `data.previewId` and `data.plan`.
 3. `finish --apply --preview-id <id> --worktree <path>` integrates under the
    lock. A stale, consumed, or superseded preview refuses before any effect;
    run the preview again and apply the new id. Completion is recorded in a
-   receipt; remote sync is a separate workflow.
+   receipt, then the CLI pushes that exact commit and verifies upstream main.
+   A new remote revision refuses before consuming the preview; re-preview.
+   If publication fails, preserve the receipt and repeat this same apply after
+   repairing remote access. Local integration is never replayed.
 4. After a lost response or a crash, run `inspect --worktree <path>` and follow
    `data.recovery.nextCommand`. `recover` records completion only when Git
    proves `main` already contains the candidate's own commit; it never replays
-   the fast-forward. Start no second candidate to learn whether the first one
+   the fast-forward, then verifies or resumes publication. Start no second candidate to learn whether the first one
    completed.
 
 ## Reading a result

@@ -558,7 +558,7 @@ describe("sibling-repository links", () => {
     await mkdir(path.join(configHome, "my-second-brain-playground"), { recursive: true });
     await writeFile(
       path.join(configHome, "my-second-brain-playground", "vault.json"),
-      JSON.stringify({ schemaVersion: 1, vault: canonical }),
+      JSON.stringify({ schemaVersion: 1, vault: `~/${path.relative(home, canonical)}` }),
     );
     expect(runCli(root, [], { HOME: home, XDG_CONFIG_HOME: configHome })).toEqual({ status: 0, findings: [] });
 

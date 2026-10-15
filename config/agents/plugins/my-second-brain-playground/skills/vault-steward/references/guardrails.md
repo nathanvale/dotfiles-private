@@ -21,8 +21,9 @@ Every success envelope that ran the self-test carries two fields in
   report. Human mode prints each as `warning: <CODE> <detail>` on stderr;
   `--json` keeps stderr empty.
 
-The receipt short-circuit (`SUCCESS_UNCHANGED` with `data.completion`) is
-read-only and carries neither field: retries make no hook spawn. `inspect`
+The receipt short-circuit carries neither field and makes no guard self-test
+spawn. Apply and recover reconcile remote publication from the receipt;
+preview remains read-only when completion is already recorded. `inspect`
 reports `guard` and `warnings` without ever refusing.
 
 ## Warnings

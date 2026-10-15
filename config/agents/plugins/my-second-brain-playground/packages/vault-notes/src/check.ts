@@ -492,8 +492,10 @@ async function resolveCanonicalRoot(
     const config = JSON.parse(
       await readFile(path.join(configHome, "my-second-brain-playground", "vault.json"), "utf8"),
     ) as { schemaVersion?: unknown; vault?: unknown };
-    if (config.schemaVersion === 1 && typeof config.vault === "string" && path.isAbsolute(config.vault)) {
-      return config.vault;
+    if (config.schemaVersion === 1 && typeof config.vault === "string") {
+      if (path.isAbsolute(config.vault)) return config.vault;
+      const home = env.HOME ?? homedir();
+      if (config.vault.startsWith("~/") && path.isAbsolute(home)) return path.resolve(home, config.vault.slice(2));
     }
   } catch {
     // No usable config: the checked root stands in for itself.

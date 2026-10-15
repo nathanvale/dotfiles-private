@@ -15,13 +15,13 @@ var __export = (target, all) => {
 };
 
 // packages/vault-steward/src/main.ts
-import { randomUUID as randomUUID3 } from "crypto";
+import { randomUUID as randomUUID4 } from "crypto";
 
 // packages/vault-steward/src/cli.ts
-import { isAbsolute as isAbsolute3, resolve as resolve4 } from "path";
+import { isAbsolute as isAbsolute3, resolve as resolve5 } from "path";
 import { parseArgs } from "util";
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/external.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/external.js
 var exports_external = {};
 __export(exports_external, {
   $brand: () => $brand,
@@ -264,7 +264,7 @@ __export(exports_external, {
   xor: () => xor
 });
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/index.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/index.js
 var exports_core2 = {};
 __export(exports_core2, {
   $ZodAny: () => $ZodAny,
@@ -543,7 +543,7 @@ __export(exports_core2, {
   version: () => version
 });
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/core.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/core.js
 var _a;
 var NEVER = /* @__PURE__ */ Object.freeze({
   status: "aborted"
@@ -621,7 +621,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/util.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   BIGINT_FORMAT_RANGES: () => BIGINT_FORMAT_RANGES,
@@ -1313,7 +1313,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/errors.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -1453,7 +1453,7 @@ function prettifyError(error) {
 `);
 }
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/parse.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? { ..._ctx, async: false } : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -1540,7 +1540,7 @@ var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
   return _safeParseAsync(_Err)(schema, value, _ctx);
 };
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync($ZodRealError);
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/regexes.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/regexes.js
 var exports_regexes = {};
 __export(exports_regexes, {
   base64: () => base64,
@@ -1699,7 +1699,7 @@ var sha512_hex = /^[0-9a-fA-F]{128}$/;
 var sha512_base64 = /* @__PURE__ */ fixedBase64(86, "==");
 var sha512_base64url = /* @__PURE__ */ fixedBase64url(86);
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/checks.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a2;
   inst._zod ?? (inst._zod = {});
@@ -2246,7 +2246,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/doc.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -2284,14 +2284,14 @@ class Doc {
   }
 }
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/versions.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 4,
   patch: 3
 };
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/schemas.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a2;
   inst ?? (inst = {});
@@ -4375,7 +4375,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/index.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/index.js
 var exports_locales = {};
 __export(exports_locales, {
   ar: () => ar_default,
@@ -4432,7 +4432,7 @@ __export(exports_locales, {
   zhTW: () => zh_TW_default
 });
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ar.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ar.js
 var error = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0641", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
@@ -4538,7 +4538,7 @@ function ar_default() {
     localeError: error()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/az.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/az.js
 var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmal\u0131d\u0131r" },
@@ -4643,7 +4643,7 @@ function az_default() {
     localeError: error2()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/be.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/be.js
 function getBelarusianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -4799,7 +4799,7 @@ function be_default() {
     localeError: error3()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/bg.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/bg.js
 var error4 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0430", verb: "\u0434\u0430 \u0441\u044A\u0434\u044A\u0440\u0436\u0430" },
@@ -4919,7 +4919,7 @@ function bg_default() {
     localeError: error4()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ca.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ca.js
 var error5 = () => {
   const Sizable = {
     string: { unit: "car\xE0cters", verb: "contenir" },
@@ -5026,7 +5026,7 @@ function ca_default() {
     localeError: error5()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/cs.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/cs.js
 var error6 = () => {
   const Sizable = {
     string: { unit: "znak\u016F", verb: "m\xEDt" },
@@ -5137,7 +5137,7 @@ function cs_default() {
     localeError: error6()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/da.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/da.js
 var error7 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
@@ -5252,7 +5252,7 @@ function da_default() {
     localeError: error7()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/de.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/de.js
 var error8 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -5360,7 +5360,7 @@ function de_default() {
     localeError: error8()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/el.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/el.js
 var error9 = () => {
   const Sizable = {
     string: { unit: "\u03C7\u03B1\u03C1\u03B1\u03BA\u03C4\u03AE\u03C1\u03B5\u03C2", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
@@ -5469,7 +5469,7 @@ function el_default() {
     localeError: error9()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/en.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/en.js
 var error10 = () => {
   const Sizable = {
     string: { unit: "characters", verb: "to have" },
@@ -5579,7 +5579,7 @@ function en_default() {
     localeError: error10()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/eo.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/eo.js
 var error11 = () => {
   const Sizable = {
     string: { unit: "karaktrojn", verb: "havi" },
@@ -5688,7 +5688,7 @@ function eo_default() {
     localeError: error11()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/es.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/es.js
 var error12 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -5820,7 +5820,7 @@ function es_default() {
     localeError: error12()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fa.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fa.js
 var error13 = () => {
   const Sizable = {
     string: { unit: "\u06A9\u0627\u0631\u0627\u06A9\u062A\u0631", verb: "\u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F" },
@@ -5934,7 +5934,7 @@ function fa_default() {
     localeError: error13()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fi.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fi.js
 var error14 = () => {
   const Sizable = {
     string: { unit: "merkki\xE4", subject: "merkkijonon" },
@@ -6046,7 +6046,7 @@ function fi_default() {
     localeError: error14()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fr.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fr.js
 var error15 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -6171,7 +6171,7 @@ function fr_default() {
     localeError: error15()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fr-CA.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/fr-CA.js
 var error16 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -6278,7 +6278,7 @@ function fr_CA_default() {
     localeError: error16()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/he.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/he.js
 var error17 = () => {
   const TypeNames = {
     string: { label: "\u05DE\u05D7\u05E8\u05D5\u05D6\u05EA", gender: "f" },
@@ -6471,7 +6471,7 @@ function he_default() {
     localeError: error17()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/hr.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/hr.js
 var error18 = () => {
   const Sizable = {
     string: { unit: "znakova", verb: "imati" },
@@ -6593,7 +6593,7 @@ function hr_default() {
     localeError: error18()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/hu.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/hu.js
 var error19 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -6701,7 +6701,7 @@ function hu_default() {
     localeError: error19()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/hy.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/hy.js
 function getArmenianPlural(count, one, many) {
   return Math.abs(count) === 1 ? one : many;
 }
@@ -6848,7 +6848,7 @@ function hy_default() {
     localeError: error20()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/id.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/id.js
 var error21 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -6954,7 +6954,7 @@ function id_default() {
     localeError: error21()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/is.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/is.js
 var error22 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "a\xF0 hafa" },
@@ -7063,7 +7063,7 @@ function is_default() {
     localeError: error22()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/it.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/it.js
 var error23 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -7171,7 +7171,7 @@ function it_default() {
     localeError: error23()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ja.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ja.js
 var error24 = () => {
   const Sizable = {
     string: { unit: "\u6587\u5B57", verb: "\u3067\u3042\u308B" },
@@ -7278,7 +7278,7 @@ function ja_default() {
     localeError: error24()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ka.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ka.js
 var error25 = () => {
   const Sizable = {
     string: { unit: "\u10E1\u10D8\u10DB\u10D1\u10DD\u10DA\u10DD", verb: "\u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1" },
@@ -7390,7 +7390,7 @@ function ka_default() {
     localeError: error25()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/km.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/km.js
 var error26 = () => {
   const Sizable = {
     string: { unit: "\u178F\u17BD\u17A2\u1780\u17D2\u179F\u179A", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
@@ -7501,11 +7501,11 @@ function km_default() {
   };
 }
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/kh.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/kh.js
 function kh_default() {
   return km_default();
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ko.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ko.js
 var error27 = () => {
   const Sizable = {
     string: { unit: "\uBB38\uC790", verb: "to have" },
@@ -7616,7 +7616,7 @@ function ko_default() {
     localeError: error27()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/lt.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/lt.js
 var capitalizeFirstCharacter = (text) => {
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
@@ -7819,7 +7819,7 @@ function lt_default() {
     localeError: error28()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/mk.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/mk.js
 var error29 = () => {
   const Sizable = {
     string: { unit: "\u0437\u043D\u0430\u0446\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
@@ -7928,7 +7928,7 @@ function mk_default() {
     localeError: error29()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ms.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ms.js
 var error30 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -8035,7 +8035,7 @@ function ms_default() {
     localeError: error30()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/nl.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/nl.js
 var error31 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
@@ -8145,7 +8145,7 @@ function nl_default() {
     localeError: error31()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/no.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/no.js
 var error32 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "\xE5 ha" },
@@ -8253,7 +8253,7 @@ function no_default() {
     localeError: error32()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ota.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ota.js
 var error33 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
@@ -8362,7 +8362,7 @@ function ota_default() {
     localeError: error33()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ps.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ps.js
 var error34 = () => {
   const Sizable = {
     string: { unit: "\u062A\u0648\u06A9\u064A", verb: "\u0648\u0644\u0631\u064A" },
@@ -8476,7 +8476,7 @@ function ps_default() {
     localeError: error34()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/pl.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/pl.js
 var error35 = () => {
   const Sizable = {
     string: { unit: "znak\xF3w", verb: "mie\u0107" },
@@ -8585,7 +8585,7 @@ function pl_default() {
     localeError: error35()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/pt.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/pt.js
 var error36 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "ter" },
@@ -8693,7 +8693,7 @@ function pt_default() {
     localeError: error36()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ro.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ro.js
 var error37 = () => {
   const Sizable = {
     string: { unit: "caractere", verb: "s\u0103 aib\u0103" },
@@ -8812,7 +8812,7 @@ function ro_default() {
     localeError: error37()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ru.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ru.js
 function getRussianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -8968,7 +8968,7 @@ function ru_default() {
     localeError: error38()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/sl.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/sl.js
 var error39 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -9077,7 +9077,7 @@ function sl_default() {
     localeError: error39()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/sv.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/sv.js
 var error40 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -9187,7 +9187,7 @@ function sv_default() {
     localeError: error40()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ta.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ta.js
 var error41 = () => {
   const Sizable = {
     string: { unit: "\u0B8E\u0BB4\u0BC1\u0BA4\u0BCD\u0BA4\u0BC1\u0B95\u0BCD\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
@@ -9297,7 +9297,7 @@ function ta_default() {
     localeError: error41()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/th.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/th.js
 var error42 = () => {
   const Sizable = {
     string: { unit: "\u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
@@ -9407,7 +9407,7 @@ function th_default() {
     localeError: error42()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/tr.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/tr.js
 var error43 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmal\u0131" },
@@ -9512,7 +9512,7 @@ function tr_default() {
     localeError: error43()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/uk.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/uk.js
 var error44 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
@@ -9621,11 +9621,11 @@ function uk_default() {
   };
 }
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ua.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ua.js
 function ua_default() {
   return uk_default();
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ur.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/ur.js
 var error45 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0648\u0641", verb: "\u06C1\u0648\u0646\u0627" },
@@ -9735,7 +9735,7 @@ function ur_default() {
     localeError: error45()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/uz.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/uz.js
 var error46 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo\u2018lishi kerak" },
@@ -9845,7 +9845,7 @@ function uz_default() {
     localeError: error46()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/vi.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/vi.js
 var error47 = () => {
   const Sizable = {
     string: { unit: "k\xFD t\u1EF1", verb: "c\xF3" },
@@ -9953,7 +9953,7 @@ function vi_default() {
     localeError: error47()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/zh-CN.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/zh-CN.js
 var error48 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u7B26", verb: "\u5305\u542B" },
@@ -10062,7 +10062,7 @@ function zh_CN_default() {
     localeError: error48()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/zh-TW.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/zh-TW.js
 var error49 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u5143", verb: "\u64C1\u6709" },
@@ -10169,7 +10169,7 @@ function zh_TW_default() {
     localeError: error49()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/yo.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/locales/yo.js
 var error50 = () => {
   const Sizable = {
     string: { unit: "\xE0mi", verb: "n\xED" },
@@ -10276,7 +10276,7 @@ function yo_default() {
     localeError: error50()
   };
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/registries.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/registries.js
 var _a2;
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
@@ -10326,7 +10326,7 @@ function registry() {
 }
 (_a2 = globalThis).__zod_globalRegistry ?? (_a2.__zod_globalRegistry = registry());
 var globalRegistry = globalThis.__zod_globalRegistry;
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/api.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -11246,7 +11246,7 @@ function _stringFormat(Class2, format, fnOrRegex, _params = {}) {
   const inst = new Class2(def);
   return inst;
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/to-json-schema.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/to-json-schema.js
 function initializeContext(params) {
   let target = params?.target ?? "draft-2020-12";
   if (target === "draft-4")
@@ -11598,7 +11598,7 @@ var createStandardJSONSchemaMethod = (schema, io, processors = {}) => (params) =
   extractDefs(ctx, schema);
   return finalize(ctx, schema);
 };
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/json-schema-processors.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/json-schema-processors.js
 var formatMap = {
   guid: "uuid",
   url: "uri",
@@ -12136,7 +12136,7 @@ function toJSONSchema(input, params) {
   extractDefs(ctx, input);
   return finalize(ctx, input);
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/json-schema-generator.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/json-schema-generator.js
 class JSONSchemaGenerator {
   get metadataRegistry() {
     return this.ctx.metadataRegistry;
@@ -12195,9 +12195,9 @@ class JSONSchemaGenerator {
     return plainResult;
   }
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/json-schema.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/core/json-schema.js
 var exports_json_schema = {};
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
 var exports_schemas2 = {};
 __export(exports_schemas2, {
   ZodAny: () => ZodAny,
@@ -12368,7 +12368,7 @@ __export(exports_schemas2, {
   xor: () => xor
 });
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/checks.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/checks.js
 var exports_checks2 = {};
 __export(exports_checks2, {
   endsWith: () => _endsWith,
@@ -12402,7 +12402,7 @@ __export(exports_checks2, {
   uppercase: () => _uppercase
 });
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/iso.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   ZodISODate: () => ZodISODate,
@@ -12443,7 +12443,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/errors.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -12478,7 +12478,7 @@ var ZodRealError = /* @__PURE__ */ $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/parse.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/parse.js
 var parse3 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
@@ -12492,7 +12492,7 @@ var safeDecode2 = /* @__PURE__ */ _safeDecode(ZodRealError);
 var safeEncodeAsync2 = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 var safeDecodeAsync2 = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
 var _installedGroups = /* @__PURE__ */ new WeakMap;
 function _installLazyMethods(inst, group, methods) {
   const proto = Object.getPrototypeOf(inst);
@@ -13779,7 +13779,7 @@ function preprocess(fn, schema) {
     out: schema
   });
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/compat.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/compat.js
 var ZodIssueCode = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -13803,7 +13803,7 @@ function getErrorMap() {
 }
 var ZodFirstPartyTypeKind;
 (function(ZodFirstPartyTypeKind2) {})(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/from-json-schema.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/from-json-schema.js
 var z = {
   ...exports_schemas2,
   ...exports_checks2,
@@ -14270,7 +14270,7 @@ function fromJSONSchema(schema, params) {
   };
   return convertSchema(normalized, ctx);
 }
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/coerce.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/coerce.js
 var exports_coerce = {};
 __export(exports_coerce, {
   bigint: () => bigint3,
@@ -14295,7 +14295,7 @@ function date4(params) {
   return _coercedDate(ZodDate, params);
 }
 
-// node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/external.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/external.js
 config(en_default());
 // packages/vault-steward/src/station-rows.ts
 var HELP = "vault-steward.help";
@@ -14317,7 +14317,7 @@ var H4 = [false, null, "handoff", 4];
 var H1 = [false, null, "handoff", 1];
 var N1 = [false, null, "next-action", 1];
 var T75 = [true, 2000, "next-action", 75];
-var RL = "repository-local";
+var RL = "external";
 var ROWS = [
   ["vault-steward.help", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", ...N0, [DISCOVERY], "required", null],
   ["vault-steward.help", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", ...N2, [HELP], "required", null],
@@ -14405,7 +14405,18 @@ var ROWS = [
   ["vault-steward.recover", "failed", "INTERNAL_COMPLETION_RECORD_FAILED", RL, "partially-completed", ...N1, [RECOVER], "required", null],
   ["vault-steward.recover", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
   ["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "declared-unreachable", RECORD_UNREACHABLE],
-  ["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null]
+  ["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.begin", "refused", "DOMAIN_CANONICAL_NOT_READY", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.begin", "refused", "DOMAIN_MAIN_DIVERGED", RL, "unchanged", ...H3, HANDOFF, "required", null],
+  ["vault-steward.begin", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [BEGIN], "required", null],
+  ["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_CANONICAL_NOT_READY", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+  ["vault-steward.finish-preview", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [PREVIEW], "required", null],
+  ["vault-steward.finish-preview", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_MAIN_DIVERGED", RL, "unchanged", ...H3, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
+  ["vault-steward.recover", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
+  ["vault-steward.recover", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null]
 ];
 var DECLARED_ROWS = ROWS.map(([commandIdentity, outcome, causeCode, effectClass, transactionState, retryable, retryDelayMilliseconds, guidance, exit, nextActions, reachability, unreachableRationale]) => ({
   commandIdentity,
@@ -14514,11 +14525,11 @@ var COMMAND_DECLARATIONS = defineCommands([
   { commandIdentity: "vault-steward.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage", routes: [{ route: "help", word: "help", allowedOptions: ["help", "json"], requiredOptions: ["help"] }] },
   { commandIdentity: "vault-steward.discovery", route: ["--discover"], effectClass: "inspect", summary: "Describe the commands and the contract", routes: [{ route: "discover", word: "discovery", allowedOptions: ["discover", "json"], requiredOptions: ["discover"] }] },
   { commandIdentity: "vault-steward.command-discovery", route: ["--discover-command"], effectClass: "inspect", summary: "Describe the possible outcomes of one selected command", routes: [{ route: "command-discovery", word: "command-discovery", allowedOptions: ["discover-command", "json"], requiredOptions: ["discover-command"] }] },
-  { commandIdentity: "vault-steward.begin", route: ["begin"], effectClass: "repository-local", summary: "Create a detached candidate worktree for the admitted paths", routes: [{ route: "begin", word: "begin", allowedOptions: ["json", "vault", "path", "preview"], requiredOptions: ["path"] }] },
-  { commandIdentity: "vault-steward.finish-preview", route: ["finish", "--preview"], effectClass: "repository-local", summary: "Validate the candidate, create its commit, and record the integration plan", routes: [{ route: "finish-preview", word: "finish", allowedOptions: ["json", "preview", "worktree", "message"], requiredOptions: ["preview", "worktree", "message"] }] },
-  { commandIdentity: "vault-steward.finish-apply", route: ["finish", "--apply"], effectClass: "repository-local", summary: "Integrate an unconsumed preview into canonical main under the lock", routes: [{ route: "finish-apply", word: "finish", allowedOptions: ["json", "apply", "preview-id", "worktree"], requiredOptions: ["apply", "preview-id", "worktree"] }] },
+  { commandIdentity: "vault-steward.begin", route: ["begin"], effectClass: "external", summary: "Create a detached candidate worktree for the admitted paths", routes: [{ route: "begin", word: "begin", allowedOptions: ["json", "vault", "path", "preview"], requiredOptions: ["path"] }] },
+  { commandIdentity: "vault-steward.finish-preview", route: ["finish", "--preview"], effectClass: "external", summary: "Validate the candidate, create its commit, and record the integration plan", routes: [{ route: "finish-preview", word: "finish", allowedOptions: ["json", "preview", "worktree", "message"], requiredOptions: ["preview", "worktree", "message"] }] },
+  { commandIdentity: "vault-steward.finish-apply", route: ["finish", "--apply"], effectClass: "external", summary: "Integrate an unconsumed preview into canonical main under the lock", routes: [{ route: "finish-apply", word: "finish", allowedOptions: ["json", "apply", "preview-id", "worktree"], requiredOptions: ["apply", "preview-id", "worktree"] }] },
   { commandIdentity: "vault-steward.inspect", route: ["inspect"], effectClass: "inspect", summary: "Report the candidate's recovery state without writing", routes: [{ route: "inspect", word: "inspect", allowedOptions: ["json", "worktree"], requiredOptions: ["worktree"] }] },
-  { commandIdentity: "vault-steward.recover", route: ["recover"], effectClass: "repository-local", summary: "Record completion evidence Git already proves; never replay the fast-forward", routes: [{ route: "recover", word: "recover", allowedOptions: ["json", "worktree"], requiredOptions: ["worktree"] }] }
+  { commandIdentity: "vault-steward.recover", route: ["recover"], effectClass: "external", summary: "Record completion evidence Git already proves; never replay the fast-forward", routes: [{ route: "recover", word: "recover", allowedOptions: ["json", "worktree"], requiredOptions: ["worktree"] }] }
 ]);
 var COMMANDS = COMMAND_DECLARATIONS.map(({ routes: _routes, ...command }) => command);
 var ROUTES = COMMAND_DECLARATIONS.flatMap((command) => command.routes.map((route) => ({ identity: command.commandIdentity, effectClass: command.effectClass, ...route })));
@@ -14546,7 +14557,7 @@ var HELP_DATA = {
   options: OPTIONS
 };
 var EFFECT_EXCLUSIONS = [
-  "remote sync (push, fetch, publish)",
+  "remote fetch objects and tracking metadata",
   "candidate worktree removal after the receipt",
   "candidate rebase inside the private candidate worktree",
   "diagnostics custody and retention",
@@ -14574,19 +14585,19 @@ var noRetry = { retryable: exports_external.literal(false), retryDelayMillisecon
 var successShape = { outcome: exports_external.literal("success"), failureClass: exports_external.null(), exitCode: exports_external.literal(0), data: jsonSchema, ...noRetry, repairAction: exports_external.null(), ...nextShape };
 var refusalShape = { outcome: exports_external.literal("refused"), transactionState: exports_external.literal("unchanged"), data: exports_external.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: exports_external.never().optional() };
 var failedBase = { outcome: exports_external.literal("failed"), data: exports_external.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: nonempty.optional(), ...noRetry };
-var anyClass = exports_external.enum(["inspect", "repository-local"]);
+var anyClass = exports_external.enum(["inspect", "repository-local", "external"]);
 var refusedNext = (failureClass, exitCode) => exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.enum(causesWhere({ failureClass, outcome: "refused", guidance: "next", retryable: false })), failureClass: exports_external.literal(failureClass), exitCode: exports_external.literal(exitCode) });
 var refusedHandoff = (failureClass, exitCode) => exports_external.strictObject({ ...baseShape, ...refusalShape, ...handoffShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.enum(causesWhere({ failureClass, outcome: "refused", guidance: "handoff" })), failureClass: exports_external.literal(failureClass), exitCode: exports_external.literal(exitCode) });
 var failedRow = (failureClass, exitCode, transactionState, guidance) => exports_external.strictObject({ ...baseShape, ...failedBase, ...guidance === "handoff" ? handoffShape : nextShape, effectClass: anyClass, transactionState: exports_external.literal(transactionState), causeCode: exports_external.enum(causesWhere({ failureClass, outcome: "failed", transactionState, guidance })), failureClass: exports_external.literal(failureClass), exitCode: exports_external.literal(exitCode) });
 var resultSchema = exports_external.union([
   exports_external.strictObject({ ...baseShape, ...successShape, effectClass: anyClass, transactionState: exports_external.literal("unchanged"), causeCode: exports_external.literal("SUCCESS_UNCHANGED"), effects: effectsSchema }),
-  exports_external.strictObject({ ...baseShape, ...successShape, effectClass: exports_external.literal("repository-local"), transactionState: exports_external.literal("completed"), causeCode: exports_external.literal("SUCCESS_COMPLETED"), effects: effectsSchema }),
+  exports_external.strictObject({ ...baseShape, ...successShape, effectClass: exports_external.enum(["repository-local", "external"]), transactionState: exports_external.literal("completed"), causeCode: exports_external.literal("SUCCESS_COMPLETED"), effects: effectsSchema }),
   refusedNext("usage", 2),
   refusedNext("schema", 4),
   refusedHandoff("schema", 4),
   refusedNext("domain", 3),
   refusedHandoff("domain", 3),
-  exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: exports_external.literal("repository-local"), causeCode: exports_external.literal("TRANSIENT_INTEGRATION_BUSY"), failureClass: exports_external.literal("transient"), exitCode: exports_external.literal(75), retryable: exports_external.literal(true), retryDelayMilliseconds: positiveInteger }),
+  exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: exports_external.enum(["repository-local", "external"]), causeCode: exports_external.literal("TRANSIENT_INTEGRATION_BUSY"), failureClass: exports_external.literal("transient"), exitCode: exports_external.literal(75), retryable: exports_external.literal(true), retryDelayMilliseconds: positiveInteger }),
   failedRow("domain", 3, "unchanged", "handoff"),
   failedRow("domain", 3, "unchanged", "next"),
   failedRow("internal", 1, "unchanged", "handoff"),
@@ -14683,7 +14694,7 @@ function stationFor(commandIdentity, causeCode) {
 // packages/vault-steward/src/diagnostics.ts
 import { AsyncLocalStorage } from "async_hooks";
 import { write, writeSync } from "fs";
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/context.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/context.js
 var categoryPrefixSymbol = Symbol.for("logtape.categoryPrefix");
 function getCategoryPrefix() {
   const rootLogger = LoggerImpl.getLogger();
@@ -14707,7 +14718,7 @@ function getImplicitContextIfAny() {
   return result;
 }
 
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/level.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/level.js
 var logLevels = [
   "trace",
   "debug",
@@ -14726,7 +14737,7 @@ function compareLogLevel(a, b) {
   return aIndex - bIndex;
 }
 
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/filter.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/filter.js
 function toFilter(filter) {
   if (typeof filter === "function")
     return filter;
@@ -14750,7 +14761,7 @@ function getLevelFilter(level) {
   throw new TypeError(`Invalid log level: ${level}.`);
 }
 
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/scoped-config.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/scoped-config.js
 var scopedConfigSymbol = Symbol.for("logtape.scopedConfig");
 var defaultScopedLogger = {
   filters: [],
@@ -14859,7 +14870,7 @@ function getScopedFilters(scopedConfig, category) {
   return noFilters;
 }
 
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/logger.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/logger.js
 var lazySymbol = Symbol.for("logtape.lazy");
 var throttlingSummaryRecordSymbol = Symbol.for("LogTape.throttlingSummaryRecord");
 var immediateSinkSymbol = Symbol.for("LogTape.sinkSnapshotPolicy.immediate");
@@ -15810,7 +15821,7 @@ function renderMessage(template, values) {
   return args;
 }
 
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/util.node.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/util.node.js
 var exports_util_node = {};
 __export(exports_util_node, {
   inspect: () => inspect
@@ -15820,7 +15831,7 @@ function inspect(obj, options) {
   return util.inspect(obj, options);
 }
 
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/formatter.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/formatter.js
 var levelAbbreviations = {
   trace: "TRC",
   debug: "DBG",
@@ -16459,7 +16470,7 @@ function defaultConsoleFormatter(record2) {
     ...values
   ];
 }
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/sink.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/sink.js
 var immediateSinkSymbol2 = Symbol.for("LogTape.sinkSnapshotPolicy.immediate");
 function getConsoleSink(options = {}) {
   const formatter = options.formatter ?? defaultConsoleFormatter;
@@ -16549,7 +16560,7 @@ function getConsoleSink(options = {}) {
 }
 var _asyncSinkError = Symbol.for("logtape.asyncSinkError");
 
-// node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/config.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/config.js
 var currentConfig = null;
 var activeScopedConfigCount = 0;
 var globalConfigMutationInProgress = false;
@@ -16808,7 +16819,7 @@ var ConfigError = class extends Error {
   }
 };
 
-// node_modules/.bun/@logtape+redaction@2.3.1+455acf1e86969edf/node_modules/@logtape/redaction/dist/traversal.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+redaction@2.3.1+455acf1e86969edf/node_modules/@logtape/redaction/dist/traversal.js
 var redactionTruncatedValue = "[truncated]";
 var defaultMaxDepth = 20;
 var defaultMaxProperties = 1000;
@@ -16836,7 +16847,7 @@ function normalizeLimit(value, defaultValue) {
   return Math.floor(value);
 }
 
-// node_modules/.bun/@logtape+redaction@2.3.1+455acf1e86969edf/node_modules/@logtape/redaction/dist/field.js
+// ../../../../../../config/agents/plugins/my-second-brain-playground/node_modules/.bun/@logtape+redaction@2.3.1+455acf1e86969edf/node_modules/@logtape/redaction/dist/field.js
 var metaLogger2 = getLogger(["logtape", "meta"]);
 var reportingRedactionLimit = false;
 var DEFAULT_REDACT_FIELDS = [
@@ -17944,15 +17955,17 @@ function configPath(rt) {
     refuse("config-home-invalid");
   return join3(configRoot, "my-second-brain-playground", "vault.json");
 }
-function configuredVaultFrom(payload) {
+function configuredVaultFrom(payload, home) {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload))
     return null;
   const record2 = payload;
-  if (record2.schemaVersion !== 1 || typeof record2.vault !== "string" || !isAbsolute2(record2.vault))
+  if (record2.schemaVersion !== 1 || typeof record2.vault !== "string")
     return null;
   if (Object.keys(payload).sort().join(",") !== "schemaVersion,vault")
     return null;
-  return record2.vault;
+  if (isAbsolute2(record2.vault))
+    return record2.vault;
+  return record2.vault.startsWith("~/") && home && isAbsolute2(home) ? resolve2(home, record2.vault.slice(2)) : null;
 }
 function configuredVault(rt) {
   const path = configPath(rt);
@@ -17968,7 +17981,7 @@ function configuredVault(rt) {
   } catch {
     refuse("config-unparseable", { detail: path });
   }
-  const vault = configuredVaultFrom(payload);
+  const vault = configuredVaultFrom(payload, rt.env.HOME);
   if (vault === null)
     refuse("config-off-schema", { detail: path });
   return vault;
@@ -18511,6 +18524,131 @@ function recoverCandidate(rt, manifest) {
   });
 }
 
+// packages/vault-steward/src/remote-sync.ts
+import { randomUUID as randomUUID2 } from "crypto";
+import { resolve as resolve3 } from "path";
+function remoteGit(rt, vault, args, facts = {}) {
+  const result = rt.spawn(["git", "--no-optional-locks", ...args], { cwd: vault, env: { ...rt.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes" }, timeoutMs: 20000 });
+  if (result.exitCode !== 0)
+    throw new Refusal("git-failed", { ...facts, detail: `Remote ${args[0]} failed or timed out. Check connectivity and the vault remote's credentials; preserve the candidate and receipt.` });
+  return result.stdout.trim();
+}
+function upstream(rt, vault) {
+  const remote = gitQuiet(rt, vault, ["config", "--get", "branch.main.remote"]).stdout.trim();
+  const branch = gitQuiet(rt, vault, ["config", "--get", "branch.main.merge"]).stdout.trim();
+  if (!remote || remote === "." || remote.startsWith("-") || branch !== "refs/heads/main")
+    throw new Refusal("git-failed", { detail: "Configure main to track a named remote's refs/heads/main before using Vault Steward." });
+  const fetch = gitQuiet(rt, vault, ["remote", "get-url", "--all", remote]);
+  const push = gitQuiet(rt, vault, ["remote", "get-url", "--push", "--all", remote]);
+  if (fetch.exitCode !== 0 || push.exitCode !== 0 || fetch.stdout.trim() !== push.stdout.trim() || fetch.stdout.trim().split(`
+`).length !== 1)
+    throw new Refusal("git-failed", { detail: "The upstream must have one identical fetch and push URL; reconcile the remote configuration explicitly." });
+  return { remote, branch };
+}
+function cleanMain(rt, vault, facts) {
+  const branch = gitQuiet(rt, vault, ["branch", "--show-current"]);
+  const status = gitQuiet(rt, vault, ["status", "--porcelain", "--untracked-files=all"]);
+  if (branch.exitCode !== 0 || status.exitCode !== 0)
+    throw new Refusal("git-failed", { ...facts, detail: "Canonical status could not be established; preserve the checkout and inspect Git." });
+  if (branch.stdout.trim() !== "main" || status.stdout.trim())
+    throw new Refusal("canonical-not-ready", { ...facts, detail: "Synchronization preserves tracked and untracked work. Finish or preserve it before continuing." });
+  const head = gitQuiet(rt, vault, ["rev-parse", "HEAD"]);
+  if (head.exitCode !== 0)
+    throw new Refusal("git-failed", facts);
+  return head.stdout.trim();
+}
+function fetchMain(rt, vault, target, facts) {
+  const observed = remoteGit(rt, vault, ["ls-remote", "--exit-code", "--refs", target.remote, target.branch], facts);
+  const match = /^([a-f0-9]{40}|[a-f0-9]{64})\trefs\/heads\/main$/.exec(observed);
+  if (!match)
+    throw new Refusal("git-failed", { ...facts, detail: "Remote main could not be established. Inspect the upstream before retrying." });
+  remoteGit(rt, vault, ["fetch", "--no-write-fetch-head", "--no-tags", "--recurse-submodules=no", target.remote, target.branch], facts);
+  if (gitQuiet(rt, vault, ["cat-file", "-e", `${match[1]}^{commit}`]).exitCode !== 0)
+    throw new Refusal("git-failed", { ...facts, detail: "The observed remote commit could not be fetched. Inspect the upstream before retrying." });
+  return match[1];
+}
+function ancestor(rt, vault, before, after) {
+  return gitQuiet(rt, vault, ["merge-base", "--is-ancestor", before, after]).exitCode === 0;
+}
+function syncLocked(rt, vault, facts, allowFastForward) {
+  const before = cleanMain(rt, vault, facts);
+  const target = upstream(rt, vault);
+  const remote = fetchMain(rt, vault, target, facts);
+  if (ancestor(rt, vault, remote, before))
+    return [];
+  if (!ancestor(rt, vault, before, remote))
+    throw new Refusal("main-diverged", { ...facts, detail: "Local and remote main diverged. Preserve both histories and reconcile them explicitly; synchronization never rebases or force-pushes." });
+  if (!allowFastForward)
+    throw new Refusal("preview-stale", { ...facts, detail: "Remote main advanced after preview. Run finish --preview again to refresh canonical main and bind a new plan." });
+  const merge2 = gitQuiet(rt, vault, ["merge", "--ff-only", remote]);
+  const after = gitQuiet(rt, vault, ["rev-parse", "HEAD"]);
+  if (merge2.exitCode === 0 && after.exitCode === 0 && after.stdout.trim() === remote)
+    return ["main.fast-forward"];
+  if (after.exitCode === 0 && after.stdout.trim() === before)
+    throw new Refusal("git-failed", { ...facts, detail: "The remote fast-forward was refused without moving main. Inspect the canonical checkout." });
+  throw new Refusal("git-failed", { ...facts, detail: "The remote fast-forward could not be established. Inspect main before continuing.", uncertainEffects: ["main.fast-forward"] }, "unknown");
+}
+function synchronizeMain(rt, vault, facts = {}, allowFastForward = true) {
+  const before = cleanMain(rt, vault, facts);
+  const target = upstream(rt, vault);
+  const remote = fetchMain(rt, vault, target, facts);
+  if (ancestor(rt, vault, remote, before))
+    return [];
+  if (!ancestor(rt, vault, before, remote))
+    throw new Refusal("main-diverged", { ...facts, detail: "Local and remote main diverged. Preserve both histories and reconcile explicitly." });
+  if (!allowFastForward)
+    throw new Refusal("preview-stale", { ...facts, detail: "Remote main advanced after preview. Run finish --preview again to refresh canonical main and bind a new plan." });
+  const common = gitQuiet(rt, vault, ["rev-parse", "--git-common-dir"]);
+  if (common.exitCode !== 0)
+    throw new Refusal("git-failed", facts);
+  const lockRuntime = { ...rt, faultPoint: (name) => rt.faultPoint(`sync-${name}`) };
+  const lock = acquireLock(lockRuntime, resolve3(vault, common.stdout.trim()), facts.runId ?? `sync-${randomUUID2()}`);
+  if (lock === null)
+    throw new Refusal("integration-busy", facts);
+  try {
+    return syncLocked(rt, vault, facts, allowFastForward);
+  } finally {
+    releaseLock(lock);
+  }
+}
+function publishCommit(rt, vault, commit, facts, completed) {
+  const knownState = completed.length > 0 ? "partially-completed" : "unchanged";
+  let target;
+  let remote;
+  try {
+    cleanMain(rt, vault, facts);
+    target = upstream(rt, vault);
+    remote = fetchMain(rt, vault, target, facts);
+  } catch (error51) {
+    const detail = error51 instanceof Refusal ? error51.facts.detail : undefined;
+    throw new Refusal("git-failed", { ...facts, completedEffects: completed, detail: `Local completion is recorded, but publication could not start. ${detail ?? "Repair remote access."} Then repeat finish --apply or recover for this same worktree.` }, knownState);
+  }
+  if (ancestor(rt, vault, commit, remote))
+    return [];
+  if (!ancestor(rt, vault, remote, commit))
+    throw new Refusal("git-failed", { ...facts, completedEffects: completed, detail: "Local completion is recorded, but remote main has conflicting work. Preserve both histories and reconcile explicitly before repeating publication." }, knownState);
+  let changedRemote = null;
+  try {
+    const pushed = remoteGit(rt, vault, ["push", "--no-follow-tags", "--no-mirror", "--porcelain", target.remote, `${commit}:${target.branch}`], facts);
+    changedRemote = pushed.split(`
+`).some((line) => /^[ *]\t/.test(line));
+  } catch {}
+  try {
+    remote = fetchMain(rt, vault, target, facts);
+  } catch {
+    throw new Refusal("git-failed", { ...facts, completedEffects: completed, uncertainEffects: ["remote.push"], detail: "Local completion is recorded; the push outcome is unknown. Restore remote access and repeat the same apply or recover to inspect remote evidence before pushing." }, "unknown");
+  }
+  if (ancestor(rt, vault, commit, remote))
+    return changedRemote !== false ? ["remote.push"] : [];
+  throw new Refusal("git-failed", { ...facts, completedEffects: completed, detail: "Local completion is recorded, but remote main does not contain it. Resolve the rejected push, then repeat the same apply or recover; local integration will not replay." }, knownState);
+}
+function afterSyncFailure(error51, completed, facts = {}) {
+  if (completed.length === 0)
+    throw error51;
+  const original = error51 instanceof Refusal ? error51 : new Refusal("unexpected");
+  throw new Refusal("git-failed", { ...facts, ...original.facts, completedEffects: [...new Set([...completed, ...original.facts.completedEffects ?? []])], detail: `Canonical main was synchronized before ${original.reason}: ${original.facts.detail ?? "inspect the candidate and retry its current stage"}` }, original.transaction === "unknown" ? "unknown" : "partially-completed");
+}
+
 // packages/vault-steward/src/faults.ts
 import { existsSync as existsSync2, writeFileSync } from "fs";
 function parseFaults(value) {
@@ -18732,7 +18870,7 @@ function observeGuard(rt, input, enforce = true) {
 }
 
 // packages/vault-steward/src/runtime.ts
-import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "crypto";
 import {
   chmodSync as chmodSync2,
   closeSync as closeSync2,
@@ -18747,10 +18885,10 @@ import {
   rmSync as rmSync2,
   writeFileSync as writeFileSync2
 } from "fs";
-import { dirname as dirname2, join as join5, resolve as resolve3 } from "path";
+import { dirname as dirname2, join as join5, resolve as resolve4 } from "path";
 function pluginRoot() {
-  const sourceRoot = resolve3(import.meta.dir, "../../..");
-  return join5(sourceRoot, "packages", "vault-steward", "src") === import.meta.dir ? sourceRoot : resolve3(import.meta.dir, "..");
+  const sourceRoot = resolve4(import.meta.dir, "../../..");
+  return join5(sourceRoot, "packages", "vault-steward", "src") === import.meta.dir ? sourceRoot : resolve4(import.meta.dir, "..");
 }
 function decode3(bytes) {
   return bytes ? new TextDecoder().decode(bytes) : "";
@@ -18810,7 +18948,7 @@ function createRuntime() {
     },
     atomicPrivateJson(path, payload) {
       this.privateDirectory(dirname2(path));
-      const temporary = `${path}.${randomUUID2()}.tmp`;
+      const temporary = `${path}.${randomUUID3()}.tmp`;
       const descriptor = openSync2(temporary, "wx", 384);
       try {
         writeFileSync2(descriptor, `${JSON.stringify(payload)}
@@ -18901,7 +19039,11 @@ commands:
   --discover --json                                                describe the commands and the contract
   --discover-command <identity> --json                             describe the possible outcomes of one command
 
-Remote sync (push, fetch, publish) is a separate workflow.
+Ordinary begin and finish --preview fetch and fast-forward upstream main.
+Apply verifies upstream again, integrates locally, then pushes the exact commit.
+Dirty, divergent, unconfigured or offline vaults refuse safely.
+A failed push retains its local receipt; repeat the same apply or recover.
+Begin --preview and inspect remain read-only.
 
 example:
   vault-steward begin --vault /path/to/vault --path projects/demo/GOAL.md --json
@@ -18974,11 +19116,11 @@ function shapeViolation(parsed, route) {
   return missing === undefined ? null : `${shape.word} requires --${missing}`;
 }
 var INVENTORY = {
-  begin: ["candidate.manifest", "candidate.worktree"],
-  "finish-preview": ["candidate.commit", "preview.record"],
-  "finish-apply": ["completion.receipt", "completion.ref", "main.fast-forward"],
+  begin: ["candidate.manifest", "candidate.worktree", "main.fast-forward"],
+  "finish-preview": ["candidate.commit", "preview.record", "main.fast-forward"],
+  "finish-apply": ["completion.receipt", "completion.ref", "main.fast-forward", "remote.push"],
   inspect: [],
-  recover: ["completion.receipt", "completion.ref"]
+  recover: ["completion.receipt", "completion.ref", "remote.push"]
 };
 function warningsOf(observation) {
   return observation?.warnings.map((warning) => ({ code: warning.code, detail: warning.detail })) ?? [];
@@ -19015,7 +19157,7 @@ function knownCandidateCommit(rt, manifest) {
   return view.committed && view.head !== null ? view.head : undefined;
 }
 function requireAbsoluteWorktree(input) {
-  if (typeof input !== "string" || !isAbsolute3(input) || resolve4(input) !== input)
+  if (typeof input !== "string" || !isAbsolute3(input) || resolve5(input) !== input)
     throw new Refusal("input-invalid", { detail: "--worktree must be the exact absolute path returned by begin" });
   return input;
 }
@@ -19040,6 +19182,7 @@ function runBegin(rt, parsed, session) {
     const baseCommit = gitQuiet(rt, vault, ["rev-parse", "main"]).stdout.trim();
     return { kind: "success", identity, cause: "SUCCESS_UNCHANGED", message: "Begin plan reported; nothing was created.", data: { plan: { vault, baseCommit, paths: plan.paths, worktree: null }, guard: guardData(observation), warnings: warningsData(observation) }, completed: [], nextAction: "vault-steward.begin", warnings };
   }
+  const sync = synchronizeMain(rt, vault);
   try {
     const { manifest } = createCandidate(rt, plan);
     return {
@@ -19048,26 +19191,28 @@ function runBegin(rt, parsed, session) {
       cause: "SUCCESS_COMPLETED",
       message: `Candidate worktree created at ${manifest.worktree}; edit only the admitted paths, then run finish --preview.`,
       data: { candidate: { runId: manifest.runId, worktree: manifest.worktree, baseCommit: manifest.baseCommit, paths: manifest.paths }, vault, guard: guardData(observation), warnings: warningsData(observation) },
-      completed: ["candidate.manifest", "candidate.worktree"],
+      completed: [...sync, "candidate.manifest", "candidate.worktree"],
       nextAction: "vault-steward.finish-preview",
       idempotencyKey: manifest.runId,
       warnings
     };
   } catch (error51) {
     if (error51 instanceof Refusal)
-      throw new Refusal(error51.reason, { ...error51.facts, guard: observation }, error51.transaction);
-    throw error51;
+      afterSyncFailure(new Refusal(error51.reason, { ...error51.facts, guard: observation }, error51.transaction), sync);
+    afterSyncFailure(error51, sync);
   }
 }
 function receiptDecision(identity, receipt, worktree, rt) {
   const { receipt: record2, path } = receipt;
+  const checksPublication = identity === "vault-steward.finish-apply" || identity === "vault-steward.recover";
+  const publication = checksPublication ? publishCommit(rt, record2.vault, record2.commit ?? record2.baseCommit, { runId: record2.runId, worktree, receipt: path }, []) : [];
   return {
     kind: "success",
     identity,
-    cause: "SUCCESS_UNCHANGED",
-    message: `Completion is already recorded (${record2.code}); no new write was performed.`,
-    data: { completion: { originalCode: record2.code, commit: record2.commit ?? null, receipt: path, ref: `refs/vault-note-commits/${record2.runId}` }, candidate: { runId: record2.runId, worktree, paths: record2.paths, retained: rt.exists(worktree) } },
-    completed: [],
+    cause: publication.length > 0 ? "SUCCESS_COMPLETED" : "SUCCESS_UNCHANGED",
+    message: `Completion is already recorded (${record2.code}); upstream publication ${checksPublication ? "verified" : "not checked"}.`,
+    data: { publication: { status: checksPublication ? "verified" : "not-checked" }, completion: { originalCode: record2.code, commit: record2.commit ?? null, receipt: path, ref: `refs/vault-note-commits/${record2.runId}` }, candidate: { runId: record2.runId, worktree, paths: record2.paths, retained: rt.exists(worktree) } },
+    completed: publication,
     nextAction: "vault-steward.inspect",
     idempotencyKey: record2.runId,
     warnings: []
@@ -19083,6 +19228,7 @@ function runFinishPreview(rt, parsed, session) {
   const manifest = readManifest(rt, worktree);
   const knownCommit = knownCandidateCommit(rt, manifest);
   const observation = observeForCandidate(rt, manifest, knownCommit);
+  const sync = synchronizeMain(rt, manifest.vault, { runId: manifest.runId, worktree });
   try {
     const state = validateCandidate(rt, manifest, message);
     const record2 = planPreview(rt, manifest, state, session.runId);
@@ -19100,15 +19246,15 @@ function runFinishPreview(rt, parsed, session) {
         guard: guardData(observation),
         warnings: warningsData(observation)
       },
-      completed: commitCreated ? ["candidate.commit", "preview.record"] : ["preview.record"],
+      completed: [...sync, ...commitCreated ? ["candidate.commit", "preview.record"] : ["preview.record"]],
       nextAction: "vault-steward.finish-apply",
       idempotencyKey: manifest.runId,
       warnings: warningsOf(observation)
     };
   } catch (error51) {
     if (error51 instanceof Refusal)
-      throw new Refusal(error51.reason, { ...error51.facts, guard: observation }, error51.transaction);
-    throw error51;
+      afterSyncFailure(new Refusal(error51.reason, { ...error51.facts, guard: observation }, error51.transaction), sync);
+    afterSyncFailure(error51, sync);
   }
 }
 function runFinishApply(rt, parsed, session) {
@@ -19121,17 +19267,19 @@ function runFinishApply(rt, parsed, session) {
   const manifest = readManifest(rt, worktree);
   const record2 = bindPreview(rt, manifest, previewId);
   const observation = observeForCandidate(rt, manifest, record2.candidateCommit ?? undefined);
+  synchronizeMain(rt, manifest.vault, { runId: manifest.runId, worktree }, false);
   try {
     const result = applyPreview(rt, manifest, record2, session.runId);
     if (result.kind === "receipt")
       return receiptDecision(identity, result.receipt, worktree, rt);
     const { completion } = result;
     const completedEffects = completion.commit ? ["completion.receipt", "completion.ref", "main.fast-forward"] : ["completion.receipt", "completion.ref"];
+    const publication = publishCommit(rt, manifest.vault, completion.commit ?? manifest.baseCommit, { runId: manifest.runId, worktree, receipt: completion.receipt }, completedEffects);
     return {
       kind: "success",
       identity,
       cause: "SUCCESS_COMPLETED",
-      message: completion.commit ? "Canonical main fast-forwarded and the completion recorded. Run remote sync separately when you want to publish main." : "No candidate changes were authored; the no-changes completion is recorded.",
+      message: completion.commit ? "Canonical main fast-forwarded, completion recorded, and upstream publication verified." : "No candidate changes were authored; completion recorded and upstream publication verified.",
       data: {
         integration: { kind: record2.plan.kind, commit: completion.commit ?? null, main: { before: record2.observedMain, after: completion.commit ?? record2.observedMain } },
         completion: { ref: `refs/vault-note-commits/${manifest.runId}`, receipt: completion.receipt },
@@ -19139,7 +19287,7 @@ function runFinishApply(rt, parsed, session) {
         guard: guardData(observation),
         warnings: warningsData(observation)
       },
-      completed: completedEffects,
+      completed: [...completedEffects, ...publication],
       nextAction: "vault-steward.inspect",
       idempotencyKey: manifest.runId,
       warnings: warningsOf(observation)
@@ -19257,13 +19405,14 @@ function runRecover(rt, parsed) {
     if (result.kind === "receipt")
       return receiptDecision(identity, result.receipt, worktree, rt);
     const { completion } = result;
+    const publication = publishCommit(rt, manifest.vault, completion.commit ?? manifest.baseCommit, { runId: manifest.runId, worktree, receipt: completion.receipt }, ["completion.receipt", "completion.ref"]);
     return {
       kind: "success",
       identity,
       cause: "SUCCESS_COMPLETED",
-      message: "Completion evidence recorded from Git; the fast-forward was never replayed. Run remote sync separately when you want to publish main.",
+      message: "Completion evidence recorded from Git; the fast-forward was never replayed. Upstream publication verified.",
       data: { completion: { ref: `refs/vault-note-commits/${manifest.runId}`, receipt: completion.receipt, commit: completion.commit ?? null }, candidate: { runId: manifest.runId, worktree: manifest.worktree, retained: !completion.removed }, guard: guardData(observation), warnings: warningsData(observation) },
-      completed: ["completion.receipt", "completion.ref"],
+      completed: ["completion.receipt", "completion.ref", ...publication],
       nextAction: "vault-steward.inspect",
       idempotencyKey: manifest.runId,
       warnings: warningsOf(observation)
@@ -19276,7 +19425,7 @@ function runRecover(rt, parsed) {
 }
 var REPAIR = {
   SCHEMA_INVALID_INPUT: { repair: "Correct the option value and rerun; see --help.", next: "vault-steward.help" },
-  SCHEMA_CONFIG_INVALID: { repair: "Repair the vault.json file to contain only schemaVersion 1 and one absolute vault path.", next: "vault-steward.help" },
+  SCHEMA_CONFIG_INVALID: { repair: "Repair the vault.json file to contain only schemaVersion 1 and one absolute vault path or a path beginning ~/.", next: "vault-steward.help" },
   SCHEMA_MANIFEST_INVALID: { repair: "Preserve the candidate and inspect its Git metadata before continuing.", next: "vault-steward.inspect" },
   SCHEMA_RECEIPT_INVALID: { repair: "Preserve the receipt and inspect its identity and local Git evidence before continuing.", next: "vault-steward.inspect" },
   SCHEMA_PREVIEW_INVALID: { repair: "Inspect the preview record, then run finish --preview again to replace it.", next: "vault-steward.inspect" },
@@ -19326,7 +19475,7 @@ var SENTENCE = {
   DOMAIN_FORMAT_FAILED: "Whitespace findings in the admitted files.",
   DOMAIN_GUARD_INCOMPATIBLE: "The installed reference-transaction hook denies a ref Vault Steward must write.",
   DOMAIN_CANONICAL_NOT_READY: "The canonical checkout is not on main or is dirty.",
-  DOMAIN_MAIN_DIVERGED: "The candidate base is no longer an ancestor of main.",
+  DOMAIN_MAIN_DIVERGED: "The candidate base no longer precedes main, or local and remote main have diverged.",
   DOMAIN_SEMANTIC_OVERLAP: "Main changed an admitted path since the candidate began.",
   DOMAIN_PREVIEW_NOT_FOUND: "No preview record exists for this candidate.",
   DOMAIN_PREVIEW_CONSUMED: "The preview was already consumed by an earlier apply.",
@@ -19581,7 +19730,7 @@ function decide(rt, route, parsed, session) {
   } catch (error51) {
     const refusal = error51 instanceof Refusal ? error51 : new Refusal("unexpected", { detail: error51 instanceof Error ? error51.message : String(error51) });
     if (route === "finish-preview" && refusal.facts.commit !== undefined && refusal.reason !== "check-failed")
-      inventory = ["preview.record"];
+      inventory = ["preview.record", "main.fast-forward"];
     return { kind: "refusal", identity, refusal, inventory, warnings: warningsOf(refusal.facts.guard) };
   }
 }
@@ -19648,7 +19797,7 @@ function createProcessLifecycle(dependencies) {
     outputFinished = outputFinished.then(() => {
       if (stopping || terminal)
         return;
-      return new Promise((resolve5) => {
+      return new Promise((resolve6) => {
         let settled = false;
         const finish = (error51) => {
           if (settled)
@@ -19657,7 +19806,7 @@ function createProcessLifecycle(dependencies) {
           activeWriteDone = null;
           if (error51 != null)
             outputFailed = true;
-          resolve5();
+          resolve6();
         };
         activeWriteDone = finish;
         try {
@@ -19739,7 +19888,7 @@ function systemProcessLifecycle(attemptEmergencyDiagnostics2, finishDiagnostics)
 }
 
 // packages/vault-steward/src/main.ts
-var runId = `run-${randomUUID3()}`;
+var runId = `run-${randomUUID4()}`;
 var argv = process.argv.slice(2);
 var lifecycle = systemProcessLifecycle(attemptEmergencyDiagnostics, finishActiveDiagnostics);
 var io = { stdout: lifecycle.stdout, stderr: lifecycle.stderr };

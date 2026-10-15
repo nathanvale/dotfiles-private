@@ -57,6 +57,7 @@ import {
 	vaultIdentity,
 	writePreview,
 } from "./engine.ts"
+import { afterSyncFailure, publishCommit, synchronizeMain } from "./remote-sync.ts"
 import { parseFaults, withFaults } from "./faults.ts"
 import { observeGuard } from "./guard.ts"
 import { type EffectId, type GuardObservation, type Manifest, type PreviewRecord, productCause, type ProductCause, type RefusalFacts, type TransactionState } from "./model.ts"
@@ -80,7 +81,11 @@ commands:
   --discover --json                                                describe the commands and the contract
   --discover-command <identity> --json                             describe the possible outcomes of one command
 
-Remote sync (push, fetch, publish) is a separate workflow.
+Ordinary begin and finish --preview fetch and fast-forward upstream main.
+Apply verifies upstream again, integrates locally, then pushes the exact commit.
+Dirty, divergent, unconfigured or offline vaults refuse safely.
+A failed push retains its local receipt; repeat the same apply or recover.
+Begin --preview and inspect remain read-only.
 
 example:
   vault-steward begin --vault /path/to/vault --path projects/demo/GOAL.md --json
@@ -191,11 +196,11 @@ interface Session {
 }
 
 const INVENTORY: Readonly<Record<CommandRoute, EffectId[]>> = {
-	begin: ["candidate.manifest", "candidate.worktree"],
-	"finish-preview": ["candidate.commit", "preview.record"],
-	"finish-apply": ["completion.receipt", "completion.ref", "main.fast-forward"],
+	begin: ["candidate.manifest", "candidate.worktree", "main.fast-forward"],
+	"finish-preview": ["candidate.commit", "preview.record", "main.fast-forward"],
+	"finish-apply": ["completion.receipt", "completion.ref", "main.fast-forward", "remote.push"],
 	inspect: [],
-	recover: ["completion.receipt", "completion.ref"],
+	recover: ["completion.receipt", "completion.ref", "remote.push"],
 }
 
 function warningsOf(observation: GuardObservation | undefined): { code: string; detail: string }[] {
@@ -264,6 +269,7 @@ function runBegin(rt: Runtime, parsed: Parsed, session: Session): Decision {
 		const baseCommit = gitQuiet(rt, vault, ["rev-parse", "main"]).stdout.trim()
 		return { kind: "success", identity, cause: "SUCCESS_UNCHANGED", message: "Begin plan reported; nothing was created.", data: { plan: { vault, baseCommit, paths: plan.paths, worktree: null }, guard: guardData(observation), warnings: warningsData(observation) }, completed: [], nextAction: "vault-steward.begin", warnings }
 	}
+	const sync = synchronizeMain(rt, vault)
 	try {
 		const { manifest } = createCandidate(rt, plan)
 		return {
@@ -272,26 +278,28 @@ function runBegin(rt: Runtime, parsed: Parsed, session: Session): Decision {
 			cause: "SUCCESS_COMPLETED",
 			message: `Candidate worktree created at ${manifest.worktree}; edit only the admitted paths, then run finish --preview.`,
 			data: { candidate: { runId: manifest.runId, worktree: manifest.worktree, baseCommit: manifest.baseCommit, paths: manifest.paths }, vault, guard: guardData(observation), warnings: warningsData(observation) },
-			completed: ["candidate.manifest", "candidate.worktree"],
+			completed: [...sync, "candidate.manifest", "candidate.worktree"],
 			nextAction: "vault-steward.finish-preview",
 			idempotencyKey: manifest.runId,
 			warnings,
 		}
 	} catch (error) {
-		if (error instanceof Refusal) throw new Refusal(error.reason, { ...error.facts, guard: observation }, error.transaction)
-		throw error
+		if (error instanceof Refusal) afterSyncFailure(new Refusal(error.reason, { ...error.facts, guard: observation }, error.transaction), sync)
+		afterSyncFailure(error, sync)
 	}
 }
 
 function receiptDecision(identity: CommandIdentity, receipt: NonNullable<ReturnType<typeof readReceipt>>, worktree: string, rt: Runtime): SuccessDecision {
 	const { receipt: record, path } = receipt
+	const checksPublication = identity === "vault-steward.finish-apply" || identity === "vault-steward.recover"
+	const publication = checksPublication ? publishCommit(rt, record.vault, record.commit ?? record.baseCommit, { runId: record.runId, worktree, receipt: path }, []) : []
 	return {
 		kind: "success",
 		identity,
-		cause: "SUCCESS_UNCHANGED",
-		message: `Completion is already recorded (${record.code}); no new write was performed.`,
-		data: { completion: { originalCode: record.code, commit: record.commit ?? null, receipt: path, ref: `refs/vault-note-commits/${record.runId}` }, candidate: { runId: record.runId, worktree, paths: record.paths, retained: rt.exists(worktree) } },
-		completed: [],
+		cause: publication.length > 0 ? "SUCCESS_COMPLETED" : "SUCCESS_UNCHANGED",
+		message: `Completion is already recorded (${record.code}); upstream publication ${checksPublication ? "verified" : "not checked"}.`,
+		data: { publication: { status: checksPublication ? "verified" : "not-checked" }, completion: { originalCode: record.code, commit: record.commit ?? null, receipt: path, ref: `refs/vault-note-commits/${record.runId}` }, candidate: { runId: record.runId, worktree, paths: record.paths, retained: rt.exists(worktree) } },
+		completed: publication,
 		nextAction: "vault-steward.inspect",
 		idempotencyKey: record.runId,
 		warnings: [],
@@ -307,6 +315,7 @@ function runFinishPreview(rt: Runtime, parsed: Parsed, session: Session): Decisi
 	const manifest = readManifest(rt, worktree)
 	const knownCommit = knownCandidateCommit(rt, manifest)
 	const observation = observeForCandidate(rt, manifest, knownCommit)
+	const sync = synchronizeMain(rt, manifest.vault, { runId: manifest.runId, worktree })
 	try {
 		const state = validateCandidate(rt, manifest, message)
 		const record = planPreview(rt, manifest, state, session.runId)
@@ -324,14 +333,14 @@ function runFinishPreview(rt: Runtime, parsed: Parsed, session: Session): Decisi
 				guard: guardData(observation),
 				warnings: warningsData(observation),
 			},
-			completed: commitCreated ? ["candidate.commit", "preview.record"] : ["preview.record"],
+			completed: [...sync, ...(commitCreated ? ["candidate.commit" as const, "preview.record" as const] : ["preview.record" as const])],
 			nextAction: "vault-steward.finish-apply",
 			idempotencyKey: manifest.runId,
 			warnings: warningsOf(observation),
 		}
 	} catch (error) {
-		if (error instanceof Refusal) throw new Refusal(error.reason, { ...error.facts, guard: observation }, error.transaction)
-		throw error
+		if (error instanceof Refusal) afterSyncFailure(new Refusal(error.reason, { ...error.facts, guard: observation }, error.transaction), sync)
+		afterSyncFailure(error, sync)
 	}
 }
 
@@ -344,16 +353,18 @@ function runFinishApply(rt: Runtime, parsed: Parsed, session: Session): Decision
 	const manifest = readManifest(rt, worktree)
 	const record = bindPreview(rt, manifest, previewId)
 	const observation = observeForCandidate(rt, manifest, record.candidateCommit ?? undefined)
+	synchronizeMain(rt, manifest.vault, { runId: manifest.runId, worktree }, false)
 	try {
 		const result = applyPreview(rt, manifest, record, session.runId)
 		if (result.kind === "receipt") return receiptDecision(identity, result.receipt, worktree, rt)
 		const { completion } = result
 		const completedEffects: EffectId[] = completion.commit ? ["completion.receipt", "completion.ref", "main.fast-forward"] : ["completion.receipt", "completion.ref"]
+		const publication = publishCommit(rt, manifest.vault, completion.commit ?? manifest.baseCommit, { runId: manifest.runId, worktree, receipt: completion.receipt }, completedEffects)
 		return {
 			kind: "success",
 			identity,
 			cause: "SUCCESS_COMPLETED",
-			message: completion.commit ? "Canonical main fast-forwarded and the completion recorded. Run remote sync separately when you want to publish main." : "No candidate changes were authored; the no-changes completion is recorded.",
+			message: completion.commit ? "Canonical main fast-forwarded, completion recorded, and upstream publication verified." : "No candidate changes were authored; completion recorded and upstream publication verified.",
 			data: {
 				integration: { kind: record.plan.kind, commit: completion.commit ?? null, main: { before: record.observedMain, after: completion.commit ?? record.observedMain } },
 				completion: { ref: `refs/vault-note-commits/${manifest.runId}`, receipt: completion.receipt },
@@ -361,7 +372,7 @@ function runFinishApply(rt: Runtime, parsed: Parsed, session: Session): Decision
 				guard: guardData(observation),
 				warnings: warningsData(observation),
 			},
-			completed: completedEffects,
+			completed: [...completedEffects, ...publication],
 			nextAction: "vault-steward.inspect",
 			idempotencyKey: manifest.runId,
 			warnings: warningsOf(observation),
@@ -498,13 +509,14 @@ function runRecover(rt: Runtime, parsed: Parsed): Decision {
 		const result = recoverCandidate(rt, manifest)
 		if (result.kind === "receipt") return receiptDecision(identity, result.receipt, worktree, rt)
 		const { completion } = result
+		const publication = publishCommit(rt, manifest.vault, completion.commit ?? manifest.baseCommit, { runId: manifest.runId, worktree, receipt: completion.receipt }, ["completion.receipt", "completion.ref"])
 		return {
 			kind: "success",
 			identity,
 			cause: "SUCCESS_COMPLETED",
-			message: "Completion evidence recorded from Git; the fast-forward was never replayed. Run remote sync separately when you want to publish main.",
+			message: "Completion evidence recorded from Git; the fast-forward was never replayed. Upstream publication verified.",
 			data: { completion: { ref: `refs/vault-note-commits/${manifest.runId}`, receipt: completion.receipt, commit: completion.commit ?? null }, candidate: { runId: manifest.runId, worktree: manifest.worktree, retained: !completion.removed }, guard: guardData(observation), warnings: warningsData(observation) },
-			completed: ["completion.receipt", "completion.ref"],
+			completed: ["completion.receipt", "completion.ref", ...publication],
 			nextAction: "vault-steward.inspect",
 			idempotencyKey: manifest.runId,
 			warnings: warningsOf(observation),
@@ -524,7 +536,7 @@ interface Guidance {
 }
 const REPAIR: Readonly<Record<ProductCause, Guidance>> = {
 	SCHEMA_INVALID_INPUT: { repair: "Correct the option value and rerun; see --help.", next: "vault-steward.help" },
-	SCHEMA_CONFIG_INVALID: { repair: "Repair the vault.json file to contain only schemaVersion 1 and one absolute vault path.", next: "vault-steward.help" },
+	SCHEMA_CONFIG_INVALID: { repair: "Repair the vault.json file to contain only schemaVersion 1 and one absolute vault path or a path beginning ~/.", next: "vault-steward.help" },
 	SCHEMA_MANIFEST_INVALID: { repair: "Preserve the candidate and inspect its Git metadata before continuing.", next: "vault-steward.inspect" },
 	SCHEMA_RECEIPT_INVALID: { repair: "Preserve the receipt and inspect its identity and local Git evidence before continuing.", next: "vault-steward.inspect" },
 	SCHEMA_PREVIEW_INVALID: { repair: "Inspect the preview record, then run finish --preview again to replace it.", next: "vault-steward.inspect" },
@@ -575,7 +587,7 @@ const SENTENCE: Readonly<Record<ProductCause, string>> = {
 	DOMAIN_FORMAT_FAILED: "Whitespace findings in the admitted files.",
 	DOMAIN_GUARD_INCOMPATIBLE: "The installed reference-transaction hook denies a ref Vault Steward must write.",
 	DOMAIN_CANONICAL_NOT_READY: "The canonical checkout is not on main or is dirty.",
-	DOMAIN_MAIN_DIVERGED: "The candidate base is no longer an ancestor of main.",
+	DOMAIN_MAIN_DIVERGED: "The candidate base no longer precedes main, or local and remote main have diverged.",
 	DOMAIN_SEMANTIC_OVERLAP: "Main changed an admitted path since the candidate began.",
 	DOMAIN_PREVIEW_NOT_FOUND: "No preview record exists for this candidate.",
 	DOMAIN_PREVIEW_CONSUMED: "The preview was already consumed by an earlier apply.",
@@ -832,7 +844,7 @@ function decide(rt: Runtime, route: CommandRoute, parsed: Parsed, session: Sessi
 		}
 	} catch (error) {
 		const refusal = error instanceof Refusal ? error : new Refusal("unexpected", { detail: error instanceof Error ? error.message : String(error) })
-		if (route === "finish-preview" && refusal.facts.commit !== undefined && refusal.reason !== "check-failed") inventory = ["preview.record"]
+		if (route === "finish-preview" && refusal.facts.commit !== undefined && refusal.reason !== "check-failed") inventory = ["preview.record", "main.fast-forward"]
 		return { kind: "refusal", identity, refusal, inventory, warnings: warningsOf(refusal.facts.guard) }
 	}
 }

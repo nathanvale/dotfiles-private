@@ -1,10 +1,10 @@
-root = "/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"
+root = "~/.local/share/my-second-brain-playground/herdr-projects-root"
 
 [profiles.codex-safe]
 agent = "codex"
 model = "gpt-6-luna"
 effort = "medium"
-args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'sandbox_workspace_write.writable_roots=["/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"]', "--ask-for-approval", "never", "--search"]
+args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "--add-dir", "~/.local/share/my-second-brain-playground/herdr-projects-root", "--ask-for-approval", "never", "--search"]
 
 [profiles.claude-opus]
 agent = "claude"
@@ -32,7 +32,7 @@ agent = "codex"
 model = "gpt-6-luna"
 effort = "max"
 description = "GPT-6-Luna at max effort: Figma and Chrome parity checks"
-args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'sandbox_workspace_write.writable_roots=["/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"]', "--ask-for-approval", "never", "--search"]
+args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "--add-dir", "~/.local/share/my-second-brain-playground/herdr-projects-root", "--ask-for-approval", "never", "--search"]
 
 [profiles.claude-haik]
 agent = "claude"
