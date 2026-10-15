@@ -47,7 +47,12 @@ taste decisions.
 Keep the transparent derivative separate from the master and compact AI input
 references. Bind accepted files to their actual dimensions and hashes before
 relinking a separate InDesign candidate. Use one shared native page fill behind
-the transparent field. Follow the chapter's approved facing-page palette and
+the transparent field. Check each image carrier's effective fill, including
+inherited object styles. Set the affected carriers locally to None when a Paper
+fill would leave white rectangles behind the transparent images; preserve the
+shared style and unrelated frames. Verify the exported field immediately inside
+and outside each carrier against the actual page colour.
+Follow the chapter's approved facing-page palette and
 physical spread parity; a colour stress view does not select that page colour.
 Verify the exported PDF's edges and transparency through the chosen colour
 conversion. Screen approval alone does not establish a physical print match.
