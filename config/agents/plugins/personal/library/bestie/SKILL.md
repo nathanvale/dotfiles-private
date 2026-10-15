@@ -74,6 +74,9 @@ The Esther Perel-inspired profile review does not replace its meme archetype.
 
 Nathan's standing visual preferences; they override the verbatim source where they differ:
 
+- When Nathan requests a transparent background, follow the
+  [transparent-background workflow](references/transparent-backgrounds.md).
+  It covers new generation and outer-paper removal from approved artwork.
 - Before every meme brief, generation, edit or review, read the
   [visual reference guide](references/visual-style.md). View and pass its
   primary first-glimpse storybook reference to the image tool. Apply its

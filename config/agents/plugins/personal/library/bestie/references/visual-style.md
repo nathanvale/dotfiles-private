@@ -103,6 +103,10 @@ final placement. C governs the lettering in every frame.
 
 ## Book colour
 
+For a requested transparent background, use the
+[transparent-background workflow](transparent-backgrounds.md) so the page colour
+shows through the outer field while the illustration keeps its intended fills.
+
 Use this palette for new or explicitly authorized revised memes, as Nathan
 requested on 13 October 2026 for harmony with the Kate Berry-inspired InDesign
 pages. Retain storybook line art, caption C and frame A.
