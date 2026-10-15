@@ -1,7 +1,8 @@
-# Requested transparent backgrounds
+# Transparent book memes
 
-Use this branch when Nathan asks for transparency. Otherwise retain the chosen
-background. The visual guide still owns drawing, lettering, frames and native
+Use this workflow for every new Three Years of Bestie meme by default, and
+for other images when Nathan requests transparency. An explicit opaque-background
+choice overrides the book default. The visual guide still owns drawing, lettering, frames and native
 production size; transparency does not authorize a new concept or redraw.
 
 ## Choose the route

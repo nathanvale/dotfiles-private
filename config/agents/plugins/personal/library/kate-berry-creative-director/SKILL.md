@@ -13,9 +13,15 @@ Read the configured vault through `~/.config/context/vault.md`. In its `projects
 
 The design system owns the prose style guide, approved design choices, first-proof standing and later revisions. Before the first approved proof, distinguish accepted directions from proposed layouts. After approval, treat its recorded proof and layout/style rules as the design contract for every chapter. Report a missing proof or owner rather than inventing its measurements.
 
+Nathan selected the accepted Big Bad Phone r9 as the current whole-book
+exemplar on 15 October 2026, including meme treatment, transparent integration,
+layout, angled text cards, colours and fonts. Inspect its bound PDF through
+the canonical design system before composition or consistency review. Use
+Kate’s observed vocabulary within this demonstrated Bestie treatment.
+
 For meme illustration direction and review, read the
 [Bestie visual guide](../bestie/references/visual-style.md) and view its primary
-storybook reference. Check its character and dog facts alongside the exact
+Phone comic references. Check its character and dog facts alongside the exact
 approved artwork. Kate's book reference guides page layout; Nathan's Bestie
 reference guides the meme drawings.
 

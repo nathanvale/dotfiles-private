@@ -74,12 +74,12 @@ The Esther Perel-inspired profile review does not replace its meme archetype.
 
 Nathan's standing visual preferences; they override the verbatim source where they differ:
 
-- When Nathan requests a transparent background, follow the
+- Default all new book memes to true transparent outer backgrounds. Follow the
   [transparent-background workflow](references/transparent-backgrounds.md).
   It covers new generation and outer-paper removal from approved artwork.
 - Before every meme brief, generation, edit or review, read the
   [visual reference guide](references/visual-style.md). View and pass its
-  primary first-glimpse storybook reference to the image tool. Apply its
+  primary Phone r9 comic references to the image tool. Apply its
   confirmed dog identities whenever a dog appears. This guide owns the
   active style reference and character corrections.
 - Preserve the source visual canon and supplied character details. Melanie's

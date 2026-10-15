@@ -1,9 +1,41 @@
 # Bestie storybook visual contract
 
 Read this guide before every Bestie meme brief, generation, edit or review. Use
-first glimpse as the primary drawing treatment. Nathan selected it on 11 October
-2026 for Three Years of Bestie. Style approval does not approve a concept,
+the accepted Big Bad Phone r9 artwork as the primary comic treatment. Nathan
+selected the complete chapter as the book-wide design exemplar on 15 October
+2026. Its references supersede first glimpse as the active drawing oracle. Style approval does not approve a concept,
 caption or artwork version.
+
+## Phone r9 exemplar
+
+Use these compact RGBA references from Nathan’s accepted fifteen-page
+The Big Bad Phone r9 export. They preserve the exported artwork’s actual
+transparency, reduced only for AI input. Retain production masters separately.
+
+| Reference | Accepted PDF page | Role |
+| --- | --- | --- |
+| [Just Another Bum Dial](../assets/style-references/phone-just-another-bum-dial-r9.png) | 8 | Primary drawing, lettering and seamless outer field |
+| [Press Play](../assets/style-references/phone-press-play-r9.png) | 10 | Voice-message joke, “Love is patient” caption and expression |
+| [Before the Call](../assets/style-references/phone-before-the-call-r9.png) | 3 | Four-panel comic sequence |
+| [After the Call](../assets/style-references/phone-after-the-call-r9.png) | 4 | “I only said 4 weird things” phone humour and scene treatment |
+| [Melanie vs. the Big Bad Phone](../assets/style-references/phone-big-bad-phone-r9.png) | 1 | Opener character treatment |
+| [Taking Our Relationship Off the Hook](../assets/style-references/phone-off-the-hook-r9.png) | 14 | Free-standing mobile-call composition |
+
+Match their warm expressive comic drawing, rounded characters, clear dark
+contours, restrained matte colour, readable regular caption lettering and
+simple comic balloons. Preserve the new meme’s source action, clothes, joke
+and exact selected wording. Reference scenes supply style, not story facts.
+Use C and frame A for their measured lettering and frame details. For a
+conflict in overall appearance, Nathan’s later Phone exemplar takes precedence;
+report a material conflict rather than mixing unrelated treatments.
+
+The actual native-export PDF is
+`/Users/nathanvale/.codex/visualizations/2026/10/07/01a117b0-8d15-73d0-851c-fea7f2f67f2d/Phone-transparent-native-r7/Phone-p8-single-B09-12-REVIEW-r9.pdf`,
+SHA-256 `d48c76e451fcb6220858aefc0551babeb3842b991b0c9e784d14428b78fc5662`.
+Read the canonical book design system for layout, angled text cards, palette,
+fonts and later decisions. View the actual PDF before a chapter build or
+consistency review. Reuse the demonstrated treatments at suitable scale;
+inspect native measurements before claiming exact angles or offsets.
 
 ## Authority
 
@@ -11,7 +43,7 @@ caption or artwork version.
 | --- | --- | --- |
 | Current choices and corrections | Nathan's explicit instructions | The named task and artwork |
 | Event, people, outfits, props, scene, panel sequence, action, exact caption and joke | The bound source, subject to Nathan's choices | Story content |
-| Drawing treatment | [First glimpse](../assets/style-references/first-glimpse-storybook-r2.jpg) | Characters and settings |
+| Drawing treatment and transparent integration | [Phone r9 references](#phone-r9-exemplar) | Every new book meme, characters and settings |
 | Caption weight | [Approved C](../assets/style-references/caption-weight-c-approved.png) | Lettering only |
 | Frame family | Column A of the [original comparison](comic-frames-original-comparison.png), with Nathan's corrections below | Caption, speech, thought and sound frames |
 | Page composition | The book's current design system and creative-director skill | InDesign layout |
@@ -25,8 +57,9 @@ authorize an invented memory or motive.
 
 1. Bind the source, target version, chosen concept, exact caption and authorized
    changes. Preserve accepted decisions and unrelated scene details.
-2. View first glimpse and C. For generation, pass the clean first-glimpse drawing
-   to the image tool. For an edit, include the actual target too. View frame A
+2. View the Phone r9 reference set and C. Pass Just Another Bum Dial and the
+   closest Phone composition reference to the image tool. For an edit, include
+   the actual target too. View frame A
    when frames appear. If a reference is unavailable, report its path, follow
    the written rule, and leave that visual comparison unverified.
 3. Include the applicable character and dog facts below.
@@ -44,7 +77,10 @@ ink outlines, small expressive oval eyes, rounded faces, flat matte colour
 shapes, simple shadows and subtle printed-paper grain. Use the same treatment for settings. Keep action, panel sequence and wording easy
 to read.
 
-Use the book palette below while preserving scene colours. Keep skin and fabric
+Use the book palette below while preserving scene colours. Default new book
+memes to a true transparent outer field so they blend into any selected page.
+Follow the transparent-background workflow for creation, alpha checks and
+placement. Keep intentional panel, scene and balloon interiors opaque. Keep skin and fabric
 stylized and matte.
 
 Draw Nathan with a fully shaved, smooth skin-coloured scalp and a clean-shaven
@@ -66,7 +102,7 @@ Melanie's black cavoodle overrides brown dogs in older references.
 ## Caption C
 
 Use rounded regular lettering matching C, approved on 13 October 2026. Keep
-scene ink governed by first glimpse. C's headline uses Chalkboard Regular at a
+scene ink governed by the Phone r9 references. C's headline uses Chalkboard Regular at a
 nominal 90 pixels. Its uppercase I measures 61 pixels high, with an 8-pixel
 central stem at 50 percent ink coverage. Other glyph strokes vary.
 
@@ -103,7 +139,7 @@ final placement. C governs the lettering in every frame.
 
 ## Book colour
 
-For a requested transparent background, use the
+For every new book meme unless Nathan explicitly selects an opaque outer field, use the
 [transparent-background workflow](transparent-backgrounds.md) so the page colour
 shows through the outer field while the illustration keeps its intended fills.
 
@@ -180,10 +216,9 @@ Keep the four references supplied on 6 October recoverable:
 [mystery date](../assets/style-references/mystery-date.png),
 [birthday song](../assets/style-references/birthday-song.png), and
 [missing ingredient](../assets/style-references/missing-ingredient.png).
-They are historical, outside the active reference set. The four recent redraws
-remain pending Nathan's approval. Keep redraw candidates out of the active
-reference set until Nathan accepts them as additional references. First glimpse
-remains primary.
+They are historical, outside the active reference set. Keep redraw candidates out of the active reference set until Nathan accepts
+them. First glimpse remains historical character/style evidence; Phone r9
+governs current comic treatment and transparent page integration.
 
 ## Deliver the candidate
 

@@ -1,11 +1,15 @@
 ---
 name: bestie-chapter-design
-description: Build or revise a Bestie book chapter in InDesign using the approved chapter-one design process. Use for story sequencing, spread design, artwork integration and a reviewable native chapter handback.
+description: Build or revise a Bestie book chapter in InDesign using the approved book design process. Use for story sequencing, spread design, artwork integration and a reviewable native chapter handback.
 ---
 
 # Bestie Chapter Design
 
-Turn Nathan's selected chapter into an editable, reviewable book chapter. Reuse the demonstrated design process while letting each chapter's stories determine its rhythm.
+Turn Nathan's selected chapter into an editable, reviewable book chapter. Use The Big Bad Phone r9 as the current design exemplar for artwork, layout,
+angled exchange cards, palette and typography. Read its exact binding in the
+canonical design system and inspect the accepted export before composing.
+Retain chapter-one process lessons while letting each chapter’s stories
+determine its rhythm.
 
 ## Resolve the chapter
 
@@ -23,7 +27,7 @@ Bring an unresolved consequential selection or ending to Nathan as one grounded 
 
 For every meme brief, redraw or artwork review, read the
 [Bestie visual guide](../bestie/references/visual-style.md) and view its primary
-storybook reference. Check dog identities there when a dog appears.
+Phone comic references. Check dog identities there when a dog appears.
 
 Reuse accepted art unless Nathan authorizes a specific redraw. For a requested new image, use `bestie` and the active image-generation workflow. Record people, scene, clothes, action, punchline, exact caption and style anchor in a compact brief. Inspect whether the action actually communicates the joke. Keep original and revised artwork separately; style references supply drawing treatment, not event facts.
 
