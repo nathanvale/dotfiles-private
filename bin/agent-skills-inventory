@@ -186,6 +186,7 @@ class Inventory:
         self.project_only = topology.get("projectOnly", {})
         self.third_party = topology.get("thirdParty", {})
         self.retired = set(topology.get("retired", []))
+        self.app_owned = topology.get("appOwned", {})
         self.locked = locked
         self.lock_path = lock_path
         self.native = {
@@ -407,6 +408,15 @@ class Inventory:
         if kind == "symlink" and not os.path.exists(target):
             row["content_agreement"] = "missing-target"
             self.attach(row, "dangling-symlink", "live address has no resolved target")
+            return
+        declaration = self.app_owned.get(name)
+        if declaration and row["address"] in declaration.get("addresses", []):
+            row.update(
+                provenance="app-owned",
+                source_owner=declaration.get("owner", "unknown"),
+                source_path=target,
+                content_agreement="owned",
+            )
             return
         if name in self.native:
             self.classify_native(row)

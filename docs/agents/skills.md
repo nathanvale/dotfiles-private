@@ -55,6 +55,8 @@ targets identify the old personal source.
 `bin/agent-skills-inventory --json` checks the remaining reviewed vendors,
 project addresses, and obsolete links. Personal enablement belongs to the
 native manifests; Matt installation belongs to the installer lock.
+Entries that an app writes into a user address (Claude's `synced` and `.trash`,
+the work board's `herdr-projects`) are declared in `topology.json#appOwned`.
 
 Capture protected Harness state immediately before and after a migration or
 canary. Compare those operation snapshots. Cache counts and hashes are not
