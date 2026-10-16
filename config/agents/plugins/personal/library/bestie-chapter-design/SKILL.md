@@ -7,13 +7,13 @@ description: Build, revise or check a Bestie book chapter in InDesign. Use for s
 
 Turn Nathan's selected chapter into an editable, reviewable book chapter. Use The Big Bad Phone r9 as the current design exemplar for artwork, layout,
 angled exchange cards, palette and typography. Read its exact binding in the
-canonical design system and inspect the accepted export before composing.
+resolved design contract and inspect the accepted export before composing.
 Retain chapter-one process lessons while letting each chapter’s stories
 determine its rhythm.
 
 ## Resolve the chapter
 
-Read `~/.config/context/vault.md`, then the configured vault's `projects/melanie-fourth-anniversary-meme-album/README.md`, `GOAL.md` and `design-system.md`. The design system owns current appearance, the chapter-one retrospective and template proof. Use `kate-berry-creative-director` for visual direction when needed; this skill owns the chapter workflow.
+Resolve the design contract through [design contract resolution](references/design-contract.md): the packet's current canonical design owner, or a verified hash-bound dated snapshot with an owning receipt. Read the packet's `README.md` and `GOAL.md` with it. The contract owns current appearance, the chapter-one retrospective and template proof. If neither source resolves, or the source is uncertain, surface that before any new layout decision. Use `kate-berry-creative-director` for visual direction when needed; this skill owns the chapter workflow.
 
 Resolve Nathan's named chapter from the current packet, not a historical queue number. Read its current selected copy in `chapter-copy-proposals.md`, decisions in `artwork-selection.md`, and linked source/art bindings. Preserve the existing copy owner. Separate accepted choices, reversible layout proposals and remaining production qualifications.
 
@@ -31,17 +31,16 @@ Phone comic references. Check dog identities there when a dog appears.
 
 Reuse accepted art unless Nathan authorizes a specific redraw. For a requested new image, use `bestie` and the active image-generation workflow. Record people, scene, clothes, action, punchline, exact caption and style anchor in a compact brief. Inspect whether the action actually communicates the joke. Keep original and revised artwork separately; style references supply drawing treatment, not event facts.
 
-Apply the current design system and actual approved native proof. Give each content type its suitable treatment: a quiet exact reply, a poem, a compact chart or a newspaper review can differ while sharing the book's typography, palette and spacing. Place whole proportional artwork with readable lettering. Fit full selected text with honest continuations before proposing a copy change.
+Apply the resolved design contract and actual approved native proof. Give each content type its suitable treatment: a quiet exact reply, a poem, a compact chart or a newspaper review can differ while sharing the book's typography, palette and spacing. Place whole proportional artwork with readable lettering. Fit full selected text with honest continuations before proposing a copy change.
 
 When reusable template proof is missing, follow the roadmap's small native sample first. Save the demonstrated parents and styles as a separate `.indt`; open it into an independent editable document and exercise ordinary text and image changes before relying on it for the chapter. Keep current print geometry and technical mechanics in the packet's InDesign research owners.
 
 ## Shared typography and message headers
 
-Before every chapter build, revision or consistency review, read the book's
-style guide at
-`<configured-vault>/projects/melanie-fourth-anniversary-meme-album/design-system.md`,
-including **Shared typography and metadata contract**. That owner defines the
-named styles, fonts, measurements, colours, metadata fields and spacing.
+Before every chapter build, revision or consistency review, use the contract
+resolved above, including its **Shared typography and metadata contract**. That
+owner defines the named styles, fonts, measurements, colours, metadata fields
+and spacing.
 
 Apply its message-header and artwork-credit contract to every chapter. Use its
 distinct styles for narration, transcripts, featured messages, poems and folios.
@@ -88,7 +87,7 @@ Show Nathan the actual candidate and make focused revisions within his feedback.
 
 ## Hand back
 
-Write one current handback record and pass `handback`: native/PDF paths and digests, actual page count, manuscript-versus-native copy standing, source extents, UI owner and release, preview state and the next ready action. Carry selected Writing Beats answers with their evidence so settled choices are never asked again. Replace stale counts and pending-question snapshots rather than appending to them. Name the template actually exercised and the design-contract revision. Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
+Write one current handback record and pass `handback`: native/PDF paths and digests, actual page count, manuscript-versus-native copy standing, source extents, UI owner and release, preview state and the next ready action. Carry selected Writing Beats answers with their evidence so settled choices are never asked again. Replace stale counts and pending-question snapshots rather than appending to them. Name the template actually exercised and the design-contract source (canonical revision, or snapshot hash and receipt). Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
 
 When Nathan names a retro or review procedure, follow that procedure and deliver evidence-based patches when he asks for improvements.
 

@@ -9,14 +9,14 @@ Act as the book's creative director, applying experienced editorial design judge
 
 ## Enter the current design contract
 
-Read the configured vault through `~/.config/context/vault.md`. In its `projects/melanie-fourth-anniversary-meme-album/` packet, read `design-system.md` before creating, editing or reviewing a chapter or template. Read `GOAL.md` for current format and scope, and the roadmap's designer-reference evidence when inspecting the source book. Use the current canonical packet, not a cached copy of its decisions.
+Resolve the design contract through [design contract resolution](../bestie-chapter-design/references/design-contract.md) before creating, editing or reviewing a chapter or template: the packet's current canonical design owner, or a verified hash-bound dated snapshot with an owning receipt. Read the packet's `GOAL.md` for current format and scope, and the roadmap's designer-reference evidence when inspecting the source book. Do not use an unverified cached copy of its decisions. If no source resolves or the source is uncertain, say so before any new layout decision.
 
-The design system owns the prose style guide, approved design choices, first-proof standing and later revisions. Before the first approved proof, distinguish accepted directions from proposed layouts. After approval, treat its recorded proof and layout/style rules as the design contract for every chapter. Report a missing proof or owner rather than inventing its measurements.
+The design contract owns the prose style guide, approved design choices, first-proof standing and later revisions. Before the first approved proof, distinguish accepted directions from proposed layouts, and keep that label on every later choice. After approval, treat its recorded proof and layout/style rules as the design contract for every chapter. Report a missing proof or owner rather than inventing its measurements. Read actual paragraph, character, object and parent styles from native files rather than inferring them from names.
 
 Nathan selected the accepted Big Bad Phone r9 as the current whole-book
 exemplar on 15 October 2026, including meme treatment, transparent integration,
 layout, angled text cards, colours and fonts. Inspect its bound PDF through
-the canonical design system before composition or consistency review. Use
+the resolved design contract before composition or consistency review. Use
 Kate’s observed vocabulary within this demonstrated Bestie treatment.
 
 For meme illustration direction and review, read the
@@ -39,4 +39,4 @@ Compare the actual chapter export with the approved proof and source assets. Exp
 
 Preserve the packet's prose ownership, exact sources, accepted artwork versions and explicit content choices. Style approval supplies no automatic rewrite, final cut, image regeneration, upload or order authority. Keep unresolved fit, font, link and print gaps visible.
 
-Hand back the reviewed file identity, design-contract revision, demonstrated changes and remaining choices. Claim creative consistency only for pages actually inspected; final book acceptance remains Nathan's.
+Hand back the reviewed file identity, design-contract source and revision (or snapshot hash and receipt), demonstrated changes and remaining choices. Claim creative consistency only for pages actually inspected; final book acceptance remains Nathan's.
