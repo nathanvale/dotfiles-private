@@ -27,6 +27,18 @@ const PINNED_BINARY_SHA256 = "01d99ede8b6a88dd282eaeda2afb7086dca5bdbc04c05c8c21
 const PINNED_PROVENANCE_SHA256 = "7a4256c6a3a921e2319386c3142ec33b4f0b5d693af5c652fe97ee884f30f2ab";
 const LIVE_NOTARIZATION = ["/usr/bin/codesign", "--verify", "--strict", "--check-notarization", "-R=notarized", "--verbose=2"];
 
+// Apple's live notarization lookup is a network service and fails transiently
+// on hosted runners (exit 3, indistinguishable from the denied sandbox's exit).
+// Retry the unsandboxed control only; the denied control below is never retried,
+// so a pass still proves the sandbox denies what the pinned bytes otherwise pass.
+async function liveNotarizationPasses(binary: string, attempts = 6, delayMs = 5000) {
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		if (Bun.spawnSync([...LIVE_NOTARIZATION, binary], { stdout: "ignore", stderr: "ignore" }).exitCode === 0) return true;
+		if (attempt < attempts) await Bun.sleep(delayMs);
+	}
+	return false;
+}
+
 async function runSyspolicyDenied(bundle: ReturnType<typeof createBundle>, argv: string[], env: BundleRun & { binDir: string }, profile = SYSPOLICY_DENIED) {
 	const child = Bun.spawn([SANDBOX_EXEC, "-p", profile, bundle.binary, ...argv], {
 		env: { HOME: env.home, PATH: `${env.binDir}:/usr/bin:/bin`, TMPDIR: bundle.root, ...env.extraEnv },
@@ -201,7 +213,7 @@ test.skipIf(!official)("syspolicy-denied sandbox: first use bootstraps, reuse sk
 		// Negative control: the profile denies the lookup the pinned bytes pass
 		// without it, so a GREEN below cannot come from an inert sandbox.
 		const officialBinary = path.join(official!, "mcporter");
-		expect(Bun.spawnSync([...LIVE_NOTARIZATION, officialBinary], { stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+		expect(await liveNotarizationPasses(officialBinary), "live notarization lookup never passed unsandboxed; Apple's service is unreachable, so the negative control is not established").toBe(true);
 		expect(Bun.spawnSync([SANDBOX_EXEC, "-p", SYSPOLICY_DENIED, ...LIVE_NOTARIZATION, officialBinary], { stdout: "ignore", stderr: "ignore" }).exitCode).not.toBe(0);
 
 		const first = await runSyspolicyDenied(bundle, ["schema", "keyless-fixture-skill"], environment);
@@ -248,7 +260,7 @@ test.skipIf(!official)("syspolicy-denied sandbox: first use bootstraps, reuse sk
 		hostile.dispose();
 		bundle.dispose();
 	}
-}, 60000);
+}, 120000);
 
 test.skipIf(!official)("schema child failure after promotion reports the completed bootstrap effect", async () => {
 	const bundle = createBundle();
