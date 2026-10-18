@@ -184,6 +184,7 @@ function containerEnd(text: string, from: number, close: string): number {
   let at = from + (close === ">>" ? 2 : 1);
   while (at < text.length && !text.startsWith(close, at)) {
     if (isSpace(text[at] ?? "")) at++;
+    else if (text[at] === "%") at = endOfLine(text, at);
     else {
       const next = valueEnd(text, at);
       at = Math.max(next, at + 1);
@@ -195,7 +196,9 @@ function containerEnd(text: string, from: number, close: string): number {
 /** Only actual stream keys classify it; resource values and strings are never keys. */
 function streamKeys(dictionary: string): Map<string, string> {
   const out = new Map<string, string>();
-  let at = dictionary.indexOf("<<") + 2;
+  dictionary = dictionary.trim();
+  if (!dictionary.startsWith("<<")) throw new InputError("PDF stream dictionary cannot be located; colour cannot be checked.");
+  let at = 2;
   while (at < dictionary.length && !dictionary.startsWith(">>", at)) {
     if (isSpace(dictionary[at] ?? "")) { at++; continue; }
     if (dictionary[at] !== "/") throw new InputError("PDF stream dictionary has an unreadable key; colour cannot be checked.");
@@ -208,6 +211,7 @@ function streamKeys(dictionary: string): Map<string, string> {
     out.set(key, value);
     at = Math.max(next, at + 1);
   }
+  if (!dictionary.startsWith(">>", at) || dictionary.slice(at + 2).trim() !== "") throw new InputError("PDF stream dictionary was not read to its end; colour cannot be checked.");
   return out;
 }
 
@@ -298,10 +302,10 @@ function applyFilter(name: string, bytes: Buffer): Buffer {
 }
 
 /** Decoded stream text, or undefined for image data the colour operators do not live in. A filter that cannot be read fails closed. */
-function decoded(dictionary: Map<string, string>, bytes: Buffer, file: Buffer): string | undefined {
+function decoded(dictionary: Map<string, string>, bytes: Buffer, file: Buffer, content: boolean): string | undefined {
   const filters = filtersOf(dictionary, file);
-  if (filters.some((name) => IMAGE_FILTERS.has(name))) return undefined;
-  if (pdfName(dictionary.get("Subtype") ?? "") === "/Image") return undefined;
+  if (!content && filters.some((name) => IMAGE_FILTERS.has(name))) return undefined;
+  if (!content && pdfName(dictionary.get("Subtype") ?? "") === "/Image") return undefined;
   try {
     return filters.reduce((data, name) => applyFilter(name, data), bytes).toString("latin1");
   } catch (error) {
@@ -310,9 +314,65 @@ function decoded(dictionary: Map<string, string>, bytes: Buffer, file: Buffer): 
   }
 }
 
-function streamDictionary(file: Buffer, open: number): string {
-  const object = file.lastIndexOf("obj", open, "latin1");
-  return file.subarray(object < 0 ? 0 : object, open).toString("latin1");
+/** Finds object headers as tokens, never inside names, strings or comments. Stream bytes are skipped by the caller. */
+function nextObject(text: string, from: number): { key: string; start: number } | undefined {
+  const previous: string[] = [];
+  for (let at = from; at < text.length; ) {
+    const skipped = skipNonToken(text, at);
+    if (skipped >= 0) { at = skipped; continue; }
+    const end = DELIMITERS.includes(text[at] ?? "") ? at + 1 : endOfWord(text, at);
+    const token = text.slice(at, end);
+    if (token === "obj" && previous.length === 2 && previous.every((value) => /^\d+$/.test(value))) return { key: previous.join(" "), start: end };
+    previous.push(token);
+    if (previous.length > 2) previous.shift();
+    at = end;
+  }
+  return undefined;
+}
+
+type DictionaryObject = { key: string; dictionary: Map<string, string>; bytes?: Buffer };
+
+function afterTrivia(text: string, from: number): number {
+  while (from < text.length) {
+    if (isSpace(text[from] ?? "")) from++;
+    else if (text[from] === "%") from = endOfLine(text, from);
+    else break;
+  }
+  return from;
+}
+
+/** Walks plain dictionary objects in file order, cutting streams before tokenizing the next object. */
+function dictionaryObjects(file: Buffer): DictionaryObject[] {
+  const text = file.toString("latin1");
+  const objects: DictionaryObject[] = [];
+  let from = 0;
+  for (;;) {
+    const object = nextObject(text, from);
+    if (object === undefined) return objects;
+    from = afterTrivia(text, object.start);
+    if (!text.startsWith("<<", from)) continue;
+    const rawEnd = valueEnd(text, from);
+    const dictionary = streamKeys(withoutComments(text.slice(from, rawEnd)));
+    from = afterTrivia(text, rawEnd);
+    const marker = /^stream(?:\r\n|\n|\r)/.exec(text.slice(from));
+    if (marker === null) { objects.push({ dictionary, key: object.key }); continue; }
+    const start = from + marker[0].length;
+    const end = streamEnd(file, dictionary, start);
+    if (end < 0) throw new InputError("PDF stream has no readable end; colour cannot be checked.");
+    objects.push({ bytes: file.subarray(start, end), dictionary, key: object.key });
+    from = text.indexOf("endstream", end) + "endstream".length;
+  }
+}
+
+/** Page Contents can name a stream directly or an indirect array of stream references. */
+function contentReferences(value: string, file: Buffer, depth = 0): string[] {
+  if (depth > 4) throw new InputError("PDF page Contents reference nesting cannot be read; colour cannot be checked.");
+  return [...value.matchAll(/(\d+)\s+(\d+)\s+R\b/g)].flatMap((match) => {
+    const id = match[1] ?? "";
+    const generation = match[2] ?? "";
+    const body = objectBody(file, id, generation)?.trim();
+    return body?.startsWith("[") ? contentReferences(body, file, depth + 1) : [`${id} ${generation}`];
+  });
 }
 
 /** Streams that carry fonts, images, profiles, tables or structure, never page content, told by their dictionary. */
@@ -348,27 +408,22 @@ function streamEnd(file: Buffer, dictionary: Map<string, string>, start: number)
 function readContentColours(path: string): ContentColours {
   const file = readFileSync(path);
   const total: ContentColours = { cmyk: 0, gray: 0, rgb: 0 };
-  let from = 0;
-  for (;;) {
-    const open = file.indexOf("stream", from, "latin1");
-    if (open < 0) return total;
-    if (file.subarray(open - 3, open).toString("latin1") === "end") {
-      from = open + 6;
-      continue;
-    }
-    const start = file.subarray(open + 6, open + 8).toString("latin1").startsWith("\r\n") ? open + 8 : open + 7;
-    const dictionary = streamKeys(withoutComments(streamDictionary(file, open)));
-    const end = streamEnd(file, dictionary, start);
-    if (end < 0) return total;
-    from = end;
-    if (nonContent(dictionary)) continue;
-    const content = decoded(dictionary, file.subarray(start, end), file);
-    if (content === undefined) continue;
-    const found = colourOperators(content);
+  const objects = dictionaryObjects(file);
+  if (objects.some((object) => pdfName(object.dictionary.get("Type") ?? "") === "/ObjStm")) throw new InputError("PDF object streams hide page Contents membership from this reader; colour cannot be checked.");
+  const contentIds = new Set(objects.filter((object) => pdfName(object.dictionary.get("Type") ?? "") === "/Page").flatMap((object) => contentReferences(object.dictionary.get("Contents") ?? "", file)));
+  for (const key of contentIds) if (!objects.some((object) => object.key === key && object.bytes !== undefined)) throw new InputError(`PDF page Contents ${key} R is unreadable; colour cannot be checked.`);
+  for (const object of objects) {
+    if (object.bytes === undefined) continue;
+    const content = contentIds.has(object.key) || pdfName(object.dictionary.get("Subtype") ?? "") === "/Form";
+    if (!content && nonContent(object.dictionary)) continue;
+    const decodedContent = decoded(object.dictionary, object.bytes, file, content);
+    if (decodedContent === undefined) continue;
+    const found = colourOperators(decodedContent);
     total.cmyk += found.cmyk;
     total.gray += found.gray;
     total.rgb += found.rgb;
   }
+  return total;
 }
 
 /** Reads page count, boxes, fonts, image colour/PPI and text via poppler. */

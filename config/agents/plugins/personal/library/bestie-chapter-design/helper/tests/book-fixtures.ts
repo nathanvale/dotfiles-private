@@ -11,7 +11,20 @@ export const CONTRACT_BLEED = { bottom: BLEED, inside: BLEED, outside: BLEED, to
 const LEFT_TRANSFORM = [1, 0, 0, 1, 0, 0];
 const RIGHT_TRANSFORM = [1, 0, 0, 1, 318, 0];
 
-export type PdfPageSpec = { text: string; image: boolean; colour?: string; deflate?: boolean; encode?: "hex" | "ascii85"; extra?: { content: string; dict?: string }; trimBox?: number[]; bleedBox?: number[] };
+export type PdfPageSpec = { text: string; image: boolean; dictionary?: string; form?: boolean; colour?: string; deflate?: boolean; encode?: "hex" | "ascii85"; extra?: { content: string; dict?: string }; trimBox?: number[]; bleedBox?: number[] };
+
+function pageDictionary(spec: PdfPageSpec, ids: { tree: number; font: number; image: number; content: number; rendered: number }): string {
+  const trim = spec.trimBox ?? [BLEED, BLEED, BLEED + TRIM.width, BLEED + TRIM.height];
+  const bleed = spec.bleedBox ?? [0, 0, TRIM.width + 2 * BLEED, TRIM.height + 2 * BLEED];
+  return `<< /Type /Page /Parent ${ids.tree} 0 R /MediaBox [0 0 ${TRIM.width + 2 * BLEED} ${TRIM.height + 2 * BLEED}] /TrimBox [${trim.join(" ")}] /BleedBox [${bleed.join(" ")}] `
+    + `/Resources << /Font << /F1 ${ids.font} 0 R >> /XObject << /Im1 ${ids.image} 0 R ${spec.form ? `/Fm1 ${ids.content} 0 R` : ""} >> >> /Contents ${ids.rendered} 0 R >>`;
+}
+
+function contentDictionary(spec: PdfPageSpec, font: number, image: number): string {
+  const resources = `/Resources << /Font << /F1 ${font} 0 R >> /XObject << /Im1 ${image} 0 R >> >>`;
+  const form = spec.form ? `/Type /XObject /Subtype /Form /BBox [0 0 318 418] ${resources} ` : "";
+  return `${form}${spec.dictionary ?? ""}`;
+}
 
 function pdfObjects(pages: PdfPageSpec[]): string[] {
   const objects: string[] = [];
@@ -30,16 +43,16 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
   const pageBodies: string[] = [];
   const streams: Buffer[] = [];
   const filtered = new Map<number, string[]>();
+  const dictionaries = new Map<number, string>();
   for (const spec of pages) {
     const content = `q 7.2 0 0 7.2 50 50 cm /Im1 Do Q ${spec.colour ?? ""} BT /F1 12 Tf 20 200 Td (${spec.text}) Tj ET`;
     const contentId = add("");
+    dictionaries.set(contentId - 1, contentDictionary(spec, font, image));
+    const renderedContentId = spec.form ? add("") : contentId;
+    if (spec.form) streams[renderedContentId - 1] = Buffer.from("q /Fm1 Do Q", "latin1");
     const pageId = add("");
     kids.push(pageId);
-    const trim = spec.trimBox ?? [BLEED, BLEED, BLEED + TRIM.width, BLEED + TRIM.height];
-    const bleed = spec.bleedBox ?? [0, 0, TRIM.width + 2 * BLEED, TRIM.height + 2 * BLEED];
-    pageBodies[pageId - 1] =
-      `<< /Type /Page /Parent ${tree} 0 R /MediaBox [0 0 ${TRIM.width + 2 * BLEED} ${TRIM.height + 2 * BLEED}] /TrimBox [${trim.join(" ")}] /BleedBox [${bleed.join(" ")}] ` +
-      `/Resources << /Font << /F1 ${font} 0 R >> /XObject << /Im1 ${image} 0 R >> >> /Contents ${contentId} 0 R >>`;
+    pageBodies[pageId - 1] = pageDictionary(spec, { tree, font, image, content: contentId, rendered: renderedContentId });
     const filters = specFilters(spec);
     streams[contentId - 1] = encodeContent(content, filters);
     if (filters.length > 0) filtered.set(contentId - 1, filters);
@@ -60,12 +73,13 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
   streams[mask - 1] = maskData;
   objects[mask - 1] = `<< /Type /XObject /Subtype /Image /Width 30 /Height 30 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${maskData.length} >>`;
   objects[font - 1] = objects[font - 1]?.replace("/H 0 0 R", `/H ${proc} 0 R`) ?? "";
-  return objects.map((body, index) => {
-    const stream = streams[index];
-    if (stream === undefined) return body;
-    const dict = body === "" ? `<< ${filterEntry(filtered.get(index))}/Length ${stream.length} >>` : body;
-    return `${dict}\nstream\n${stream.toString("latin1")}\nendstream`;
-  });
+  return objects.map((body, index) => streamObject(body, streams[index], filtered.get(index), dictionaries.get(index)));
+}
+
+function streamObject(body: string, stream: Buffer | undefined, filters: string[] | undefined, dictionary: string | undefined): string {
+  if (stream === undefined) return body;
+  const dict = body === "" ? `<< ${filterEntry(filters)}${dictionary ?? ""} /Length ${stream.length} >>` : body;
+  return `${dict}\nstream\n${stream.toString("latin1")}\nendstream`;
 }
 
 function ascii85(bytes: Buffer): string {

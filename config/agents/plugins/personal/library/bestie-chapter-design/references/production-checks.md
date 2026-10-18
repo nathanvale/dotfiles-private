@@ -166,6 +166,12 @@ Deterministic, failing the command:
   content (document-wide; ICC-based operators are not resolved); story text present in the exported page text;
   export settings read back against the contract.
 
+Page `/Contents` references and Form streams take precedence over metadata
+exclusions when counting device colour operators. The helper refuses object
+streams because it cannot establish their page-content membership; use a PDF
+with plain objects or a qualified independent inspection path. A refusal is
+missing evidence, never a colour pass.
+
 The contract, not the helper, owns which pages belong to which family and which
 are exceptions. Derive both from the latest book and its coverage record each
 run; a stale page list fails rather than being assumed. Style-name inventory

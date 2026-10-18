@@ -433,6 +433,70 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     refused(runBook(f), "paint 1 cmyk colour operator(s)");
   });
 
+  test("does not lose compressed page ink after obj inside a dictionary string", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "0.5 g", deflate: true } : p));
+    const render = () => Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+    const control = render();
+    expect(control.exitCode).toBe(0);
+    expect(control.stderr.toString()).toBe("");
+    expect(control.stdout.length).toBeGreaterThan(100);
+    for (const dictionary of ["/Name (xobj) /Resources << >>", "/Name /xobj /Resources << >>", "/Name (9 0 obj) /Resources << >>"]) {
+      rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "0.5 g", deflate: true, dictionary } : p));
+      const changed = render();
+      expect(changed.exitCode).toBe(0);
+      expect(changed.stderr.toString()).toBe("");
+      expect(changed.stdout.equals(control.stdout)).toBe(true);
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
+  test("checks referenced page ink despite renderer-ignored metadata", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "0.5 g" } : p));
+    const render = () => Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+    const control = render();
+    expect(control.exitCode).toBe(0);
+    expect(control.stderr.toString()).toBe("");
+    expect(control.stdout.length).toBeGreaterThan(100);
+    for (const dictionary of ["/N 1", "/Length1 20", "/FunctionType 2", "/ShadingType 2", "/Type /Metadata", "/Subtype /Image"]) {
+      rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "0.5 g", dictionary } : p));
+      const changed = render();
+      expect(changed.exitCode).toBe(0);
+      expect(changed.stderr.toString()).toBe("");
+      expect(changed.stdout.equals(control.stdout)).toBe(true);
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
+  test("checks rendered Form ink despite renderer-ignored metadata", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    const pages = f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "0.5 g", form: true, deflate: true } : p);
+    rewritePdf(f, pages);
+    const render = () => Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+    const control = render();
+    expect(control.exitCode).toBe(0);
+    expect(control.stderr.toString()).toBe("");
+    expect(control.stdout.length).toBeGreaterThan(100);
+    for (const dictionary of ["/N 1", "/Length1 20", "/FunctionType 2", "/ShadingType 2"]) {
+      rewritePdf(f, pages.map((p, i) => i === 0 ? { ...p, dictionary } : p));
+      const changed = render();
+      expect(changed.exitCode).toBe(0);
+      expect(changed.stderr.toString()).toBe("");
+      expect(changed.stdout.equals(control.stdout)).toBe(true);
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
+  test("refuses object streams when page Contents membership is unavailable", () => {
+    const f = book(scratch());
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, extra: { dict: "/Type /ObjStm", content: "opaque" } } : p));
+    refused(runBook(f), "object streams hide page Contents membership");
+  });
+
   test("reads escaped PDF filter names and keys", () => {
     const f = book(scratch());
     f.contract.pdf.colourSpaces = ["rgb"];
