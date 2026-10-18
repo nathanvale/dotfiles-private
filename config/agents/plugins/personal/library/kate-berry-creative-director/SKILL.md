@@ -13,11 +13,7 @@ Resolve the design contract through [design contract resolution](../bestie-chapt
 
 The design contract owns the prose style guide, approved design choices, first-proof standing and later revisions. Before the first approved proof, distinguish accepted directions from proposed layouts, and keep that label on every later choice. After approval, treat its recorded proof and layout/style rules as the design contract for every chapter. Report a missing proof or owner rather than inventing its measurements. Read actual paragraph, character, object and parent styles from native files rather than inferring them from names.
 
-Nathan selected the accepted Big Bad Phone r9 as the current whole-book
-exemplar on 15 October 2026, including meme treatment, transparent integration,
-layout, angled text cards, colours and fonts. Inspect its bound PDF through
-the resolved design contract before composition or consistency review. Use
-Kate’s observed vocabulary within this demonstrated Bestie treatment.
+Use the bound r20 nine-family library for native layout comparison: read its [binding, hash and standing](../bestie-chapter-design/SKILL.md#bound-layout-library) before composition or consistency review. It supersedes Phone r9 and r3 as the operational layout library, and it is a technically qualified editable REVIEW library, not final book, exact-file, art or print acceptance. r20 owns layout card geometry, angled cards, typography and colours wherever its contract supersedes Phone r9. Keep the accepted Big Bad Phone r9 as the drawing and artwork reference (meme treatment and transparent integration) and Kate's observed vocabulary within this Bestie treatment. Reuse r20 by ordinary Parent and style import in the existing document, not by creating a new document from the `.indt`; use only a verified same-hash copy, else report it unavailable. Distinguish selected variants, source-specific exclusions and final acceptance.
 
 For meme illustration direction and review, read the
 [Bestie visual guide](../bestie/references/visual-style.md) and view its primary
