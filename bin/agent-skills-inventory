@@ -517,9 +517,18 @@ class Inventory:
             return True
         try:
             with open(os.path.join(row["path"], required), encoding="utf-8") as handle:
-                return f"\nname: {row['name']}\n" in handle.read(4096)
-        except OSError:
+                lines = handle.read().splitlines()
+        except (OSError, UnicodeDecodeError):
             return False
+        if not lines or lines[0].strip() != "---":
+            return False
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            key, separator, value = line.partition(":")
+            if separator and key == "name":
+                return value.strip().strip("\"'") == row["name"]
+        return False
 
     def classify_native(self, row):
         row.update(

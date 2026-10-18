@@ -472,6 +472,10 @@ describe('agent-skills-inventory public process', () => {
 		skill(join(fixture.claude, 'app-one', 'SKILL.md'), 'other-skill')
 		topology.appOwned['app-one'].requiredFile = 'SKILL.md'
 		write(topologyPath, JSON.stringify(topology))
+		write(
+			join(fixture.claude, 'app-one', 'SKILL.md'),
+			'---\nname: other-skill\n---\n\n```yaml\nname: app-one\n```\n',
+		)
 		const renamed = JSON.parse(run(fixture.home, '--json').stdout.toString())
 		expect(renamed.issues).toEqual([
 			expect.objectContaining({ code: 'unknown-provenance', name: 'app-one' }),
