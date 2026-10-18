@@ -433,6 +433,21 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     refused(runBook(f), "paint 1 cmyk colour operator(s)");
   });
 
+  test("counts content despite nested resource metadata and literal strings", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    const dictionaries = [
+      "/Type /XObject /Subtype /Form /Resources << /Shading << /Sh0 << /ShadingType 2 /Function << /FunctionType 2 /N 1 >> >> >> >>",
+      "/Type /XObject /Subtype /Form /Resources << /XObject << /Im << /Subtype /Image /Filter /DCTDecode >> >> >>",
+      "/Foo (/Type /XRef /Subtype /Image /Filter /DCTDecode)",
+      "/Foo <2f54797065202f58526566>",
+    ];
+    for (const dict of dictionaries) {
+      rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, extra: { content: "0.5 g", dict } } : p)));
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
   test("does not read font, profile or table streams as page content", () => {
     const f = book(scratch());
     f.contract.pdf.colourSpaces = ["rgb"];

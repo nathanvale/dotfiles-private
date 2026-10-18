@@ -164,6 +164,33 @@ function withoutComments(text: string): string {
   return out;
 }
 
+/** Stream keys only: resource dictionaries and string values cannot classify their enclosing stream. */
+function streamKeys(dictionary: string): string {
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < dictionary.length; ) {
+    if (dictionary[i] === "(") {
+      i = skipLiteral(dictionary, i);
+      out += " ";
+    } else if (dictionary.startsWith("<<", i)) {
+      depth++;
+      i += 2;
+      out += " ";
+    } else if (dictionary.startsWith(">>", i)) {
+      depth--;
+      i += 2;
+      out += " ";
+    } else if (dictionary[i] === "<") {
+      i = endOfAngle(dictionary, i);
+      out += " ";
+    } else {
+      if (depth === 1) out += dictionary[i];
+      i++;
+    }
+  }
+  return out;
+}
+
 /** Body of indirect object `id generation`, or undefined when the file has no such plain object (for example one packed in an object stream). */
 function objectBody(file: Buffer, id: string, generation: string): string | undefined {
   const text = file.toString("latin1");
@@ -251,8 +278,7 @@ function applyFilter(name: string, bytes: Buffer): Buffer {
 }
 
 /** Decoded stream text, or undefined for image data the colour operators do not live in. A filter that cannot be read fails closed. */
-function decoded(rawDictionary: string, bytes: Buffer, file: Buffer): string | undefined {
-  const dictionary = withoutComments(rawDictionary);
+function decoded(dictionary: string, bytes: Buffer, file: Buffer): string | undefined {
   const filters = filtersOf(dictionary, file);
   if (filters.some((name) => IMAGE_FILTERS.has(name))) return undefined;
   if (/\/Subtype\s*\/Image/.test(dictionary)) return undefined;
@@ -304,7 +330,7 @@ function readContentColours(path: string): ContentColours {
       continue;
     }
     const start = file.subarray(open + 6, open + 8).toString("latin1").startsWith("\r\n") ? open + 8 : open + 7;
-    const dictionary = withoutComments(streamDictionary(file, open));
+    const dictionary = streamKeys(withoutComments(streamDictionary(file, open)));
     const end = streamEnd(file, dictionary, start);
     if (end < 0) return total;
     from = end;
