@@ -354,6 +354,24 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     }
   });
 
+  test("does not read names in PDF comments as filters or image markers", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0.5 g", deflate: true } : p)));
+    const direct = readFileSync(f.pdfPath, "latin1");
+    const variants = [
+      direct.replace("/Filter [/FlateDecode]", "/Filter [/FlateDecode % /DCTDecode\n]"),
+      direct.replace("/Filter [/FlateDecode]", "/Filter 99 0 R").replace("\ntrailer", "\n99 0 obj\n[ /FlateDecode % /DCTDecode\n]\nendobj\ntrailer"),
+      direct.replace("/Filter [/FlateDecode]", "% /Subtype /Image\n/Filter [/FlateDecode]"),
+    ];
+    for (const text of variants) {
+      expect(text).not.toBe(direct);
+      writeFileSync(f.pdfPath, Buffer.from(text, "latin1"));
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
   test("refuses a content filter it cannot decode instead of passing its colour unread", () => {
     const f = book(scratch());
     rewritePdf(f, f.pdfPages);

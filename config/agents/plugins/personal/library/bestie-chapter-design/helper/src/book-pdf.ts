@@ -159,6 +159,18 @@ function colourOperators(content: string): ContentColours {
 const IMAGE_FILTERS = new Set(["DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode"]);
 const FILTER_NAMES: Record<string, string> = { A85: "ASCII85Decode", AHx: "ASCIIHexDecode", Fl: "FlateDecode", LZW: "LZWDecode", RL: "RunLengthDecode" };
 
+/** The text with PDF comments removed, so a name inside a comment is never read as part of a dictionary or array. */
+function withoutComments(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    const c = text[i];
+    const end = c === "%" ? endOfLine(text, i) : c === "(" ? skipLiteral(text, i) : i + 1;
+    if (c !== "%") out += text.slice(i, end);
+    i = end;
+  }
+  return out;
+}
+
 /** Body of indirect object `id generation`, or undefined when the file has no such plain object (for example one packed in an object stream). */
 function objectBody(file: Buffer, id: string, generation: string): string | undefined {
   const text = file.toString("latin1");
@@ -166,7 +178,7 @@ function objectBody(file: Buffer, id: string, generation: string): string | unde
   if (opener === null) return undefined;
   const from = opener.index + opener[0].length;
   const end = text.indexOf("endobj", from);
-  return end < 0 ? undefined : text.slice(from, end);
+  return end < 0 ? undefined : withoutComments(text.slice(from, end));
 }
 
 /** Replaces each indirect reference in `value` by the body of the object it names; one that cannot be read fails closed. */
@@ -246,7 +258,8 @@ function applyFilter(name: string, bytes: Buffer): Buffer {
 }
 
 /** Decoded stream text, or undefined for image data the colour operators do not live in. A filter that cannot be read fails closed. */
-function decoded(dictionary: string, bytes: Buffer, file: Buffer): string | undefined {
+function decoded(rawDictionary: string, bytes: Buffer, file: Buffer): string | undefined {
+  const dictionary = withoutComments(rawDictionary);
   const filters = filtersOf(dictionary, file);
   if (filters.some((name) => IMAGE_FILTERS.has(name))) return undefined;
   if (/\/Subtype\s*\/Image/.test(dictionary)) return undefined;
