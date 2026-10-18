@@ -30,6 +30,11 @@ CLI help for current syntax.
   Stage Manager. It coordinates visible, bounded Cast Members in Herdr for
   exploration and execution. Resolve a missing destination through discovery
   or one target question before dispatch.
+- Use [Talk to Stage Manager](../../config/agents/plugins/my-second-brain-playground/skills/talk-to-stage-manager/SKILL.md)
+  for destination binding, native project messaging, reply correlation and
+  monitoring. Prefer `herdr-projects coordinator --project <repo>` on the
+  selected host and session socket. Desktop is the conversation proxy; the
+  project coordinator owns managed work.
 - Preserve the request's scope when relaying it. A read-only review constrains
   the subject being reviewed; let the Stage Manager answer directly under its
   [request-handling rules](../../config/agents/plugins/my-second-brain-playground/skills/stage-manager/SKILL.md#handle-the-request).
@@ -51,22 +56,25 @@ CLI help for current syntax.
 ## Find a coordinator
 
 - Route requests to talk to, ask, or check a project coordinator through live
-  Herdr discovery, including from a blank Desktop task. Discover running sessions
-  and tab labels first; use Codex history only when explicitly requested or when
-  live discovery cannot locate the target and history is needed for recovery.
+  Herdr discovery, including from a blank Desktop task. Resolve machine, session
+  socket and exact native project key. Sessions share task visibility, but a
+  task's agent stays in its launch session. Use Codex history only when explicitly
+  requested or when live discovery cannot locate the target and recovery needs it.
 - Match approximate project/tab names against live labels. Accept a unique short
   name or first word, such as "ADHD" for "ADHD Development Workflow". If multiple
   destinations fit, ask one short question before sending.
-- Resolve the coordinator within the matched tab using agent identity and recent
-  output. The top-left pane is the expected coordinator location, not proof of
-  ownership; distinguish it from helpers before sending.
-- Retain the selected host, session, tab, pane and agent identity for follow-up
-  requests. Revalidate the selected agent directly before effects. Repeat full
-  discovery only when selection is absent, invalid, moved, replaced or ambiguous.
+- Confirm native project ownership through `coordinator --project <repo> --json`
+  and observed Herdr agent identity. Tab position and labels are candidates,
+  not proof of ownership. Use agent reads for diagnosis or a selected legacy
+  coordinator, not as the normal native messaging interface.
+- Retain the selected host, session socket, launcher and project key, plus the
+  observed pane and agent identity, for follow-up requests. Revalidate native
+  status before effects. Repeat full discovery only when selection is absent,
+  invalid, moved, replaced or ambiguous.
 - Keep a fresh question tied to its fresh answer. Read a baseline before sending;
   verify acknowledgement and a response to that question after submission. A
   matching echoed prompt, queued input, old result or settled earlier turn does
-  not complete the request. Use bounded agent waits and inspect new output rather
+  not complete the request. Use bounded status checks and inspect fresh replies rather
   than repeatedly searching for text already present.
 
 ## Resolve the caller and destination
@@ -76,7 +84,7 @@ CLI help for current syntax.
 - Outside Herdr: discover running sessions with `herdr session list`; select the
   intended session explicitly with `--session`. Discover its workspaces, tabs,
   panes and agents before effects. Do not set `HERDR_ENV=1` to impersonate a pane.
-- For owner-provided external supervision, retain the exact `--session` and
+- For direct Herdr agent/pane supervision, retain the exact `--session` and
   an explicit pane ID or live agent name. The session selects the socket.
   Resolve a missing target with `herdr --session <name> agent list` or
   `herdr --session <name> pane list`. Do not change `HERDR_ENV`, use focus, or
@@ -102,8 +110,10 @@ CLI help for current syntax.
 
 ## Act through existing owners
 
-- Use the agent surface for prompts, identity, reads and waits; the pane surface
-  for ordinary commands and layout. Read command-group help before unfamiliar work.
+- Use Herdr Projects' native project messaging for a managed project's
+  conversation. Reserve the Herdr agent surface for identity, diagnosis and
+  legacy messaging; use the pane surface for ordinary commands and layout.
+  Read command-group help before unfamiliar work.
 - Create requested tabs or workspaces with explicit parent and cwd. Use returned
   pane IDs to start an agent. A tab does not itself start a coordinator.
 - Preserve focus on the external supervision route above. On other routes,
@@ -129,8 +139,9 @@ CLI help for current syntax.
 
 - Recheck the selected agent before sending. Preserve a blocked approval or
   question for Nathan; do not answer it as a transport retry.
-- A successful prompt submission proves delivery to the terminal, not receipt,
-  turn completion or accepted work. Read the target's acknowledgement or result.
+- A successful native `tell` proves queue acceptance; a raw agent prompt proves
+  terminal submission. Neither proves turn completion or accepted work. Read
+  the selected coordinator's fresh acknowledgement and answer.
 - After a timeout or uncertain submission, inspect the same target before retrying
   to avoid duplicate work. A wait on a busy agent may observe its earlier turn.
 - Treat missing output as unknown. Follow the skill's file-handback fallback when
