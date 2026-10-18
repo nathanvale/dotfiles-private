@@ -131,8 +131,9 @@
   exists.
 
 - Use `ghh` for GitHub CLI work.
-- Managed project coordination or Herdr work: read
-  `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
+- Herdr Projects tasks, completion or coordinators; or Herdr sessions,
+  workspaces, tabs, panes or agents: read
+  `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
 - Prior shell activity: when recent terminal state may explain a task, use
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.
 - Accessible email question: read
@@ -153,7 +154,7 @@
 - Sorting a rule into gate, clause, or delete: read
   `$HOME/code/dotfiles/docs/agents/determinism-and-steering.md` first.
 - Code or test authoring, review, execution, coverage, repair or triage: read
-  `$HOME/code/dotfiles/docs/agents/coding-standards.md`. A package's own
+  `$HOME/code/dotfiles/docs/agents/CODING_STANDARDS.md`. A package's own
   `CODING_STANDARDS.md` extends it; neither restates the other.
 - New tool or capability: search current dependencies and existing products
   for an owner before design. Record why reuse does not fit before custom

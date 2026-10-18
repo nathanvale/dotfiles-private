@@ -1,6 +1,6 @@
 # Dotfiles Coding Standards
 
-Code and test rules: [shared coding standards](docs/agents/coding-standards.md).
+Code and test rules: [shared coding standards](docs/agents/CODING_STANDARDS.md).
 
 ## Before editing
 
