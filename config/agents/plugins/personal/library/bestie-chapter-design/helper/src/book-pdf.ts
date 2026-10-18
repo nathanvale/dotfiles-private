@@ -81,7 +81,10 @@ function endOfWord(text: string, from: number): number {
 }
 
 function endOfLine(text: string, from: number): number {
-  for (let i = from; i < text.length; i++) if (text[i] === "\n" || text[i] === "\r") return i + 1;
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === "\r" && text[i + 1] === "\n") return i + 2;
+    if (text[i] === "\n" || text[i] === "\r") return i + 1;
+  }
   return text.length;
 }
 
@@ -215,20 +218,23 @@ function streamKeys(dictionary: string): Map<string, string> {
   return out;
 }
 
-/** Read a classic cross-reference subsection, validating its rows before using an offset. */
-function xrefRows(text: string, from: number, count: number, wanted: number, generation: number): { next: number; position: number | null | undefined } {
+type XrefEntry = { generation: number; position: number | null };
+type XrefIndex = { entries: Map<number, XrefEntry>; next: number | undefined; seen: Set<number> };
+type PdfFile = { bytes: Buffer; text: string; xref?: XrefIndex };
+
+/** Index each xref row once. Newer entries, including free entries, mask older revisions. */
+function xrefRows(text: string, from: number, first: number, count: number, entries: Map<number, XrefEntry>): number {
   if (!Number.isSafeInteger(count) || count > text.length) throw new InputError("PDF cross-reference count is unreadable; colour cannot be checked.");
-  let position: number | null | undefined;
   for (let index = 0; index < count; index++) {
-    const row = /^(\d+)[ \t]+(\d+)[ \t]+([nf])[ \t]*(?:\r\n|\n|\r)/.exec(text.slice(from));
+    const row = /^(\d+)[ \t]+(\d+)[ \t]+([nf])[ \t]*(?:\r\n|\n|\r)/.exec(text.slice(from, endOfLine(text, from)));
     if (row === null) throw new InputError("PDF cross-reference row is unreadable; colour cannot be checked.");
-    if (index === wanted) position = row[3] === "n" && Number(row[2]) === generation ? Number(row[1]) : null;
+    if (!entries.has(first + index)) entries.set(first + index, { generation: Number(row[2]), position: row[3] === "n" ? Number(row[1]) : null });
     from += row[0].length;
   }
-  return { next: from, position };
+  return from;
 }
 
-function xrefOffset(text: string, from: number, id: number, generation: number): { position?: number | null; previous?: number } {
+function xrefTable(text: string, from: number, entries: Map<number, XrefEntry>): number | undefined {
   if (!Number.isSafeInteger(from) || !text.startsWith("xref", from)) throw new InputError("PDF indirect Length needs a readable classic cross-reference table; colour cannot be checked.");
   from += 4;
   for (;;) {
@@ -237,36 +243,38 @@ function xrefOffset(text: string, from: number, id: number, generation: number):
       const start = afterTrivia(text, from + 7);
       const trailer = streamKeys(withoutComments(text.slice(start, valueEnd(text, start))));
       const previous = trailer.get("Prev");
-      return previous !== undefined && /^\d+$/.test(previous) ? { previous: Number(previous) } : {};
+      return previous !== undefined && /^\d+$/.test(previous) ? Number(previous) : undefined;
     }
     const section = /^(\d+)\s+(\d+)\s+/.exec(text.slice(from));
     if (section === null) throw new InputError("PDF cross-reference subsection is unreadable; colour cannot be checked.");
-    const rows = xrefRows(text, from + section[0].length, Number(section[2]), id - Number(section[1]), generation);
-    if (rows.position !== undefined) return { position: rows.position };
-    from = rows.next;
+    from = xrefRows(text, from + section[0].length, Number(section[1]), Number(section[2]), entries);
   }
 }
 
-/** Resolve indirect Length by the actual xref entry, never by header-like text in a string or stream. */
-function objectBody(file: Buffer, id: string, generation: string): string | undefined {
-  const text = file.toString("latin1");
-  const start = /startxref\s+(\d+)\s+%%EOF\s*$/.exec(text);
-  let table = start === null ? undefined : Number(start[1]);
-  const seen = new Set<number>();
-  while (table !== undefined && !seen.has(table)) {
-    seen.add(table);
-    const entry = xrefOffset(text, table, Number(id), Number(generation));
-    if (entry.position !== undefined) {
-      if (entry.position === null) return undefined;
-      const header = new RegExp(`^${id}\\s+${generation}\\s+obj\\b`).exec(text.slice(entry.position));
-      if (header === null) return undefined;
-      const from = afterTrivia(text, entry.position + header[0].length);
-      const end = valueEnd(text, from);
-      return /^endobj\b/.test(text.slice(afterTrivia(text, end))) ? withoutComments(text.slice(from, end)) : undefined;
-    }
-    table = entry.previous;
+/** Cache complete tables on demand; a current entry never needs an older Prev table. */
+function xrefEntry(file: PdfFile, id: number): XrefEntry | undefined {
+  if (file.xref === undefined) {
+    const start = /startxref\s+(\d+)\s+%%EOF\s*$/.exec(file.text);
+    file.xref = { entries: new Map(), next: start === null ? undefined : Number(start[1]), seen: new Set() };
   }
-  return undefined;
+  const index = file.xref;
+  while (!index.entries.has(id) && index.next !== undefined && !index.seen.has(index.next)) {
+    index.seen.add(index.next);
+    index.next = xrefTable(file.text, index.next, index.entries);
+  }
+  return index.entries.get(id);
+}
+
+/** Resolve indirect Length using one per-document xref index and the shared file text. */
+function objectBody(file: PdfFile, id: string, generation: string): string | undefined {
+  const text = file.text;
+  const entry = xrefEntry(file, Number(id));
+  if (entry === undefined || entry.position === null || entry.generation !== Number(generation)) return undefined;
+  const header = new RegExp(`^${id}\\s+${generation}\\s+obj\\b`).exec(text.slice(entry.position));
+  if (header === null) return undefined;
+  const from = afterTrivia(text, entry.position + header[0].length);
+  const end = valueEnd(text, from);
+  return /^endobj\b/.test(text.slice(afterTrivia(text, end))) ? withoutComments(text.slice(from, end)) : undefined;
 }
 
 /** Replaces each indirect reference in `value` by the body of the object it names; one that cannot be read fails closed. */
@@ -386,8 +394,8 @@ function afterTrivia(text: string, from: number): number {
 }
 
 /** Walks plain dictionary objects in file order, cutting streams before tokenizing the next object. */
-function dictionaryObjects(file: Buffer): DictionaryObject[] {
-  const text = file.toString("latin1");
+function dictionaryObjects(file: PdfFile): DictionaryObject[] {
+  const text = file.text;
   const objects: DictionaryObject[] = [];
   let from = 0;
   for (;;) {
@@ -408,7 +416,7 @@ function dictionaryObjects(file: Buffer): DictionaryObject[] {
     const start = from + marker[0].length;
     const end = streamEnd(file, dictionary, start);
     if (end < 0) throw new InputError("PDF stream has no readable end; colour cannot be checked.");
-    objects.push({ body, bytes: file.subarray(start, end), dictionary, key: object.key });
+    objects.push({ body, bytes: file.bytes.subarray(start, end), dictionary, key: object.key });
     from = text.indexOf("endstream", end) + "endstream".length;
   }
 }
@@ -434,7 +442,7 @@ function nonContent(dictionary: Map<string, string>): boolean {
 }
 
 /** Declared /Length of a stream, direct or through an indirect object, or undefined when it cannot be read. */
-function declaredLength(dictionary: Map<string, string>, file: Buffer): number {
+function declaredLength(dictionary: Map<string, string>, file: PdfFile): number {
   const raw = dictionary.get("Length") ?? "";
   const indirect = /^(\d+)\s+(\d+)\s+R$/.exec(raw);
   const value = indirect === null ? raw : objectBody(file, indirect[1] ?? "", indirect[2] ?? "")?.trim();
@@ -443,9 +451,9 @@ function declaredLength(dictionary: Map<string, string>, file: Buffer): number {
 }
 
 /** Stream boundaries require the declared length; unreadable boundaries are never treated as absent colour. */
-function streamEnd(file: Buffer, dictionary: Map<string, string>, start: number): number {
+function streamEnd(file: PdfFile, dictionary: Map<string, string>, start: number): number {
   const length = declaredLength(dictionary, file);
-  const text = file.toString("latin1");
+  const text = file.text;
   const marker = afterTrivia(text, start + length);
   if (/^endstream\b/.test(text.slice(marker)) && /^endobj\b/.test(text.slice(afterTrivia(text, marker + 9)))) return start + length;
   throw new InputError("PDF stream Length does not end at endstream and endobj; colour cannot be checked.");
@@ -458,13 +466,15 @@ function streamEnd(file: Buffer, dictionary: Map<string, string>, start: number)
  * The count is document-wide, not per page; ICC-based operators (sc, scn) are not resolved.
  */
 function readContentColours(path: string): ContentColours {
-  const file = readFileSync(path);
+  const bytes = readFileSync(path);
+  const file: PdfFile = { bytes, text: bytes.toString("latin1") };
   const total: ContentColours = { cmyk: 0, gray: 0, rgb: 0 };
   const objects = dictionaryObjects(file);
   const bodies = new Map(objects.map(object => [object.key, object.body]));
   if (objects.some((object) => pdfName(object.dictionary.get("Type") ?? "") === "/ObjStm")) throw new InputError("PDF object streams hide page Contents membership from this reader; colour cannot be checked.");
   const contentIds = new Set(objects.filter((object) => pdfName(object.dictionary.get("Type") ?? "") === "/Page").flatMap((object) => contentReferences(object.dictionary.get("Contents") ?? "", bodies)));
-  for (const key of contentIds) if (!objects.some((object) => object.key === key && object.bytes !== undefined)) throw new InputError(`PDF page Contents ${key} R is unreadable; colour cannot be checked.`);
+  const streamIds = new Set(objects.filter(object => object.bytes !== undefined).map(object => object.key));
+  for (const key of contentIds) if (!streamIds.has(key)) throw new InputError(`PDF page Contents ${key} R is unreadable; colour cannot be checked.`);
   for (const object of objects) {
     if (object.bytes === undefined) continue;
     const content = contentIds.has(object.key) || pdfName(object.dictionary.get("Subtype") ?? "") === "/Form";

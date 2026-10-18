@@ -542,7 +542,7 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     expect(control.exitCode).toBe(0);
     expect(control.stderr.toString()).toBe("");
     expect(control.stdout.length).toBeGreaterThan(100);
-    for (const mode of ["control", "string", "incremental"]) {
+    for (const mode of ["control", "string", "incremental", "crlf"]) {
       const changed = [...objects];
       changed[index] = original.replace(/\/Length \d+/, `/Length ${lengthId} 0 R`);
       if (mode !== "control") changed[index] = (changed[index] ?? "").replace("<< ", `<< /Foo (\n${lengthId} 0 obj\n${shorter}\nendobj\n) `);
@@ -553,6 +553,11 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
         const previous = /startxref\s+(\d+)/.exec(pdf)?.[1];
         const update = `xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size ${changed.length + 1} /Root 1 0 R /Prev ${previous} >>\nstartxref\n${Buffer.byteLength(pdf, "latin1")}\n%%EOF\n`;
         writeFileSync(f.pdfPath, pdf + update, "latin1");
+      }
+      if (mode === "crlf") {
+        const pdf = readFileSync(f.pdfPath, "latin1");
+        const xref = Number(/startxref\s+(\d+)/.exec(pdf)?.[1]);
+        writeFileSync(f.pdfPath, pdf.slice(0, xref) + pdf.slice(xref).replaceAll("\n", "\r\n"), "latin1");
       }
       f.native.pdf.sha256 = fileSha(f.pdfPath);
       const rendered = render();
@@ -574,6 +579,54 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
       writePdfObjects(f.pdfPath, changed);
       f.native.pdf.sha256 = fileSha(f.pdfPath);
       refused(runBook(f), message ?? "");
+    }
+  });
+
+  test("counts every page-content stream with direct and indirect lengths", () => {
+    for (const indirect of [false, true]) {
+      const f = book(scratch());
+      f.contract.pdf.colourSpaces = ["rgb"];
+      const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(match => match[1] ?? "");
+      const page = objects.findIndex(body => /\/Type \/Page\b/.test(body));
+      expect(page).toBeGreaterThanOrEqual(0);
+      const original = /\/Contents (\d+) 0 R/.exec(objects[page] ?? "")?.[1];
+      expect(original).toBeDefined();
+      const refs: string[] = [];
+      const text = "q 0.5 g 0 0 1 1 re f Q";
+      for (let n = 0; n < 128; n++) {
+        const id = objects.length + 1;
+        refs.push(`${id} 0 R`);
+        objects.push(`<< /Length ${indirect ? `${id + 1} 0 R` : text.length} >>\nstream\n${text}\nendstream`);
+        if (indirect) objects.push(String(text.length));
+      }
+      objects[page] = (objects[page] ?? "").replace(`/Contents ${original} 0 R`, `/Contents [${original} 0 R ${refs.join(" ")}]`);
+      writePdfObjects(f.pdfPath, objects);
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      // Independent oracle: all 128 test-owned streams paint gray once.
+      refused(runBook(f), "paint 128 gray colour operator(s)");
+    }
+  });
+
+  test("does not revive an older Length object masked by a newer xref entry", () => {
+    const f = book(scratch());
+    const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(match => match[1] ?? "");
+    const target = objects.findIndex(body => /\/Length \d+/.test(body));
+    expect(target).toBeGreaterThanOrEqual(0);
+    const length = /\/Length (\d+)/.exec(objects[target] ?? "")?.[1];
+    expect(length).toBeDefined();
+    const id = objects.length + 1;
+    objects[target] = (objects[target] ?? "").replace(/\/Length \d+/, `/Length ${id} 0 R`);
+    objects.push(length ?? "");
+    writePdfObjects(f.pdfPath, objects);
+    const pdf = readFileSync(f.pdfPath, "latin1");
+    const previous = /startxref\s+(\d+)/.exec(pdf)?.[1];
+    const offset = pdf.indexOf(`${id} 0 obj`);
+    expect(offset).toBeGreaterThan(0);
+    for (const row of ["0000000000 00001 f", `${String(offset).padStart(10, "0")} 00001 n`]) {
+      const update = `xref\n${id} 1\n${row} \ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Prev ${previous} >>\nstartxref\n${Buffer.byteLength(pdf, "latin1")}\n%%EOF\n`;
+      writeFileSync(f.pdfPath, pdf + update, "latin1");
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      refused(runBook(f), "stream Length is unreadable");
     }
   });
 
