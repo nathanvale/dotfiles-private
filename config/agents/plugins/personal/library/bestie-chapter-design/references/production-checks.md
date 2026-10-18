@@ -150,12 +150,18 @@ Deterministic, failing the command:
   columns and required frame bounds (card placement) of that family;
 - each story against its selected text, compared exactly (whitespace
   included), plus overset text and declared hidden text;
-- links: status, target digest, effective ppi and profile;
-- required fonts installed, and rendered-glyph evidence for every non-Latin
-  character, emoji joiner and variation selector in a story;
+- the contract's story inventory (an omitted, extra or relocated story fails);
+- links: status, the target hashed on disk, reconciled with the bound art
+  entry of the same id, effective ppi and profile;
+- every inventoried document font installed, the contract's required fonts
+  present, and rendered-glyph evidence for every non-Latin character, emoji
+  joiner and variation selector in a story, accepted only when glyph-tight
+  (`raster-glyph` or `glyph-outline`) and drawn in an installed inventoried
+  font;
 - required folio and metadata fields, native bleed per page;
 - PDF pages equal native pages; TrimBox and BleedBox per side; fonts embedded;
-  image colour space and ppi; story text present in the exported page text;
+  image colour space and ppi; device colour operators in text and vector
+  content (document-wide; ICC-based operators are not resolved); story text present in the exported page text;
   export settings read back against the contract.
 
 The contract, not the helper, owns which pages belong to which family and which
@@ -169,4 +175,6 @@ Not decided by the helper, and always reported open: full-size visual review of
 every page, privacy review and accessibility review. A pass is also never
 native execution, visual acceptance, PDF/X conformance, output-intent or
 profile-embedding proof, or print qualification; poppler cannot read those.
-`pdf-word-box` Unicode evidence is listed for review, never as proof.
+`pdf-word-box` Unicode evidence is refused, never accepted as proof. The
+manifest keeps the observed overrides, fonts, Unicode evidence, links (with
+disk digests), story digests and the digests of both input files.

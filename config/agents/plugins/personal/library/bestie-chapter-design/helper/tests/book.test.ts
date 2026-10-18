@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, run, scratch } from "./fixtures.ts";
 import { BLEED, book, type Fixture, rewritePdf, TRIM } from "./book-fixtures.ts";
@@ -153,10 +154,45 @@ describe.skipIf(!poppler)("book: whole-book evidence", () => {
   test("refuses missing, modified, low-resolution and off-profile links", () => {
     const f = book(scratch());
     Object.assign(f.native.links[0], { effectivePpi: 120, profile: "Adobe RGB", sha256: "f".repeat(64), status: "Modified" });
-    refused(runBook(f), "link art-1 on page 2 is Modified", "not the selected", "under 300", 'profile "Adobe RGB"');
+    refused(runBook(f), "link art-1 on page 2 is Modified", "reports target digest fff", "under 300", 'profile "Adobe RGB"');
+  });
+
+  test("refuses a link whose target is missing or substituted on disk, even when the JSON digests agree", () => {
+    const f = book(scratch());
+    f.native.links[0].path = `${f.dir}/nonexistent-image.png`;
+    refused(runBook(f), "target", "is missing on disk");
     const g = book(scratch());
-    g.native.links[0].sha256 = "";
-    refused(runBook(g), "target", "is missing");
+    writeFileSync(g.native.links[0].path, "substituted bytes");
+    refused(runBook(g), "on disk, not the selected");
+  });
+
+  test("refuses a link that selects bytes the bound art does not carry", () => {
+    const f = book(scratch());
+    f.native.links[0].id = "other-art";
+    refused(runBook(f), "has no bound art entry with id other-art");
+    const g = book(scratch());
+    const other = "9".repeat(64);
+    Object.assign(g.native.links[0], { expectedSha256: other, sha256: other });
+    refused(runBook(g), "but bound art art-1 is");
+  });
+
+  test("refuses an omitted, extra or relocated story against the contract inventory", () => {
+    const f = book(scratch());
+    f.native.stories = [];
+    refused(runBook(f), "story p1:body is in the contract's story inventory but missing from the readback");
+    const g = book(scratch());
+    g.native.stories.push({ expected: "H", hidden: [], key: "p9:extra", pages: [1], text: "H" });
+    refused(runBook(g), "story p9:extra is in the document but not in the contract's story inventory");
+    const h = book(scratch());
+    h.native.stories[0].pages = [2];
+    refused(runBook(h), "story p1:body is on pages 2; the contract lists 1");
+  });
+
+  test("refuses lost paragraph breaks, since the source is compared exactly", () => {
+    const f = book(scratch());
+    f.native.stories[0].expected = "H\rH";
+    f.native.stories[0].text = "H H";
+    refused(runBook(f), "differs from its selected source text at character 1");
   });
 
   test("refuses missing required fields and wrong native bleed", () => {
@@ -166,15 +202,24 @@ describe.skipIf(!poppler)("book: whole-book evidence", () => {
     refused(runBook(f), 'page 2 has no value for field "folio"', "page 3 outside bleed is 3, not 9");
   });
 
-  test("refuses Unicode with no rendered-glyph evidence and flags font-box evidence for review", () => {
+  test("refuses Unicode with no rendered-glyph evidence, and evidence that is not glyph-tight or not in an installed font", () => {
     const f = book(scratch());
     f.native.stories[0].text = "H \u{1F600}";
     f.native.stories[0].expected = "H \u{1F600}";
     refused(runBook(f), "U+1F600 appears in a story with no rendered-glyph evidence");
+    f.native.fonts.push({ installed: true, name: "Apple Color Emoji" });
     f.native.unicode = [{ codepoints: "1F600", font: "Apple Color Emoji", method: "pdf-word-box", rendered: true }];
-    // text is no longer in the PDF, so only the evidence rows change; the review flag is on the failure list.
-    expect(runBook(f).envelope.message).not.toContain("U+1F600 appears in a story");
-    expect(runBook(f).envelope.message).toContain("pdf-word-box, not glyph-tight ink");
+    refused(runBook(f), "used pdf-word-box, which is not glyph-tight ink", "U+1F600 appears in a story with no rendered-glyph evidence");
+    f.native.unicode = [{ codepoints: "1F600", font: "Wrong Font", method: "raster-glyph", rendered: true }];
+    refused(runBook(f), "names font Wrong Font, which is not an installed inventoried font");
+    f.native.unicode = [{ codepoints: "1F600", font: "Apple Color Emoji", method: "raster-glyph", rendered: true }];
+    expect(runBook(f).envelope.message).not.toContain("[unicode]");
+  });
+
+  test("refuses an inventoried document font that is not installed, though the contract does not require it", () => {
+    const f = book(scratch());
+    f.native.fonts.push({ installed: false, name: "Missing Font" });
+    refused(runBook(f), "document font Missing Font is not installed");
   });
 
   test("refuses missing required fonts and a different export setting", () => {
@@ -211,6 +256,44 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     f.native.stories[0].expected = "HH";
     f.native.stories[0].text = "HH";
     refused(runBook(f), "is not all present in the exported PDF pages 1");
+  });
+
+  test("refuses RGB text or vector ink under a CMYK-only contract, and allows it once the contract does", () => {
+    const f = book(scratch());
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "1 0 0 rg" } : p)));
+    f.contract.pdf.colourSpaces = ["rgb"];
+    expect(runBook(f).exitCode).toBe(0);
+    f.contract.pdf.colourSpaces = ["cmyk"];
+    refused(runBook(f), "[pdfContentColour] PDF content streams paint 1 rgb colour operator(s)", "image colour space rgb");
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0 0 0 1 k" } : p)));
+    f.contract.pdf.colourSpaces = ["rgb"];
+    refused(runBook(f), "1 cmyk colour operator(s)");
+  });
+
+  test("reads colour operators from Flate-compressed content streams too", () => {
+    const f = book(scratch());
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 2 ? { ...p, colour: "1 0 0 rg", deflate: true } : p)));
+    f.contract.pdf.colourSpaces = ["cmyk"];
+    refused(runBook(f), "paint 1 rgb colour operator(s)");
+  });
+
+  test("keeps overrides, fonts, Unicode evidence, links and story digests in the manifest, with input digests", () => {
+    const f = book(scratch());
+    f.native.pages[0].items[0].overrides = [{ property: "appliedFont", scope: "character", style: "Emoji", value: "Apple Color Emoji" }];
+    const data = runBook(f).envelope.result.data as {
+      manifest: {
+        fonts: unknown[];
+        inputs: { native: { sha256: string } };
+        links: unknown;
+        pages: { items: { overrides: unknown[] }[]; links: { diskSha256: string }[] }[];
+        stories: { sourceSha256: string }[];
+      };
+    };
+    expect(data.manifest.pages[0]?.items[0]?.overrides).toEqual([{ property: "appliedFont", scope: "character", style: "Emoji", value: "Apple Color Emoji" }]);
+    expect(data.manifest.fonts).toEqual([{ installed: true, name: "Avenir Next" }]);
+    expect(data.manifest.pages[1]?.links[0]?.diskSha256).toBe(f.native.links[0].sha256);
+    expect(data.manifest.stories[0]?.sourceSha256).toHaveLength(64);
+    expect(data.manifest.inputs.native.sha256).toHaveLength(64);
   });
 
   test("refuses image colour space and resolution outside the contract", () => {

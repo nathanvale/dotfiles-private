@@ -115,8 +115,9 @@ file; `--contract` takes the production contract values. Paths are absolute.
   the whole story including overset; `expected` is the selected source text, compared exactly;
   `hidden` lists reasons text is hidden (opaque field, off page, hidden layer).
 - `links`: `{ id, page, path, sha256, expectedSha256, status, effectivePpi,
-  profile }`; an empty `sha256` means the target is missing.
-- Contract: `template` (`path`, pinned `sha256`), `families` as
+  profile }`; `path` is hashed on disk and must equal `expectedSha256`, which
+  must equal the bound `art` entry with the same `id`.
+- Contract: `stories` as `[{ key, pages }]` (the full story inventory), `template` (`path`, pinned `sha256`), `families` as
   `[{ name, margins, columns, frames: [{ label, bounds }] }]`, `pageFamilies` as
   `[{ page, family }]` and `exceptions` as `[{ page, reason }]` (every page
   exactly once), `pageCount`, `firstPageSide`, `tolerance`, `styles`,

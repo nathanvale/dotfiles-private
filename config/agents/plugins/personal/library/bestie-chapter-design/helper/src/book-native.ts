@@ -1,4 +1,4 @@
-import type { BookContract, BookReadback, Edges, PageRecord, Side, StyleInventory } from "./book-input.ts";
+import type { BookContract, BookReadback, Edges, PageRecord, Side, StyleInventory, UnicodeEvidence } from "./book-input.ts";
 import { sha256File } from "./input.ts";
 
 const differs = (a: number, b: number, tolerance: number) => Math.abs(a - b) > tolerance;
@@ -98,8 +98,22 @@ function firstDifference(a: string, b: string): number {
   return length;
 }
 
-function storyIssues(book: BookReadback): string[] {
-  return book.stories.flatMap((story) => {
+function inventoryIssues(book: BookReadback, contract: BookContract): string[] {
+  const issues: string[] = [];
+  const seen = new Set<string>();
+  for (const story of book.stories) {
+    if (seen.has(story.key)) issues.push(`story ${story.key} is read back twice.`);
+    seen.add(story.key);
+    const declared = contract.stories.find((s) => s.key === story.key);
+    if (declared === undefined) issues.push(`story ${story.key} is in the document but not in the contract's story inventory.`);
+    else if (declared.pages.join() !== story.pages.join()) issues.push(`story ${story.key} is on pages ${story.pages.join(",")}; the contract lists ${declared.pages.join(",")}.`);
+  }
+  for (const declared of contract.stories) if (!seen.has(declared.key)) issues.push(`story ${declared.key} is in the contract's story inventory but missing from the readback.`);
+  return issues;
+}
+
+function storyIssues(book: BookReadback, contract: BookContract): string[] {
+  return [...inventoryIssues(book, contract), ...book.stories.flatMap((story) => {
     const issues: string[] = [];
     if (story.text !== story.expected) {
       const at = firstDifference(story.text, story.expected);
@@ -108,7 +122,7 @@ function storyIssues(book: BookReadback): string[] {
     if (story.oversetText.trim()) issues.push(`story ${story.key} is overset: "${story.oversetText.trim().slice(0, 40)}" does not fit.`);
     for (const reason of story.hidden) issues.push(`story ${story.key} has hidden text: ${reason}.`);
     return issues;
-  });
+  })];
 }
 
 function linkIssues(book: BookReadback, contract: BookContract): string[] {
@@ -117,8 +131,13 @@ function linkIssues(book: BookReadback, contract: BookContract): string[] {
     const where = `link ${link.id} on page ${link.page}`;
     const issues: string[] = [];
     if (link.status !== status) issues.push(`${where} is ${link.status}, not ${status}.`);
-    if (link.sha256 === "") issues.push(`${where} target ${link.path} is missing.`);
-    else if (link.sha256 !== link.expectedSha256) issues.push(`${where} target ${link.path} is ${link.sha256}, not the selected ${link.expectedSha256}.`);
+    if (link.sha256 !== link.expectedSha256) issues.push(`${where} reports target digest ${link.sha256 || "none"}, not the selected ${link.expectedSha256}.`);
+    const actual = sha256File(link.path);
+    if (actual === null) issues.push(`${where} target ${link.path} is missing on disk.`);
+    else if (actual !== link.expectedSha256) issues.push(`${where} target ${link.path} is ${actual} on disk, not the selected ${link.expectedSha256}.`);
+    const art = book.art.find((a) => a.id === link.id);
+    if (art === undefined) issues.push(`${where} has no bound art entry with id ${link.id}.`);
+    else if (art.sha256 !== link.expectedSha256) issues.push(`${where} selects ${link.expectedSha256}, but bound art ${art.id} is ${art.sha256}.`);
     if (link.effectivePpi < minPpi) issues.push(`${where} is ${link.effectivePpi} effective ppi, under ${minPpi}.`);
     if (!profiles.includes(link.profile)) issues.push(`${where} profile "${link.profile}" is not one of ${profiles.join(", ")}.`);
     return issues;
@@ -133,20 +152,33 @@ function needsEvidence(char: string): boolean {
   return cp > 0x24f && !(cp >= 0x2000 && cp <= 0x206f);
 }
 
-function unicodeIssues(book: BookReadback): { issues: string[]; review: string[] } {
-  const covered = new Set(book.unicode.filter((u) => u.rendered).flatMap((u) => u.codepoints.split(/\s+/).map((c) => c.toUpperCase())));
+function rejection(book: BookReadback, u: UnicodeEvidence): string {
+  if (!u.rendered) return "was not rendered";
+  if (!GLYPH_TIGHT.includes(u.method)) return `used ${u.method}, which is not glyph-tight ink`;
+  return book.fonts.find((f) => f.name === u.font)?.installed ? "" : `names font ${u.font}, which is not an installed inventoried font`;
+}
+
+/** Evidence counts only when rendered, glyph-tight and drawn in an installed, inventoried font. */
+function unicodeIssues(book: BookReadback): string[] {
+  const rejected: string[] = [];
+  const covered = new Set<string>();
+  for (const u of book.unicode) {
+    const reason = rejection(book, u);
+    if (reason) rejected.push(`Unicode evidence for ${u.codepoints} ${reason}.`);
+    else for (const cp of u.codepoints.split(/\s+/)) covered.add(cp.toUpperCase());
+  }
   const used = new Set(book.stories.flatMap((s) => [...s.text].filter(needsEvidence).map((c) => (c.codePointAt(0) ?? 0).toString(16).toUpperCase())));
-  const issues = [...used].filter((cp) => !covered.has(cp)).map((cp) => `U+${cp} appears in a story with no rendered-glyph evidence.`);
-  const review = book.unicode.filter((u) => u.rendered && !GLYPH_TIGHT.includes(u.method)).map((u) => `Unicode evidence for ${u.codepoints} used ${u.method}, not glyph-tight ink.`);
-  return { issues, review };
+  const missing = [...used].filter((cp) => !covered.has(cp)).map((cp) => `U+${cp} appears in a story with no rendered-glyph evidence.`);
+  return [...rejected, ...missing];
 }
 
 function fontIssues(book: BookReadback, contract: BookContract): string[] {
-  return contract.requiredFonts.flatMap((name) => {
+  const unavailable = book.fonts.filter((f) => !f.installed && !contract.requiredFonts.includes(f.name)).map((f) => `document font ${f.name} is not installed.`);
+  return [...unavailable, ...contract.requiredFonts.flatMap((name) => {
     const font = book.fonts.find((f) => f.name === name);
     if (font === undefined) return [`required font ${name} is not in the font readback.`];
     return font.installed ? [] : [`required font ${name} is not installed.`];
-  });
+  })];
 }
 
 function preflightIssues(book: BookReadback, contract: BookContract): string[] {
@@ -158,9 +190,7 @@ function preflightIssues(book: BookReadback, contract: BookContract): string[] {
 
 /** Deterministic native-side findings, grouped by concern. */
 export function nativeFindings(book: BookReadback, contract: BookContract) {
-  const unicode = unicodeIssues(book);
   return {
-    review: unicode.review,
     sections: {
       binding: bindingIssues(book),
       bleed: book.pages.flatMap((p) => bleedIssues(p, contract)),
@@ -171,9 +201,9 @@ export function nativeFindings(book: BookReadback, contract: BookContract) {
       pages: pageSet(book, contract),
       parity: book.pages.flatMap((p) => parityIssues(p, contract)),
       preflight: preflightIssues(book, contract),
-      stories: storyIssues(book),
+      stories: storyIssues(book, contract),
       styles: styleIssues(book, contract),
-      unicode: unicode.issues,
+      unicode: unicodeIssues(book),
     } satisfies Record<string, string[]>,
   };
 }

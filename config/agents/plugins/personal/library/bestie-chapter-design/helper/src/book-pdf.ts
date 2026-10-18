@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { InputError } from "./input.ts";
 
 export type Box = [number, number, number, number];
@@ -8,7 +9,8 @@ export type PdfPage = {
   images: { colour: string; xPpi: number; yPpi: number }[];
   text: string;
 };
-export type PdfFacts = { pages: number; version: string; tagged: boolean; producer: string; readback: PdfPage[] };
+export type ContentColours = { rgb: number; cmyk: number; gray: number };
+export type PdfFacts = { pages: number; version: string; tagged: boolean; producer: string; contentColours: ContentColours; readback: PdfPage[] };
 
 function tool(name: string, args: string[]): string {
   if (Bun.which(name) === null) throw new InputError(`${name} (poppler) is not installed; PDF facts cannot be read.`);
@@ -55,6 +57,48 @@ function header(info: string, name: string): string {
   return new RegExp(`^${name}:\\s*(.*)$`, "m").exec(info)?.[1]?.trim() ?? "";
 }
 
+const CONTENT_MARK = /(?:^|\s)(?:BT|cm|re|Do|f|S|m)(?:\s|$)/;
+const NUMBER = "-?\\d*\\.?\\d+";
+
+function colourOperators(content: string): ContentColours {
+  const count = (operands: number, ops: string) => content.match(new RegExp(`(?:^|\\s)(?:${NUMBER}\\s+){${operands}}(?:${ops})(?=\\s|$)`, "g"))?.length ?? 0;
+  return { cmyk: count(4, "k|K"), gray: count(1, "g|G"), rgb: count(3, "rg|RG") };
+}
+
+function decoded(bytes: Buffer): string {
+  try {
+    return Buffer.from(Bun.inflateSync(new Uint8Array(bytes))).toString("latin1");
+  } catch {
+    return bytes.toString("latin1");
+  }
+}
+
+/**
+ * Counts device colour operators in every content-like stream of the file.
+ * Poppler lists only images, so text and vector ink would otherwise go unread.
+ * The count is document-wide, not per page; ICC-based operators (sc, scn) are not resolved.
+ */
+function readContentColours(path: string): ContentColours {
+  const file = readFileSync(path);
+  const total: ContentColours = { cmyk: 0, gray: 0, rgb: 0 };
+  let from = 0;
+  for (;;) {
+    const open = file.indexOf("stream", from, "latin1");
+    if (open < 0) return total;
+    const close = file.indexOf("endstream", open + 6, "latin1");
+    if (close < 0) return total;
+    from = close + 9;
+    if (file.subarray(open - 3, open).toString("latin1") === "end") continue;
+    const start = file.subarray(open + 6, open + 8).toString("latin1").startsWith("\r\n") ? open + 8 : open + 7;
+    const content = decoded(file.subarray(start, close));
+    if (!CONTENT_MARK.test(content)) continue;
+    const found = colourOperators(content);
+    total.cmyk += found.cmyk;
+    total.gray += found.gray;
+    total.rgb += found.rgb;
+  }
+}
+
 /** Reads page count, boxes, fonts, image colour/PPI and text via poppler. */
 export function readPdf(path: string): PdfFacts {
   const first = tool("pdfinfo", [path]);
@@ -73,5 +117,5 @@ export function readPdf(path: string): PdfFacts {
       text: tool("pdftotext", [...range, "-layout", path, "-"]),
     };
   });
-  return { pages, producer: header(first, "Producer"), readback, tagged: header(first, "Tagged") === "yes", version: header(first, "PDF version") };
+  return { contentColours: readContentColours(path), pages, producer: header(first, "Producer"), readback, tagged: header(first, "Tagged") === "yes", version: header(first, "PDF version") };
 }

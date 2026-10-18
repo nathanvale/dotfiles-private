@@ -45,6 +45,13 @@ function imageIssues(pdf: PdfFacts, contract: BookContract): string[] {
   );
 }
 
+function contentColourIssues(pdf: PdfFacts, contract: BookContract): string[] {
+  const { colourSpaces } = contract.pdf;
+  return (["rgb", "cmyk", "gray"] as const)
+    .filter((space) => pdf.contentColours[space] > 0 && !colourSpaces.includes(space))
+    .map((space) => `PDF content streams paint ${pdf.contentColours[space]} ${space} colour operator(s), but the contract allows ${colourSpaces.join(", ")}.`);
+}
+
 function exportIssues(book: BookReadback, contract: BookContract): string[] {
   return Object.entries(contract.pdf.exportSettings).flatMap(([key, expected]) => {
     const actual = book.exportSettings[key];
@@ -70,6 +77,7 @@ export function pdfFindings(pdf: PdfFacts, book: BookReadback, contract: BookCon
   const pageParity = pdf.pages === book.pageCount ? [] : [`PDF has ${pdf.pages} pages; the native book has ${book.pageCount}.`];
   return {
     pdfBoxes: pageBoxIssues(pdf, book, contract),
+    pdfContentColour: contentColourIssues(pdf, contract),
     pdfExport: exportIssues(book, contract),
     pdfFonts: fontIssues(pdf, contract),
     pdfImages: imageIssues(pdf, contract),

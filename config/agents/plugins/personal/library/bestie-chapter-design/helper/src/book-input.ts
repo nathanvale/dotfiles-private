@@ -81,6 +81,7 @@ export type BookReadback = {
 };
 
 export type BookContract = {
+  stories: { key: string; pages: number[] }[];
   template: Template;
   families: Family[];
   pageFamilies: { page: number; family: string }[];
@@ -305,6 +306,10 @@ function contractPdf(value: unknown, where: string): BookContract["pdf"] {
 export function readBookContract(path: string): BookContract {
   const root = record(readJson(path), path);
   return {
+    stories: mapList(root.stories, `${path}.stories`, (v, w) => {
+      const item = record(v, w);
+      return { key: text(item.key, `${w}.key`), pages: mapList(item.pages, `${w}.pages`, integer) };
+    }),
     exceptions: mapList(root.exceptions, `${path}.exceptions`, (v, w) => {
       const item = record(v, w);
       return { page: integer(item.page, `${w}.page`), reason: text(item.reason, `${w}.reason`) };

@@ -4,7 +4,7 @@ import { nativeFindings } from "./book-native.ts";
 import { familyCoverage, templateFindings } from "./book-template.ts";
 import { type PdfFacts, readPdf } from "./book-pdf.ts";
 import { pdfFindings } from "./book-pdf-checks.ts";
-import { InputError, sha256File } from "./input.ts";
+import { InputError, sha256File, sha256Text } from "./input.ts";
 
 /** Reviews no helper can pass; always open on a deterministic pass. */
 const HUMAN_REVIEW = [
@@ -16,8 +16,9 @@ const HUMAN_REVIEW = [
 /** Qualifications this helper never grants. */
 const NOT_QUALIFIED = ["native-execution", "visual-acceptance", "print-qualification", "pdf-x-conformance", "output-intent-and-profile-embedding"] as const;
 
-function manifest(book: BookReadback, contract: BookContract, pdf: PdfFacts) {
+function manifest(book: BookReadback, contract: BookContract, pdf: PdfFacts, inputs: Record<string, { path: string; sha256: string | null }>) {
   return {
+    inputs,
     art: book.art,
     book: book.book,
     coverage: familyCoverage(contract),
@@ -32,8 +33,8 @@ function manifest(book: BookReadback, contract: BookContract, pdf: PdfFacts) {
         family: page.family,
         margins: page.margins,
         fields: page.fields,
-        items: page.items.map((item) => ({ bounds: item.bounds, kind: item.kind, label: item.label, overrides: item.overrides.length, style: item.style })),
-        links: book.links.filter((l) => l.page === page.page).map((l) => ({ effectivePpi: l.effectivePpi, id: l.id, profile: l.profile, status: l.status })),
+        items: page.items.map((item) => ({ bounds: item.bounds, kind: item.kind, label: item.label, overrides: item.overrides, style: item.style })),
+        links: book.links.filter((l) => l.page === page.page).map((l) => ({ ...l, diskSha256: sha256File(l.path) })),
         page: page.page,
         parent: page.parent,
         pdf: facts && {
@@ -44,19 +45,21 @@ function manifest(book: BookReadback, contract: BookContract, pdf: PdfFacts) {
         side: page.side,
       };
     }),
-    pdf: { ...book.pdf, pages: pdf.pages, producer: pdf.producer, tagged: pdf.tagged, version: pdf.version },
+    pdf: { ...book.pdf, contentColours: pdf.contentColours, pages: pdf.pages, producer: pdf.producer, tagged: pdf.tagged, version: pdf.version },
     preflight: book.preflight,
     revision: book.revision,
     sourceRevision: book.sourceRevision,
     template: book.template,
-    stories: book.stories.map((s) => ({ key: s.key, pages: s.pages })),
+    fonts: book.fonts,
+    unicode: book.unicode,
+    stories: book.stories.map((s) => ({ hidden: s.hidden, key: s.key, oversetSha256: sha256Text(s.oversetText), pages: s.pages, sourceSha256: sha256Text(s.expected), textSha256: sha256Text(s.text) })),
     styles: book.styles,
   };
 }
 
 function sections(book: BookReadback, contract: BookContract, pdf: PdfFacts) {
   const native = nativeFindings(book, contract);
-  return { review: native.review, sections: { ...native.sections, ...templateFindings(book, contract), ...pdfFindings(pdf, book, contract) } };
+  return { sections: { ...native.sections, ...templateFindings(book, contract), ...pdfFindings(pdf, book, contract) } };
 }
 
 function pdfOrRefusal(book: BookReadback): PdfFacts | string {
@@ -84,13 +87,11 @@ export function checkBook(nativePath: string, contractPath: string): CheckResult
     {
       deterministic: Object.fromEntries(Object.entries(found.sections).map(([name, list]) => [name, { issues: list.length, status: "pass" }])),
       humanReview: HUMAN_REVIEW.map((item) => ({ ...item, status: "open" })),
-      manifest: manifest(book, contract, pdf),
+      manifest: manifest(book, contract, pdf, { contract: { path: contractPath, sha256: sha256File(contractPath) }, native: { path: nativePath, sha256: sha256File(nativePath) } }),
       notQualified: NOT_QUALIFIED,
-      reviewFlags: found.review,
     },
     "Whole-book deterministic evidence passes; full-size visual, privacy and accessibility review remain open and nothing is qualified.",
     "Whole-book evidence has deterministic failures.",
     "Repair the listed findings in a separately versioned candidate, re-export, rebind the readback and rerun book.",
-    found.review,
   );
 }

@@ -10,7 +10,7 @@ export const CONTRACT_BLEED = { bottom: BLEED, inside: BLEED, outside: BLEED, to
 const LEFT_TRANSFORM = [1, 0, 0, 1, 0, 0];
 const RIGHT_TRANSFORM = [1, 0, 0, 1, 318, 0];
 
-export type PdfPageSpec = { text: string; image: boolean; trimBox?: number[]; bleedBox?: number[] };
+export type PdfPageSpec = { text: string; image: boolean; colour?: string; deflate?: boolean; trimBox?: number[]; bleedBox?: number[] };
 
 function pdfObjects(pages: PdfPageSpec[]): string[] {
   const objects: string[] = [];
@@ -27,8 +27,9 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
   const kids: number[] = [];
   const pageBodies: string[] = [];
   const streams: Buffer[] = [];
+  const filtered = new Set<number>();
   for (const spec of pages) {
-    const content = `q 7.2 0 0 7.2 50 50 cm /Im1 Do Q ${spec.image ? "" : ""}BT /F1 12 Tf 20 200 Td (${spec.text}) Tj ET`;
+    const content = `q 7.2 0 0 7.2 50 50 cm /Im1 Do Q ${spec.colour ?? ""} BT /F1 12 Tf 20 200 Td (${spec.text}) Tj ET`;
     const contentId = add("");
     const pageId = add("");
     kids.push(pageId);
@@ -37,7 +38,8 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
     pageBodies[pageId - 1] =
       `<< /Type /Page /Parent ${tree} 0 R /MediaBox [0 0 ${TRIM.width + 2 * BLEED} ${TRIM.height + 2 * BLEED}] /TrimBox [${trim.join(" ")}] /BleedBox [${bleed.join(" ")}] ` +
       `/Resources << /Font << /F1 ${font} 0 R >> /XObject << /Im1 ${image} 0 R >> >> /Contents ${contentId} 0 R >>`;
-    streams[contentId - 1] = Buffer.from(content, "latin1");
+    streams[contentId - 1] = spec.deflate ? Buffer.from(Bun.deflateSync(new TextEncoder().encode(content))) : Buffer.from(content, "latin1");
+    if (spec.deflate) filtered.add(contentId - 1);
   }
   objects[catalog - 1] = `<< /Type /Catalog /Pages ${tree} 0 R >>`;
   objects[tree - 1] = `<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(" ")}] /Count ${kids.length} >>`;
@@ -50,7 +52,7 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
   return objects.map((body, index) => {
     const stream = streams[index];
     if (stream === undefined) return body;
-    const dict = body === "" ? `<< /Length ${stream.length} >>` : body;
+    const dict = body === "" ? `<< ${filtered.has(index) ? "/Filter /FlateDecode " : ""}/Length ${stream.length} >>` : body;
     return `${dict}\nstream\n${stream.toString("latin1")}\nendstream`;
   });
 }
@@ -113,6 +115,7 @@ export function book(dir: string): Fixture {
   }));
   const fixture: Fixture = {
     contract: {
+      stories: [{ key: "p1:body", pages: [1] }],
       exceptions: [{ page: 3, reason: "source-specific page kept on its own layout" }],
       families: [
         { columns, frames: [{ bounds: FRAMES[0], label: "body" }], margins, name: "Card-A" },
