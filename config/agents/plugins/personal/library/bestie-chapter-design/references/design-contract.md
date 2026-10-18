@@ -11,11 +11,27 @@ content; this file owns only how to find and trust it.
    `projects/melanie-fourth-anniversary-meme-album/` (`README.md`, `GOAL.md`).
    Look for the design owner there. Do not assume a fixed path or that the
    packet names one; a machine may hold the packet without that file.
-2. When the file is absent, follow the Bestie project memory route:
-   `MEMORY.md`, then `memory/reference/README.md` (Herdr project `bestie-book`).
-   That index names the snapshot location and its verification boundary. Read
-   it each time. Mini paths, hashes and revisions are mutable state: take them
-   from the live owner, never from this skill or an earlier session.
+2. When the file is absent, read the current canonical source from the
+   MacBook before any snapshot. Follow the Bestie project memory route
+   (`MEMORY.md`, then `memory/preferences.md` and `memory/reference/README.md`,
+   Herdr project `bestie-book`):
+   - `preferences.md` names the SSH alias for scoped MacBook source reads. Use
+     it as written and check reachability now; a sandbox denial does not prove
+     the host is offline.
+   - The reference index and its receipt name the canonical packet and design
+     owner path on the MacBook. Take the path from there; never from this skill
+     or an earlier session.
+   - Read it read-only (no writes, no checkout changes):
+
+     ```sh
+     ssh <alias> 'cd <packet repo> && git rev-parse HEAD && git status --short \
+       && git log -1 --format=%H -- <design owner> && shasum -a 256 <design owner>'
+     ssh <alias> 'cat <design owner>'
+     ```
+
+   A successful read is the **current canonical source** (see below). Use the
+   dated snapshot only when this route cannot be reached or the owner is absent
+   there; then continue with step 3 and its qualification limits.
 3. Find the owning receipt, durable record first:
    - **Durable.** The project memory index (step 2), or a note it links, may
      record the receipt: snapshot path, sha256, canonical source path and
@@ -44,9 +60,10 @@ content; this file owns only how to find and trust it.
 
 Record which one you used:
 
-- **Current canonical source.** The packet's design owner, read now, with its
-  path, revision (commit or digest) and the time read.
-- **Verified dated snapshot.** Only when the canonical file is absent. It needs
+- **Current canonical source.** The packet's design owner, read now (locally or
+  over the MacBook route), with its path, revision (commit or digest), sha256
+  and the time read.
+- **Verified dated snapshot.** Only when no canonical source can be read. It needs
   all of: the date and source revision in its name or header; a content hash
   you recompute with `shasum -a 256`; and an owning receipt (step 3) that records
   that same hash and names the canonical source it came from. A dated copy found
