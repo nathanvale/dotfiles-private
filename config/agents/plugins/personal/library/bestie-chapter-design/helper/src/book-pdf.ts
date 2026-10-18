@@ -159,10 +159,33 @@ function colourOperators(content: string): ContentColours {
 const IMAGE_FILTERS = new Set(["DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode"]);
 const FILTER_NAMES: Record<string, string> = { A85: "ASCII85Decode", AHx: "ASCIIHexDecode", Fl: "FlateDecode", LZW: "LZWDecode", RL: "RunLengthDecode" };
 
-/** Filter names of a stream dictionary, in application order, with abbreviations expanded. */
-function filtersOf(dictionary: string): string[] {
-  const value = /\/(?:Filter|F)\s*(\[[^\]]*\]|\/[^\s/<>[\]()]+)/.exec(dictionary)?.[1] ?? "";
-  return [...value.matchAll(/\/([^\s/<>[\]()]+)/g)].map((m) => FILTER_NAMES[m[1] ?? ""] ?? m[1] ?? "");
+/** Body of indirect object `id generation`, or undefined when the file has no such plain object (for example one packed in an object stream). */
+function objectBody(file: Buffer, id: string, generation: string): string | undefined {
+  const text = file.toString("latin1");
+  const opener = new RegExp(`(?:^|[\\r\\n ])${id}\\s+${generation}\\s+obj\\b`).exec(text);
+  if (opener === null) return undefined;
+  const from = opener.index + opener[0].length;
+  const end = text.indexOf("endobj", from);
+  return end < 0 ? undefined : text.slice(from, end);
+}
+
+/** Replaces each indirect reference in `value` by the body of the object it names; one that cannot be read fails closed. */
+function resolveReferences(value: string, file: Buffer, depth = 0): string {
+  return value.replace(/(\d+)\s+(\d+)\s+R\b/g, (_, id: string, generation: string) => {
+    const body = depth > 4 ? undefined : objectBody(file, id, generation);
+    if (body === undefined) throw new InputError(`PDF object ${id} ${generation} R names a stream filter but is not readable, so the stream's colour operators cannot be checked.`);
+    return resolveReferences(body, file, depth + 1);
+  });
+}
+
+/** Filter names of a stream dictionary, in application order, with abbreviations expanded and indirect values followed. */
+function filtersOf(dictionary: string, file: Buffer): string[] {
+  const value = /\/(?:Filter|F)\s*(\[[^\]]*\]|\/[^\s/<>[\]()]+|\d+\s+\d+\s+R)/.exec(dictionary)?.[1];
+  if (value === undefined) {
+    if (/\/Filter\b/.test(dictionary)) throw new InputError("PDF stream has a /Filter this reader cannot parse, so its colour operators cannot be checked.");
+    return [];
+  }
+  return [...resolveReferences(value, file).matchAll(/\/([^\s/<>[\]()]+)/g)].map((m) => FILTER_NAMES[m[1] ?? ""] ?? m[1] ?? "");
 }
 
 function ascii85(text: string): Buffer {
@@ -223,8 +246,8 @@ function applyFilter(name: string, bytes: Buffer): Buffer {
 }
 
 /** Decoded stream text, or undefined for image data the colour operators do not live in. A filter that cannot be read fails closed. */
-function decoded(dictionary: string, bytes: Buffer): string | undefined {
-  const filters = filtersOf(dictionary);
+function decoded(dictionary: string, bytes: Buffer, file: Buffer): string | undefined {
+  const filters = filtersOf(dictionary, file);
   if (filters.some((name) => IMAGE_FILTERS.has(name))) return undefined;
   if (/\/Subtype\s*\/Image/.test(dictionary)) return undefined;
   try {
@@ -257,7 +280,7 @@ function readContentColours(path: string): ContentColours {
     from = close + 9;
     if (file.subarray(open - 3, open).toString("latin1") === "end") continue;
     const start = file.subarray(open + 6, open + 8).toString("latin1").startsWith("\r\n") ? open + 8 : open + 7;
-    const content = decoded(streamDictionary(file, open), file.subarray(start, close));
+    const content = decoded(streamDictionary(file, open), file.subarray(start, close), file);
     if (content === undefined || !isContent(content)) continue;
     const found = colourOperators(content);
     total.cmyk += found.cmyk;

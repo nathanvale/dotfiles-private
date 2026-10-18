@@ -336,6 +336,24 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     }
   });
 
+  test("follows an indirect Filter value, and refuses one it cannot find", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0.5 g", deflate: true } : p)));
+    const direct = readFileSync(f.pdfPath, "latin1");
+    expect(direct).toContain("/Filter [/FlateDecode]");
+    const cases: [string, string][] = [
+      ["99", "paint 1 gray colour operator(s)"],
+      ["98", "99 0 R names a stream filter"],
+    ];
+    for (const [id, expected] of cases) {
+      const text = direct.replace("/Filter [/FlateDecode]", "/Filter 99 0 R").replace("\ntrailer", `\n${id} 0 obj\n[/FlateDecode]\nendobj\ntrailer`);
+      writeFileSync(f.pdfPath, Buffer.from(text, "latin1"));
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      refused(runBook(f), expected);
+    }
+  });
+
   test("refuses a content filter it cannot decode instead of passing its colour unread", () => {
     const f = book(scratch());
     rewritePdf(f, f.pdfPages);
