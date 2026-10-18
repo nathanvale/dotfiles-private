@@ -4,15 +4,16 @@ This plugin owns Nathan's personal skills. Edit here; refresh through each
 Harness's native plugin commands. Matt Pocock skills are managed separately
 with `npx skills`.
 
-Bitbucket belongs to Monash Tools and is absent from this personal plugin.
-Merge and activate the Monash replacement before refreshing this personal
-candidate.
+Bitbucket belongs to Monash Tools, its source of truth: the `bitbucket` skill
+at `plugins/monash-tools/skills/bitbucket/` in `nathanvale/monash-plugins`.
+This plugin no longer ships it. Activate Monash Tools before refreshing this
+plugin, so the Bitbucket route stays available.
 
 ```text
 personal/
   .claude-plugin/plugin.json   # Claude's enabled directories.
   .codex-plugin/plugin.json    # Codex selects library/.
-  library/<skill>/            # 38 skill trees, including existing workflows.
+  library/<skill>/            # 40 skill trees, including existing workflows.
   optional/fix-microphone/    # Claude enabled; Codex disabled.
 ```
 
