@@ -1,60 +1,56 @@
 # Design contract resolution
 
-Resolve the Bestie design contract through this route before any chapter build,
-revision, template work or consistency review. Both `bestie-chapter-design` and
-`kate-berry-creative-director` use it. The packet owns the contract's content;
-this file owns only how to find and trust it.
+Use this route to find and trust the Bestie design contract before any chapter
+build, revision, template work or consistency review. `bestie-chapter-design`
+and `kate-berry-creative-director` both use it. The packet owns the contract's
+content; this file owns only how to find and trust it.
 
-## Find the packet
+## Find the owner
 
-1. Read `~/.config/context/vault.md`, then the vault root instructions and the
-   `projects/melanie-fourth-anniversary-meme-album/` packet `README.md` and
-   `GOAL.md`. Follow the packet's own pointers to its design owner. Never
-   assume a fixed vault path or that `design-system.md` exists locally.
-2. Use the design owner the packet names. Today that is `design-system.md`.
-   Check the live packet, not a remembered path or a prior session's copy.
+1. Read `~/.config/context/vault.md`, then the canonical packet
+   `projects/melanie-fourth-anniversary-meme-album/` (`README.md`, `GOAL.md`).
+   Look for the design owner there. Do not assume a fixed path, or that the
+   packet names one: on the Mini it currently has no `design-system.md` and no
+   pointer to it.
+2. When the packet has no design owner, follow the Bestie project memory route:
+   `MEMORY.md`, then `memory/reference/README.md` (from the Herdr project root
+   `bestie-book`). That index names the snapshot location and its verification
+   boundary. Read it each time; do not copy its paths here or from an earlier
+   session.
 
 ## Accept one source
 
-Accept exactly one of these, and record which in the handback:
+Record which one you used:
 
-- **Current canonical source.** The packet's design owner, read now. Record its
+- **Current canonical source.** The packet's design owner, read now, with its
   path, revision (commit or digest) and the time read.
-- **Verified dated snapshot.** Use only when the canonical file is absent or
-  unreadable on this machine. It must have all of:
-  - a date and the canonical revision it was taken from;
-  - a content hash that you recompute and match against the recorded hash;
-  - an owning receipt, written by the packet's design owner, that names the
-    snapshot and its hash.
+- **Verified dated snapshot.** Only when the canonical file is absent. It needs
+  all of: the date and source revision in its name or header; a content hash
+  you recompute with `shasum -a 256`; and an owning receipt, named by the memory
+  index or a fresh source handoff, that records that hash. A snapshot is not
+  automatically current. A dated copy found anywhere else (worktree, cache,
+  handoff, chat) is context, not authority.
 
-  A snapshot missing any part is unverified. A copy found in a worktree, cache,
-  handoff or chat is context, not authority.
-
-Neither source available: stop the layout decision. Report the missing owner
-and what you tried, and keep to work the contract does not govern (source
-copy checks, read-only inspection). Never rebuild the contract from memory,
-exemplar pixels or this skill's prose.
+A snapshot missing the receipt, or whose hash differs, is unverified: request a
+fresh source handoff. Never invent a receipt, infer authority from a filename, or
+rebuild the contract from memory or exemplar pixels. With no verified source,
+stop layout decisions and keep to read-only inspection and copy checks.
 
 ## Surface uncertainty first
 
-Before a new layout decision, tell Nathan which source you resolved and any
-doubt: stale or unverified snapshot, revision mismatch with the packet,
-conflicting owners, or a missing proof. Ask one grounded question when the
-doubt could change the layout. Carry a settled choice forward without asking.
+Before a new layout decision, say which source you resolved and any doubt:
+unverified or stale snapshot, revision mismatch, conflicting owners, missing
+proof. Ask one grounded question when the doubt could change the layout. Carry
+settled choices forward.
 
-## Keep these bindings exact
+## Then work from the owners
 
-- Copy: use the selected blocks from their copy owner, verbatim.
-- Artwork: use the accepted version and its recorded hash; keep revisions and
-  originals separate.
-- Status: label every choice accepted, proposed or unresolved. A proposed
-  layout never becomes accepted by being used.
-- Style provenance: read paragraph, character, object and parent styles from the
-  native document (actual ranges, overrides and applied parents), then compare
-  them with the contract. A style name, an installed font or the snapshot's
-  description alone does not prove what a page uses.
+Copy and artwork bindings, accepted-versus-proposed status and native style
+provenance stay with their existing owners:
+[the chapter workflow](../SKILL.md) and [production checks](production-checks.md).
+Do not restate them here.
 
 ## Hand back
 
-Name the contract source (canonical or snapshot), its revision or hash and, for
-a snapshot, the receipt. Record deviations and unresolved uncertainty.
+Name the contract source (canonical revision, or snapshot path, hash and
+receipt), and any deviation or unresolved uncertainty.

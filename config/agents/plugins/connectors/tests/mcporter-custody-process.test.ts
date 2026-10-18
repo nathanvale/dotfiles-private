@@ -31,12 +31,16 @@ const LIVE_NOTARIZATION = ["/usr/bin/codesign", "--verify", "--strict", "--check
 // on hosted runners (exit 3, indistinguishable from the denied sandbox's exit).
 // Retry the unsandboxed control only; the denied control below is never retried,
 // so a pass still proves the sandbox denies what the pinned bytes otherwise pass.
-async function liveNotarizationPasses(binary: string, attempts = 6, delayMs = 5000) {
-	for (let attempt = 1; attempt <= attempts; attempt++) {
-		if (Bun.spawnSync([...LIVE_NOTARIZATION, binary], { stdout: "ignore", stderr: "ignore" }).exitCode === 0) return true;
-		if (attempt < attempts) await Bun.sleep(delayMs);
+// Each probe is killed after probeTimeoutMs and the whole loop stops at budgetMs,
+// so an unreachable service fails well inside the test timeout.
+async function liveNotarizationPasses(binary: string, budgetMs = 60000, probeTimeoutMs = 15000, delayMs = 5000) {
+	const deadline = Date.now() + budgetMs;
+	for (;;) {
+		const probe = Bun.spawnSync([...LIVE_NOTARIZATION, binary], { stdout: "ignore", stderr: "ignore", timeout: probeTimeoutMs });
+		if (probe.exitCode === 0) return true;
+		if (Date.now() + delayMs + probeTimeoutMs > deadline) return false;
+		await Bun.sleep(delayMs);
 	}
-	return false;
 }
 
 async function runSyspolicyDenied(bundle: ReturnType<typeof createBundle>, argv: string[], env: BundleRun & { binDir: string }, profile = SYSPOLICY_DENIED) {
