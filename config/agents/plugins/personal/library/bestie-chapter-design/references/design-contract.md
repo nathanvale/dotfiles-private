@@ -47,12 +47,21 @@ Record which one you used:
 A verified snapshot is authority as of the receipt, not proof of the current
 canonical file. Say so: report the receipt's recorded source revision, and
 treat the snapshot as current only if fresh foreground evidence confirms the
-canonical file's hash is unchanged. Accept that evidence only as a newer
-coordinator entry found the same way (full `.said` with the canonical path,
-revision, last file-changing commit and hash) or a direct reply from Nathan. A
-claim you cannot resolve to such an entry stays unconfirmed. When currency is
-unconfirmed, a settled choice may continue; ask before a new layout decision
-the later canonical revisions could change.
+canonical file's hash is unchanged. Look for that evidence in a second public
+lookup, the default (machine) coordinator, which is a different record from the
+project's:
+
+```sh
+herdr-projects coordinator where --json
+```
+
+Select `.where[]` by full `id`. Accept an entry only when its full `.said` gives
+the canonical path, the observed revision, the last file-changing commit and a
+sha256, and that sha256 equals the one you recomputed for the snapshot. A direct
+reply from Nathan also counts. A claim you cannot resolve to such an entry, or a
+differing hash, stays unconfirmed. When currency is unconfirmed, a settled choice
+may continue; ask before a new layout decision the later canonical revisions
+could change.
 
 A snapshot with no matching receipt, or a hash that differs, is unverified:
 request a fresh source handoff. Never invent a receipt, infer authority from a
