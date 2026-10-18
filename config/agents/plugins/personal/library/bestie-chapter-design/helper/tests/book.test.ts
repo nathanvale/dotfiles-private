@@ -433,6 +433,18 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     refused(runBook(f), "paint 1 cmyk colour operator(s)");
   });
 
+  test("reads escaped PDF filter names and keys", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0.5 g", deflate: true } : p)));
+    const direct = readFileSync(f.pdfPath, "latin1");
+    for (const filter of ["/F#69lter [/FlateDecode]", "/Filter [/Fl#61teDecode]"]) {
+      writeFileSync(f.pdfPath, direct.replace("/Filter [/FlateDecode]", filter), "latin1");
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
   test("counts content despite nested resource metadata and literal strings", () => {
     const f = book(scratch());
     f.contract.pdf.colourSpaces = ["rgb"];
@@ -441,6 +453,8 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
       "/Type /XObject /Subtype /Form /Resources << /XObject << /Im << /Subtype /Image /Filter /DCTDecode >> >> >>",
       "/Foo (/Type /XRef /Subtype /Image /Filter /DCTDecode)",
       "/Foo <2f54797065202f58526566>",
+      "/Foo [/Subtype /Image]",
+      "/Foo [/Filter /DCTDecode]",
     ];
     for (const dict of dictionaries) {
       rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, extra: { content: "0.5 g", dict } } : p)));

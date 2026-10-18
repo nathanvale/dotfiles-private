@@ -164,29 +164,50 @@ function withoutComments(text: string): string {
   return out;
 }
 
-/** Stream keys only: resource dictionaries and string values cannot classify their enclosing stream. */
+function pdfName(name: string): string {
+  return name.replace(/#([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+/** End of one PDF value, including nested containers and indirect references. */
+function valueEnd(text: string, from: number): number {
+  if (text[from] === "(") return skipLiteral(text, from);
+  if (text[from] === "<" && text[from + 1] !== "<") return endOfAngle(text, from);
+  const close = text.startsWith("<<", from) ? ">>" : text[from] === "[" ? "]" : undefined;
+  if (close === undefined) {
+    const reference = /^\d+\s+\d+\s+R\b/.exec(text.slice(from));
+    return reference === null ? endOfWord(text, from + (text[from] === "/" ? 1 : 0)) : from + reference[0].length;
+  }
+  return containerEnd(text, from, close);
+}
+
+function containerEnd(text: string, from: number, close: string): number {
+  let at = from + (close === ">>" ? 2 : 1);
+  while (at < text.length && !text.startsWith(close, at)) {
+    if (isSpace(text[at] ?? "")) at++;
+    else {
+      const next = valueEnd(text, at);
+      at = Math.max(next, at + 1);
+    }
+  }
+  return at + close.length;
+}
+
+/** Only actual stream keys classify it; resource values and strings are never keys. */
 function streamKeys(dictionary: string): string {
   let out = "";
-  let depth = 0;
-  for (let i = 0; i < dictionary.length; ) {
-    if (dictionary[i] === "(") {
-      i = skipLiteral(dictionary, i);
-      out += " ";
-    } else if (dictionary.startsWith("<<", i)) {
-      depth++;
-      i += 2;
-      out += " ";
-    } else if (dictionary.startsWith(">>", i)) {
-      depth--;
-      i += 2;
-      out += " ";
-    } else if (dictionary[i] === "<") {
-      i = endOfAngle(dictionary, i);
-      out += " ";
-    } else {
-      if (depth === 1) out += dictionary[i];
-      i++;
-    }
+  let at = dictionary.indexOf("<<") + 2;
+  while (at < dictionary.length && !dictionary.startsWith(">>", at)) {
+    if (isSpace(dictionary[at] ?? "")) { at++; continue; }
+    if (dictionary[at] !== "/") throw new InputError("PDF stream dictionary has an unreadable key; colour cannot be checked.");
+    const end = endOfWord(dictionary, at + 1);
+    const key = pdfName(dictionary.slice(at + 1, end));
+    at = end;
+    while (isSpace(dictionary[at] ?? "")) at++;
+    const next = valueEnd(dictionary, at);
+    const value = dictionary.slice(at, next);
+    if (["Filter", "F", "Length", "Length1", "Length2", "Length3", "N", "FunctionType", "ShadingType"].includes(key)) out += ` /${key} ${value}`;
+    else if (["Type", "Subtype"].includes(key) && value.startsWith("/")) out += ` /${key} ${pdfName(value)}`;
+    at = Math.max(next, at + 1);
   }
   return out;
 }
@@ -217,7 +238,7 @@ function filtersOf(dictionary: string, file: Buffer): string[] {
     if (/\/Filter\b/.test(dictionary)) throw new InputError("PDF stream has a /Filter this reader cannot parse, so its colour operators cannot be checked.");
     return [];
   }
-  return [...resolveReferences(value, file).matchAll(/\/([^\s/<>[\]()]+)/g)].map((m) => FILTER_NAMES[m[1] ?? ""] ?? m[1] ?? "");
+  return [...resolveReferences(value, file).matchAll(/\/([^\s/<>[\]()]+)/g)].map((m) => FILTER_NAMES[pdfName(m[1] ?? "")] ?? pdfName(m[1] ?? ""));
 }
 
 function ascii85(text: string): Buffer {
