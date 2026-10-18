@@ -154,7 +154,7 @@
 - Sorting a rule into gate, clause, or delete: read
   `$HOME/code/dotfiles/docs/agents/determinism-and-steering.md` first.
 - Code or test authoring, review, execution, coverage, repair or triage: read
-  `$HOME/code/dotfiles/docs/agents/CODING_STANDARDS.md`. A package's own
+  `$HOME/code/dotfiles/docs/standards/CODING_STANDARDS.md`. A package's own
   `CODING_STANDARDS.md` extends it; neither restates the other.
 - New tool or capability: search current dependencies and existing products
   for an owner before design. Record why reuse does not fit before custom

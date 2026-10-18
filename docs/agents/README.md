@@ -30,7 +30,7 @@ Scope, admission, and the edit rule:
 | [`startup-prompt-budget.md`](startup-prompt-budget.md) | Trimming startup context, or setting a `disable*` key in `settings.json` |
 | [`architecture-decisions.md`](architecture-decisions.md) | Proposing, accepting, rejecting, deprecating, or superseding an architecture decision |
 | [`determinism-and-steering.md`](determinism-and-steering.md) | Sorting a rule into gate, clause, or delete |
-| [`CODING_STANDARDS.md`](CODING_STANDARDS.md) | Authoring, reviewing, running, repairing, or triaging code or tests |
+| [`Shared CODING_STANDARDS.md`](../standards/CODING_STANDARDS.md) | Authoring, reviewing, running, repairing, or triaging code or tests |
 | [`tart-vm-qualification.md`](tart-vm-qualification.md) | Testing setup or toolchain ownership end to end on a clean macOS VM |
 | [`mac-storage.md`](mac-storage.md) | Investigating or cleaning up Mac storage |
 | [`fallow.md`](fallow.md) | Running or diagnosing the `quality:fallow` gate |
