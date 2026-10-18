@@ -9,6 +9,9 @@ Keep one Desktop conversation bound to one Herdr project coordinator. Relay the
 user's requests and fresh replies; that coordinator owns task coordination,
 worker selection and execution. A selector alone connects without sending.
 
+Use the same route, scope, receipts and authorization for spoken and typed
+requests. Voice changes presentation, not project ownership or authority.
+
 Use the project or coordinator named by the user. For an explicit skill
 invocation, take the first plain token or quoted phrase after the skill name
 as the selector. Ask when the request names no destination. Generated chat
@@ -92,12 +95,23 @@ Inspect public JSON, not private state files, for routine message handling.
   minutes without a fresh answer, report the request as pending. Continue
   waiting in the active turn when the user asked to wait through completion.
   Preserve the route and receipt so a later check does not resubmit it.
-- For passive checks after the turn, use an authorized scheduled task in the
-  same Desktop chat. Save the exact route, request/task IDs, last observed
-  state and stopping condition. Notify on completion, meaningful failure or a
-  needed human decision; stay quiet while nothing actionable changes. Use the
-  app's automation tool and verify the saved schedule. A monitoring question
-  alone does not authorize creating one.
+- For passive checks after the turn, use an authorized scheduled task. Default
+  to a same-chat heartbeat. When the user requests a separate watcher, create
+  a standalone local scheduled task through the app's automation tool. Keep
+  the original chat as the conversational interface. Inspect existing matching
+  schedules before creating one; preserve unrelated paused monitors.
+- Save the exact route, request/task IDs, last observed state and stopping
+  condition in the scheduled task. Keep minimal comparison receipts in private
+  runtime state outside the vault. Report completion, meaningful failure or a
+  needed human decision once; unchanged observations and repeated failures
+  should not produce repeated alerts. Verify the saved schedule. A monitoring
+  question alone does not authorize creating one.
+- When a separate watcher has a requested model and reasoning effort, set
+  those fields explicitly in the scheduler. Verify both saved settings and
+  the first actual run's native session metadata. Prompt text does not enforce
+  model selection. Report missing runtime evidence as unverified; pause a
+  mismatched watcher and surface the actual model. Preserve the conversational
+  chat's and production coordinator's models.
 - For ongoing task progress, query native task records such as
   `herdr-projects details <id>` and `list --json`. Save relevant state changes;
   ask the coordinator only when its judgment is needed. Repeated status
@@ -112,6 +126,28 @@ Inspect public JSON, not private state files, for routine message handling.
 The distinction follows OpenAI's [long-running work](https://learn.chatgpt.com/docs/long-running-work)
 and [scheduled tasks](https://learn.chatgpt.com/docs/automations) documentation.
 Local scheduled checks require the computer and Desktop app to remain running.
+
+## Voice and typed conversation
+
+- Retain the selected coordinator when entering or leaving voice mode. Resolve
+  obvious transcription errors from context; ask only when different readings
+  would materially change the destination or action.
+- Relay a spoken request through the same native queue and fresh-answer checks
+  as typed text. A short spoken answer can omit IDs and paths; leave useful
+  receipts and links visible in the chat.
+- After an interruption or a switch between voice and typing, inspect the
+  existing request receipt before sending again. Resume the pending request
+  rather than duplicating it. Distinguish a request to stop speaking from an
+  explicit request to stop project work or its watcher.
+- Keep standalone watcher findings in its scheduled results. Read its latest
+  verified checkpoint when the user asks for an update in this chat; cross-chat
+  relay requires an authorized route. A watcher does not itself provide live
+  spoken alerts.
+
+OpenAI's [voice documentation](https://learn.chatgpt.com/docs/features/voice)
+describes voice using the existing conversation and selected task model for
+actions. Written workflow parity does not prove a live microphone, interruption
+or fresh-chat skill activation test; report those separately.
 
 ## Legacy fallback and boundaries
 

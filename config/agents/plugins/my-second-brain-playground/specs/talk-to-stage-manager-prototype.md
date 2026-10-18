@@ -21,8 +21,13 @@ Acceptance for this revision:
 - Submit one tagged, read-only Bestie route probe through its native queue.
 - Verify the request receipt, matching fresh reply and stable coordinator
   identity; do not count an old reply or terminal echo as success.
-- Document bounded polling for one reply, an authorized same-chat schedule for
-  passive later checks, and an explicitly requested Goal for active outcomes.
+- Document bounded polling for one reply, authorized same-chat or explicitly
+  requested standalone scheduled checks, and an explicitly requested Goal for
+  active outcomes.
+- Preserve route, authorization and receipt correlation across voice and typed
+  requests, including interruption recovery without duplicate submission.
+- Configure a separate watcher's requested model and effort in scheduler fields
+  and verify the first run's actual native metadata separately from configuration.
 - Keep the reviewed third-party Herdr skill and existing discovery script
   unchanged. Source qualification does not establish installation or fresh-chat
   activation.
@@ -61,9 +66,37 @@ Skill validation, changed-document link checks and `git diff --check` passed.
 The discovery helper, invocation policy and reviewed third-party Herdr skill
 were not edited. The installed 0.17.5 skill remains the older revision; this
 trial proves explicit source use and a remote native round trip, not fresh-chat
-activation, automatic monitoring or plugin installation. No schedule or Goal
-was created. The private receipt is
+activation, automatic monitoring or plugin installation. The routing trial
+created no schedule or Goal. The private receipt is
 `/Users/nathanvale/.local/state/herdr-desktop-routing/trials/DESKTOP-ROUTE-20261018-7c42/receipt.json`.
+
+### Separate watcher and input parity revision
+
+Nathan subsequently requested a separate Bestie Book watcher every five minutes
+with GPT-6 Luna and low reasoning, first-run model verification, and this
+Desktop chat retained as the voice interface. The same skill now covers typed
+and spoken requests, pending-request recovery across mode changes, and explicit
+scheduler model selection. This changes branch-level guidance only; there is
+no additional always-loaded startup text or invocation-policy change.
+
+The live automation `bestie-book-luna-low-watcher` is active with those saved
+model, effort and cadence settings. Its first run, Desktop chat
+`01a14c66-2028-7e22-b208-ecbbdb384e68`, connected successfully and saved a private
+baseline. The watcher could not discover its own runtime settings. Foreground
+verification independently read that exact session's native `turn_context` at
+`2026-10-18T00:25:25.102Z`: model `gpt-6-luna`, effort `low`. The scheduler and
+native thread metadata agreed. The first turn completed in 27.817 seconds.
+This proves the requested model on that run, not an immutable model guarantee
+for all future runs. A live voice interruption trial remains unqualified.
+Source edits remain on this candidate branch until normal plugin delivery and
+activation.
+
+Fresh Desktop chat `01a14c63-9c24-7f90-9b62-5b44a58f571a` explicitly loaded this
+candidate source and verified the existing Bestie Book native coordinator by
+read-only status on Mac Mini/default. The turn completed in 21.171 seconds.
+No coordinator message, model change, new worker or duplicate watcher was
+requested. This proves explicit source use in a fresh chat, separately from
+installed-skill discovery and live voice input.
 
 ## Original prototype outcome
 
