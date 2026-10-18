@@ -32,9 +32,8 @@ CLI help for current syntax.
   or one target question before dispatch.
 - Use [Talk to Stage Manager](../../config/agents/plugins/my-second-brain-playground/skills/talk-to-stage-manager/SKILL.md)
   for destination binding, native project messaging, reply correlation and
-  monitoring. Prefer `herdr-projects coordinator --project <repo>` on the
-  selected host and session socket. Desktop is the conversation proxy; the
-  project coordinator owns managed work.
+  monitoring. Desktop is the conversation proxy; the project coordinator owns
+  managed work.
 - Preserve the request's scope when relaying it. A read-only review constrains
   the subject being reviewed; let the Stage Manager answer directly under its
   [request-handling rules](../../config/agents/plugins/my-second-brain-playground/skills/stage-manager/SKILL.md#handle-the-request).
@@ -56,26 +55,19 @@ CLI help for current syntax.
 ## Find a coordinator
 
 - Route requests to talk to, ask, or check a project coordinator through live
-  Herdr discovery, including from a blank Desktop task. Resolve machine, session
-  socket and exact native project key. Sessions share task visibility, but a
-  task's agent stays in its launch session. Use Codex history only when explicitly
-  requested or when live discovery cannot locate the target and recovery needs it.
+  Herdr discovery, including from a blank Desktop task. Follow the portal
+  workflow above for native project conversations.
+- Use Codex history only when explicitly requested, when live discovery cannot
+  locate the target, or for read-only recovery of this request's overwritten
+  reply from the exact selected coordinator session after bounded terminal
+  reads cannot recover it. Keep that reply lookup scoped to the request and
+  its answer; it does not authorize broader history searches.
 - Match approximate project/tab names against live labels. Accept a unique short
   name or first word, such as "ADHD" for "ADHD Development Workflow". If multiple
   destinations fit, ask one short question before sending.
-- Confirm native project ownership through `coordinator --project <repo> --json`
-  and observed Herdr agent identity. Tab position and labels are candidates,
-  not proof of ownership. Use agent reads for diagnosis or a selected legacy
-  coordinator, not as the normal native messaging interface.
-- Retain the selected host, session socket, launcher and project key, plus the
-  observed pane and agent identity, for follow-up requests. Revalidate native
-  status before effects. Repeat full discovery only when selection is absent,
-  invalid, moved, replaced or ambiguous.
-- Keep a fresh question tied to its fresh answer. Read a baseline before sending;
-  verify acknowledgement and a response to that question after submission. A
-  matching echoed prompt, queued input, old result or settled earlier turn does
-  not complete the request. Use bounded status checks and inspect fresh replies rather
-  than repeatedly searching for text already present.
+- For direct agent or pane supervision, resolve the caller and destination
+  through the rules below. Tab position and labels alone do not establish
+  coordinator ownership.
 
 ## Resolve the caller and destination
 

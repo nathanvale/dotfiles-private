@@ -79,7 +79,7 @@ and spoken requests, pending-request recovery across mode changes, and explicit
 scheduler model selection. This changes branch-level guidance only; there is
 no additional always-loaded startup text or invocation-policy change.
 
-The live automation `bestie-book-luna-low-watcher` is active with those saved
+The automation `bestie-book-luna-low-watcher` was configured with those saved
 model, effort and cadence settings. Its first run, Desktop chat
 `01a14c66-2028-7e22-b208-ecbbdb384e68`, connected successfully and saved a private
 baseline. The watcher could not discover its own runtime settings. Foreground
@@ -87,7 +87,10 @@ verification independently read that exact session's native `turn_context` at
 `2026-10-18T00:25:25.102Z`: model `gpt-6-luna`, effort `low`. The scheduler and
 native thread metadata agreed. The first turn completed in 27.817 seconds.
 This proves the requested model on that run, not an immutable model guarantee
-for all future runs. A live voice interruption trial remains unqualified.
+for all future runs. Nathan later paused the watcher when transferring the
+Bestie conversation to the fresh Desktop chat; its saved status was verified
+as `PAUSED`. The earlier first-run evidence remains historical qualification.
+A live voice interruption trial remains unqualified.
 Source edits remain on this candidate branch until normal plugin delivery and
 activation.
 
@@ -97,6 +100,15 @@ read-only status on Mac Mini/default. The turn completed in 21.171 seconds.
 No coordinator message, model change, new worker or duplicate watcher was
 requested. This proves explicit source use in a fresh chat, separately from
 installed-skill discovery and live voice input.
+
+The same fresh chat subsequently sent one status question and Nathan's Premium
+Matte selection through the verified native project route. Public receipts
+`73aa04b9-0b44-4673-95e4-52424009c0d2` and
+`094c67b2-db20-465d-bd23-4c5995764dbb` identify the requests. Fresh coordinator
+answers returned the requested status and explicitly acknowledged Premium
+Matte, 148 gsm. No probe message, duplicate watcher or model change was needed.
+These typed exchanges extend the source trial; they do not qualify live voice
+interruption or installed-skill discovery.
 
 ## Original prototype outcome
 
