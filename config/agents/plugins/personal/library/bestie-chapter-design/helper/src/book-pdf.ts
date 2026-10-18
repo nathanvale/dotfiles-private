@@ -81,8 +81,8 @@ function endOfWord(text: string, from: number): number {
 }
 
 function endOfLine(text: string, from: number): number {
-  const at = text.indexOf("\n", from);
-  return at < 0 ? text.length : at + 1;
+  for (let i = from; i < text.length; i++) if (text[i] === "\n" || text[i] === "\r") return i + 1;
+  return text.length;
 }
 
 function endOfAngle(text: string, from: number): number {

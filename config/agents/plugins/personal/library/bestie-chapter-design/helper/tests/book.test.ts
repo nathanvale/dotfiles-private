@@ -313,6 +313,10 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     refused(runBook(f), "paint 1 cmyk colour operator(s)");
     rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "% 0 0 0 1 k in a comment\n<0000> Tj" } : p)));
     expect(runBook(f).exitCode).toBe(0);
+    for (const end of ["\r", "\r\n"]) {
+      rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: `% comment${end}0 0 0 1 k\n` } : p)));
+      refused(runBook(f), "paint 1 cmyk colour operator(s)");
+    }
   });
 
   test("reads colour operators from Flate-compressed content streams too", () => {
