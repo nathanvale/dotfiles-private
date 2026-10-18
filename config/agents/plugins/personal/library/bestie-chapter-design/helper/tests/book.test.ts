@@ -87,6 +87,63 @@ describe.skipIf(!poppler)("book: whole-book evidence", () => {
     expect(result.envelope.message).not.toContain("appliedFont=Apple Color Emoji");
   });
 
+  test("refuses a whitespace-only change to a story, since source text is compared exactly", () => {
+    const f = book(scratch());
+    f.native.stories[0].expected = "H  H";
+    f.native.stories[0].text = "H H";
+    refused(runBook(f), "differs from its selected source text at character 2");
+  });
+
+  test("refuses a template that is not the pinned file, in the binding or on disk", () => {
+    const f = book(scratch());
+    f.native.template.sha256 = "0".repeat(64);
+    refused(runBook(f), "bound at 000");
+    const g = book(scratch());
+    g.contract.template.sha256 = "1".repeat(64);
+    g.native.template.sha256 = "1".repeat(64);
+    refused(runBook(g), "template file", "not the pinned 111");
+    const h = book(scratch());
+    h.native.template.path = `${h.dir}/absent.indt`;
+    refused(runBook(h), "is missing; its pin is unverified");
+  });
+
+  test("refuses pages in no family, double assignments and wrong family reads", () => {
+    const f = book(scratch());
+    f.contract.exceptions = [];
+    refused(runBook(f), "page 3 is in neither a family nor a declared exception");
+    const g = book(scratch());
+    g.contract.exceptions.push({ page: 1, reason: "dup" });
+    refused(runBook(g), "page 1 is assigned twice");
+    const h = book(scratch());
+    h.native.pages[1].family = "Card-A";
+    refused(runBook(h), 'page 2 is read as "Card-A"; the contract assigns "Card-B"');
+    const i = book(scratch());
+    i.contract.pageFamilies[0].family = "Card-Z";
+    refused(runBook(i), 'family "Card-Z", which the contract does not declare');
+  });
+
+  test("refuses page-local margins, columns and card placement that differ from the family", () => {
+    const f = book(scratch());
+    f.native.pages[0].margins.outside = 12;
+    f.native.pages[0].columns = { count: 2, gutter: 14 };
+    f.native.pages[1].items[0].bounds = [60, 40, 340, 300];
+    f.native.pages[0].items = [];
+    refused(runBook(f), "page 1 margin outside is 12, not 30", "page 1 has 2 columns", 'page 1 has no "body" frame', 'page 2 "body" is at [60,40,340,300]');
+  });
+
+  test("does not hold a declared exception page to a family's geometry", () => {
+    const f = book(scratch());
+    f.native.pages[2].margins.top = 5;
+    f.native.pages[2].items[0].bounds = [0, 0, 10, 10];
+    expect(runBook(f).exitCode).toBe(0);
+  });
+
+  test("manifest lists family coverage and exceptions from the contract", () => {
+    const data = runBook(book(scratch())).envelope.result.data as { manifest: { coverage: { exceptions: { page: number }[]; families: { name: string; pages: number[] }[] } } };
+    expect(data.manifest.coverage.families).toEqual([{ name: "Card-A", pages: [1] }, { name: "Card-B", pages: [2] }]);
+    expect(data.manifest.coverage.exceptions.map((e) => e.page)).toEqual([3]);
+  });
+
   test("refuses an overset, hidden or changed story", () => {
     const f = book(scratch());
     Object.assign(f.native.stories[0], { hidden: ["covered by an opaque field"], oversetText: "tail", text: "H changed" });

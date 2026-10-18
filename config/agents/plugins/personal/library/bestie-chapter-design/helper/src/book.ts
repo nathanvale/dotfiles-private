@@ -1,6 +1,7 @@
 import { type CheckResult, verdict } from "./check-result.ts";
 import { type BookContract, type BookReadback, readBookContract, readBookReadback } from "./book-input.ts";
 import { nativeFindings } from "./book-native.ts";
+import { familyCoverage, templateFindings } from "./book-template.ts";
 import { type PdfFacts, readPdf } from "./book-pdf.ts";
 import { pdfFindings } from "./book-pdf-checks.ts";
 import { InputError, sha256File } from "./input.ts";
@@ -15,10 +16,11 @@ const HUMAN_REVIEW = [
 /** Qualifications this helper never grants. */
 const NOT_QUALIFIED = ["native-execution", "visual-acceptance", "print-qualification", "pdf-x-conformance", "output-intent-and-profile-embedding"] as const;
 
-function manifest(book: BookReadback, pdf: PdfFacts) {
+function manifest(book: BookReadback, contract: BookContract, pdf: PdfFacts) {
   return {
     art: book.art,
     book: book.book,
+    coverage: familyCoverage(contract),
     exportSettings: book.exportSettings,
     native: book.native,
     pageCount: book.pageCount,
@@ -26,8 +28,11 @@ function manifest(book: BookReadback, pdf: PdfFacts) {
       const facts = pdf.readback[page.page - 1];
       return {
         bleed: page.bleed,
+        columns: page.columns,
+        family: page.family,
+        margins: page.margins,
         fields: page.fields,
-        items: page.items.map((item) => ({ kind: item.kind, label: item.label, overrides: item.overrides.length, style: item.style })),
+        items: page.items.map((item) => ({ bounds: item.bounds, kind: item.kind, label: item.label, overrides: item.overrides.length, style: item.style })),
         links: book.links.filter((l) => l.page === page.page).map((l) => ({ effectivePpi: l.effectivePpi, id: l.id, profile: l.profile, status: l.status })),
         page: page.page,
         parent: page.parent,
@@ -43,6 +48,7 @@ function manifest(book: BookReadback, pdf: PdfFacts) {
     preflight: book.preflight,
     revision: book.revision,
     sourceRevision: book.sourceRevision,
+    template: book.template,
     stories: book.stories.map((s) => ({ key: s.key, pages: s.pages })),
     styles: book.styles,
   };
@@ -50,7 +56,7 @@ function manifest(book: BookReadback, pdf: PdfFacts) {
 
 function sections(book: BookReadback, contract: BookContract, pdf: PdfFacts) {
   const native = nativeFindings(book, contract);
-  return { review: native.review, sections: { ...native.sections, ...pdfFindings(pdf, book, contract) } };
+  return { review: native.review, sections: { ...native.sections, ...templateFindings(book, contract), ...pdfFindings(pdf, book, contract) } };
 }
 
 function pdfOrRefusal(book: BookReadback): PdfFacts | string {
@@ -78,7 +84,7 @@ export function checkBook(nativePath: string, contractPath: string): CheckResult
     {
       deterministic: Object.fromEntries(Object.entries(found.sections).map(([name, list]) => [name, { issues: list.length, status: "pass" }])),
       humanReview: HUMAN_REVIEW.map((item) => ({ ...item, status: "open" })),
-      manifest: manifest(book, pdf),
+      manifest: manifest(book, contract, pdf),
       notQualified: NOT_QUALIFIED,
       reviewFlags: found.review,
     },

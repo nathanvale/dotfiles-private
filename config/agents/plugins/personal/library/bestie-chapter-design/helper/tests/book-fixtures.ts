@@ -95,16 +95,31 @@ export function book(dir: string): Fixture {
   const pdfPages: PdfPageSpec[] = [1, 2, 3].map(() => ({ image: true, text: "H" }));
   writePdf(pdfPath, pdfPages);
   const native = put(dir, "book.indd", "native bytes");
+  const template = put(dir, "Recovered-Library.indt", "template bytes");
+  const margins = { bottom: 36, inside: 36, outside: 30, top: 36 };
+  const columns = { count: 1, gutter: 0 };
+  const FRAMES = [[36, 36, 364, 264], [60, 40, 340, 250]];
+  const familyOf = (page: number) => (page === 3 ? "exception" : page === 1 ? "Card-A" : "Card-B");
   const pages = [1, 2, 3].map((page) => ({
     bleed: { ...CONTRACT_BLEED },
+    columns: { ...columns },
+    family: familyOf(page),
     fields: { folio: String(page) },
-    items: [{ kind: "TextFrame", label: "body", overrides: [], style: "Bestie Body" }],
+    margins: { ...margins },
+    items: [{ bounds: FRAMES[page === 1 ? 0 : 1], kind: "TextFrame", label: "body", overrides: [], style: "Bestie Body" }],
     page,
     parent: { name: sideOf(page) === "right" ? "B-Right" : "A-Left", transform: sideOf(page) === "right" ? RIGHT_TRANSFORM : LEFT_TRANSFORM },
     side: sideOf(page),
   }));
   const fixture: Fixture = {
     contract: {
+      exceptions: [{ page: 3, reason: "source-specific page kept on its own layout" }],
+      families: [
+        { columns, frames: [{ bounds: FRAMES[0], label: "body" }], margins, name: "Card-A" },
+        { columns, frames: [{ bounds: FRAMES[1], label: "body" }], margins, name: "Card-B" },
+      ],
+      pageFamilies: [{ family: "Card-A", page: 1 }, { family: "Card-B", page: 2 }],
+      template: { path: template, sha256: sha256("template bytes") },
       allowedOverrides: [{ property: "appliedFont", scope: "character", value: "Apple Color Emoji" }],
       bleed: { ...CONTRACT_BLEED },
       fieldExemptPages: [],
@@ -132,6 +147,7 @@ export function book(dir: string): Fixture {
       native: { path: native, sha256: sha256("native bytes") },
       pageCount: 3,
       pages,
+      template: { path: template, sha256: sha256("template bytes") },
       pdf: { path: pdfPath, sha256: fileSha(pdfPath) },
       preflight: { enabled: ["Overset text"], profile: "[Basic]", scope: "All pages" },
       revision: "r1",

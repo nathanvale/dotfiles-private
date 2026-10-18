@@ -144,7 +144,12 @@ Deterministic, failing the command:
 - every page once and in order, page parity, parent per side and its transform;
 - paragraph, character, object and parent styles against the contract, and
   every local override not allowed by the contract;
-- each story against its selected text, overset text and declared hidden text;
+- the template file and binding against the contract's pinned SHA256 (for r20,
+  the digest `SKILL.md` names), each page assigned to exactly one declared
+  family or declared exception, and for family pages the page-local margins,
+  columns and required frame bounds (card placement) of that family;
+- each story against its selected text, compared exactly (whitespace
+  included), plus overset text and declared hidden text;
 - links: status, target digest, effective ppi and profile;
 - required fonts installed, and rendered-glyph evidence for every non-Latin
   character, emoji joiner and variation selector in a story;
@@ -152,6 +157,13 @@ Deterministic, failing the command:
 - PDF pages equal native pages; TrimBox and BleedBox per side; fonts embedded;
   image colour space and ppi; story text present in the exported page text;
   export settings read back against the contract.
+
+The contract, not the helper, owns which pages belong to which family and which
+are exceptions. Derive both from the latest book and its coverage record each
+run; a stale page list fails rather than being assumed. Style-name inventory
+alone does not prove the template pattern; the family geometry above is what
+the helper compares. Template pinning is not r20 acceptance: r20 stays an
+editable REVIEW library, and Phone r9 stays the artwork reference.
 
 Not decided by the helper, and always reported open: full-size visual review of
 every page, privacy review and accessibility review. A pass is also never

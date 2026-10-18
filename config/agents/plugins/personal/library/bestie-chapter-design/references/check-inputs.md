@@ -101,17 +101,25 @@ file; `--contract` takes the production contract values. Paths are absolute.
   `[{ name, installed }]`, and `unicode` as
   `[{ codepoints, font, method, rendered }]` (`method` as in
   [ink provenance](#ink-provenance)).
-- `pages`: one per page, `{ page, side, parent: { name, transform }, fields,
-  bleed: { top, bottom, outside, inside }, items }`. `transform` is the six
+- `template`: `{ path, sha256 }` of the template file the book was built from.
+- `pages`: one per page, `{ page, side, family, parent: { name, transform },
+  margins, columns: { count, gutter }, fields,
+  bleed: { top, bottom, outside, inside }, items }`. `family` is the layout
+  family name, or `exception` for a declared special page; `margins` has the
+  same four edges as `bleed`. `transform` is the six
   numbers of the parent item's matrix; `fields` maps field name to its value;
-  `items` are `{ label, kind, style, overrides }` with each local override
+  `items` are `{ label, kind, style, bounds, overrides }` (`bounds` page-relative
+  `[top, left, bottom, right]`) with each local override
   `{ scope, property, value, style }`.
 - `stories`: `{ key, pages, text, expected, oversetText, hidden }`. `text` is
-  the whole story including overset; `expected` is the selected source text;
+  the whole story including overset; `expected` is the selected source text, compared exactly;
   `hidden` lists reasons text is hidden (opaque field, off page, hidden layer).
 - `links`: `{ id, page, path, sha256, expectedSha256, status, effectivePpi,
   profile }`; an empty `sha256` means the target is missing.
-- Contract: `pageCount`, `firstPageSide`, `tolerance`, `styles`,
+- Contract: `template` (`path`, pinned `sha256`), `families` as
+  `[{ name, margins, columns, frames: [{ label, bounds }] }]`, `pageFamilies` as
+  `[{ page, family }]` and `exceptions` as `[{ page, reason }]` (every page
+  exactly once), `pageCount`, `firstPageSide`, `tolerance`, `styles`,
   `allowedOverrides` (`scope`, `property`, optional `value`), `parents`
   (`name`, `side`, `transform`), `requiredFields`, `fieldExemptPages`, `bleed`,
   `links` (`minPpi`, `profiles`, `status`), `requiredFonts`,

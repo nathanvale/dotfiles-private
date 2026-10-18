@@ -24,15 +24,23 @@ export type Edges = { top: number; bottom: number; outside: number; inside: numb
 
 export type StyleInventory = Record<"paragraph" | "character" | "object" | "parent", string[]>;
 export type Override = { scope: string; property: string; value: string; style: string };
-export type PageItem = { label: string; kind: string; style: string; overrides: Override[] };
+export type Bounds = [number, number, number, number];
+export type Columns = { count: number; gutter: number };
+export type PageItem = { label: string; kind: string; style: string; bounds: Bounds; overrides: Override[] };
 export type PageRecord = {
   page: number;
   side: Side;
   parent: { name: string; transform: Transform };
+  /** Nine-family name the page uses, or "exception" for a declared special page. */
+  family: string;
+  margins: Edges;
+  columns: Columns;
   fields: Record<string, string>;
   bleed: Edges;
   items: PageItem[];
 };
+export type Family = { name: string; margins: Edges; columns: Columns; frames: { label: string; bounds: Bounds }[] };
+export type Template = { path: string; sha256: string };
 export type StoryRecord = {
   key: string;
   pages: number[];
@@ -64,6 +72,7 @@ export type BookReadback = {
   preflight: { profile: string; enabled: string[]; scope: string };
   styles: StyleInventory;
   exportSettings: Record<string, string>;
+  template: Template;
   pages: PageRecord[];
   stories: StoryRecord[];
   links: LinkRecord[];
@@ -72,6 +81,10 @@ export type BookReadback = {
 };
 
 export type BookContract = {
+  template: Template;
+  families: Family[];
+  pageFamilies: { page: number; family: string }[];
+  exceptions: { page: number; reason: string }[];
   pageCount: number;
   firstPageSide: Side;
   tolerance: number;
@@ -140,9 +153,39 @@ function override(value: unknown, where: string): Override {
   };
 }
 
+function boundsOf(value: unknown, where: string): Bounds {
+  const items = list(value, where);
+  if (items.length !== 4) throw new InputError(`${where} must have 4 numbers.`);
+  return items.map((v, i) => numeric(v, `${where}[${i}]`)) as Bounds;
+}
+
+function columns(value: unknown, where: string): Columns {
+  const item = record(value, where);
+  return { count: integer(item.count, `${where}.count`), gutter: numeric(item.gutter, `${where}.gutter`) };
+}
+
+function templateOf(value: unknown, where: string): Template {
+  const item = record(value, where);
+  return { path: text(item.path, `${where}.path`), sha256: text(item.sha256, `${where}.sha256`) };
+}
+
+function family(value: unknown, where: string): Family {
+  const item = record(value, where);
+  return {
+    columns: columns(item.columns, `${where}.columns`),
+    frames: list(item.frames, `${where}.frames`).map((f, i) => {
+      const frame = record(f, `${where}.frames[${i}]`);
+      return { bounds: boundsOf(frame.bounds, `${where}.frames[${i}].bounds`), label: text(frame.label, `${where}.frames[${i}].label`) };
+    }),
+    margins: edges(item.margins, `${where}.margins`),
+    name: text(item.name, `${where}.name`),
+  };
+}
+
 function pageItem(value: unknown, where: string): PageItem {
   const item = record(value, where);
   return {
+    bounds: boundsOf(item.bounds, `${where}.bounds`),
     kind: text(item.kind, `${where}.kind`),
     label: text(item.label, `${where}.label`),
     overrides: list(item.overrides, `${where}.overrides`).map((entry, i) => override(entry, `${where}.overrides[${i}]`)),
@@ -155,7 +198,10 @@ function pageRecord(value: unknown, where: string): PageRecord {
   const parent = record(item.parent, `${where}.parent`);
   return {
     bleed: edges(item.bleed, `${where}.bleed`),
+    columns: columns(item.columns, `${where}.columns`),
+    family: text(item.family, `${where}.family`),
     fields: stringMap(item.fields, `${where}.fields`),
+    margins: edges(item.margins, `${where}.margins`),
     items: list(item.items, `${where}.items`).map((entry, i) => pageItem(entry, `${where}.items[${i}]`)),
     page: integer(item.page, `${where}.page`),
     parent: { name: text(parent.name, `${where}.parent.name`), transform: transform(parent.transform, `${where}.parent.transform`) },
@@ -220,6 +266,7 @@ export function readBookReadback(path: string): BookReadback {
     pageCount: integer(root.pageCount, `${path}.pageCount`),
     pages: mapList(root.pages, `${path}.pages`, pageRecord),
     pdf: fileIdentity(root.pdf, `${path}.pdf`),
+    template: templateOf(root.template, `${path}.template`),
     preflight: {
       enabled: strings(preflight.enabled, `${path}.preflight.enabled`),
       profile: text(preflight.profile, `${path}.preflight.profile`),
@@ -258,6 +305,16 @@ function contractPdf(value: unknown, where: string): BookContract["pdf"] {
 export function readBookContract(path: string): BookContract {
   const root = record(readJson(path), path);
   return {
+    exceptions: mapList(root.exceptions, `${path}.exceptions`, (v, w) => {
+      const item = record(v, w);
+      return { page: integer(item.page, `${w}.page`), reason: text(item.reason, `${w}.reason`) };
+    }),
+    families: mapList(root.families, `${path}.families`, family),
+    pageFamilies: mapList(root.pageFamilies, `${path}.pageFamilies`, (v, w) => {
+      const item = record(v, w);
+      return { family: text(item.family, `${w}.family`), page: integer(item.page, `${w}.page`) };
+    }),
+    template: templateOf(root.template, `${path}.template`),
     allowedOverrides: mapList(root.allowedOverrides, `${path}.allowedOverrides`, (v, w) => {
       const item = record(v, w);
       return {

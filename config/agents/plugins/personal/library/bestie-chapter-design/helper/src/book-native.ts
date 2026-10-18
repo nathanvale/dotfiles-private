@@ -92,14 +92,19 @@ function overrideIssues(book: BookReadback, contract: BookContract): string[] {
   );
 }
 
-function normalise(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+function firstDifference(a: string, b: string): number {
+  const length = Math.min(a.length, b.length);
+  for (let i = 0; i < length; i++) if (a[i] !== b[i]) return i;
+  return length;
 }
 
 function storyIssues(book: BookReadback): string[] {
   return book.stories.flatMap((story) => {
     const issues: string[] = [];
-    if (normalise(story.text) !== normalise(story.expected)) issues.push(`story ${story.key} differs from its selected source text.`);
+    if (story.text !== story.expected) {
+      const at = firstDifference(story.text, story.expected);
+      issues.push(`story ${story.key} differs from its selected source text at character ${at} (exact comparison, whitespace included): native ${JSON.stringify(story.text.slice(at, at + 20))}, source ${JSON.stringify(story.expected.slice(at, at + 20))}.`);
+    }
     if (story.oversetText.trim()) issues.push(`story ${story.key} is overset: "${story.oversetText.trim().slice(0, 40)}" does not fit.`);
     for (const reason of story.hidden) issues.push(`story ${story.key} has hidden text: ${reason}.`);
     return issues;
