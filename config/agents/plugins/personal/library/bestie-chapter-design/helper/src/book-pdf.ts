@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 import { InputError } from "./input.ts";
 
 export type Box = [number, number, number, number];
@@ -155,12 +156,88 @@ function colourOperators(content: string): ContentColours {
   return found;
 }
 
-function decoded(bytes: Buffer): string {
-  try {
-    return Buffer.from(Bun.inflateSync(new Uint8Array(bytes))).toString("latin1");
-  } catch {
-    return bytes.toString("latin1");
+const IMAGE_FILTERS = new Set(["DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode"]);
+const FILTER_NAMES: Record<string, string> = { A85: "ASCII85Decode", AHx: "ASCIIHexDecode", Fl: "FlateDecode", LZW: "LZWDecode", RL: "RunLengthDecode" };
+
+/** Filter names of a stream dictionary, in application order, with abbreviations expanded. */
+function filtersOf(dictionary: string): string[] {
+  const value = /\/(?:Filter|F)\s*(\[[^\]]*\]|\/[^\s/<>[\]()]+)/.exec(dictionary)?.[1] ?? "";
+  return [...value.matchAll(/\/([^\s/<>[\]()]+)/g)].map((m) => FILTER_NAMES[m[1] ?? ""] ?? m[1] ?? "");
+}
+
+function ascii85(text: string): Buffer {
+  const body = text.replace(/\s+/g, "").replace(/^<~/, "").replace(/~>.*$/s, "");
+  const out: number[] = [];
+  let group: number[] = [];
+  const flush = (count: number) => {
+    const padded = [...group, ...Array(5 - group.length).fill(84)];
+    let value = 0;
+    for (const digit of padded) value = value * 85 + digit;
+    for (let i = 0; i < count; i++) out.push(Math.floor(value / 256 ** (3 - i)) % 256);
+  };
+  for (const char of body) {
+    if (char === "z" && group.length === 0) {
+      out.push(0, 0, 0, 0);
+      continue;
+    }
+    group.push(char.charCodeAt(0) - 33);
+    if (group.length === 5) {
+      flush(4);
+      group = [];
+    }
   }
+  if (group.length > 1) flush(group.length - 1);
+  return Buffer.from(out);
+}
+
+function runLength(bytes: Buffer): Buffer {
+  const out: Buffer[] = [];
+  for (let i = 0; i < bytes.length; ) {
+    const length = bytes[i] ?? 128;
+    if (length === 128) break;
+    if (length < 128) {
+      out.push(bytes.subarray(i + 1, i + 2 + length));
+      i += length + 2;
+    } else {
+      out.push(Buffer.alloc(257 - length, bytes[i + 1] ?? 0));
+      i += 2;
+    }
+  }
+  return Buffer.concat(out);
+}
+
+function inflate(bytes: Buffer): Buffer {
+  try {
+    return inflateSync(bytes);
+  } catch {
+    return Buffer.from(Bun.inflateSync(new Uint8Array(bytes)));
+  }
+}
+
+function applyFilter(name: string, bytes: Buffer): Buffer {
+  if (name === "FlateDecode") return inflate(bytes);
+  if (name === "ASCIIHexDecode") return Buffer.from(bytes.toString("latin1").replace(/>.*$/s, "").replace(/\s+/g, "").padEnd(2 * Math.ceil(bytes.length / 2), "0"), "hex");
+  if (name === "ASCII85Decode") return ascii85(bytes.toString("latin1"));
+  if (name === "RunLengthDecode") return runLength(bytes);
+  throw new InputError(`PDF stream filter ${name} cannot be decoded, so its colour operators cannot be checked.`);
+}
+
+/** Decoded stream text, or undefined for image data the colour operators do not live in. A filter that cannot be read fails closed. */
+function decoded(dictionary: string, bytes: Buffer): string | undefined {
+  const filters = filtersOf(dictionary);
+  if (filters.some((name) => IMAGE_FILTERS.has(name))) return undefined;
+  if (/\/Subtype\s*\/Image/.test(dictionary)) return undefined;
+  try {
+    return filters.reduce((data, name) => applyFilter(name, data), bytes).toString("latin1");
+  } catch (error) {
+    if (error instanceof InputError) throw error;
+    throw new InputError(`PDF stream (${filters.join(", ")}) could not be decoded, so its colour operators cannot be checked.`);
+  }
+}
+
+function streamDictionary(file: Buffer, open: number): string {
+  const object = file.lastIndexOf("obj", open, "latin1");
+  return file.subarray(object < 0 ? 0 : object, open).toString("latin1");
 }
 
 /**
@@ -180,8 +257,8 @@ function readContentColours(path: string): ContentColours {
     from = close + 9;
     if (file.subarray(open - 3, open).toString("latin1") === "end") continue;
     const start = file.subarray(open + 6, open + 8).toString("latin1").startsWith("\r\n") ? open + 8 : open + 7;
-    const content = decoded(file.subarray(start, close));
-    if (!isContent(content)) continue;
+    const content = decoded(streamDictionary(file, open), file.subarray(start, close));
+    if (content === undefined || !isContent(content)) continue;
     const found = colourOperators(content);
     total.cmyk += found.cmyk;
     total.gray += found.gray;

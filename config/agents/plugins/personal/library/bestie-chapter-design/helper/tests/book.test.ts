@@ -1,7 +1,7 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, run, scratch, sha256, sourceRepository } from "./fixtures.ts";
-import { BLEED, book, type Fixture, rewritePdf, TRIM } from "./book-fixtures.ts";
+import { BLEED, book, type Fixture, fileSha, rewritePdf, TRIM } from "./book-fixtures.ts";
 
 afterEach(cleanup);
 
@@ -324,6 +324,27 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     rewritePdf(f, f.pdfPages.map((p, i) => (i === 2 ? { ...p, colour: "1 0 0 rg", deflate: true } : p)));
     f.contract.pdf.colourSpaces = ["cmyk"];
     refused(runBook(f), "paint 1 rgb colour operator(s)");
+  });
+
+  test("reads colour operators through zlib-wrapped Flate, ASCIIHex, ASCII85 and chained filters", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb", "cmyk"];
+    const variants: { deflate?: boolean; encode?: "hex" | "ascii85" }[] = [{ deflate: true }, { encode: "hex" }, { encode: "ascii85" }, { deflate: true, encode: "hex" }, { deflate: true, encode: "ascii85" }];
+    for (const variant of variants) {
+      rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0.5 g", ...variant } : p)));
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
+  test("refuses a content filter it cannot decode instead of passing its colour unread", () => {
+    const f = book(scratch());
+    rewritePdf(f, f.pdfPages);
+    const text = readFileSync(f.pdfPath, "latin1").replace("/Length", "/Filter /LZWDecode /Length");
+    writeFileSync(f.pdfPath, Buffer.from(text, "latin1"));
+    f.native.pdf.sha256 = fileSha(f.pdfPath);
+    const result = runBook(f);
+    expect(result.exitCode).not.toBe(0);
+    expect(JSON.stringify(result.envelope)).toContain("LZWDecode");
   });
 
   test("keeps overrides, fonts, Unicode evidence, links and story digests in the manifest, with input digests", () => {

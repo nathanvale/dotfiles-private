@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { put, sha256, sourceRepository } from "./fixtures.ts";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 
 export const TRIM = { height: 400, width: 300 };
 export const BLEED = 9;
@@ -10,7 +11,7 @@ export const CONTRACT_BLEED = { bottom: BLEED, inside: BLEED, outside: BLEED, to
 const LEFT_TRANSFORM = [1, 0, 0, 1, 0, 0];
 const RIGHT_TRANSFORM = [1, 0, 0, 1, 318, 0];
 
-export type PdfPageSpec = { text: string; image: boolean; colour?: string; deflate?: boolean; trimBox?: number[]; bleedBox?: number[] };
+export type PdfPageSpec = { text: string; image: boolean; colour?: string; deflate?: boolean; encode?: "hex" | "ascii85"; trimBox?: number[]; bleedBox?: number[] };
 
 function pdfObjects(pages: PdfPageSpec[]): string[] {
   const objects: string[] = [];
@@ -22,12 +23,12 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
       "/CharProcs << /H 0 0 R >> /Encoding << /Type /Encoding /Differences [72 /H] >> /FirstChar 72 /LastChar 72 /Widths [600] >>",
   );
   const proc = add("");
-  const imageData = Bun.deflateSync(new Uint8Array(30 * 30 * 3).fill(120));
+  const imageData = deflateSync(new Uint8Array(30 * 30 * 3).fill(120));
   const image = add("");
   const kids: number[] = [];
   const pageBodies: string[] = [];
   const streams: Buffer[] = [];
-  const filtered = new Set<number>();
+  const filtered = new Map<number, string[]>();
   for (const spec of pages) {
     const content = `q 7.2 0 0 7.2 50 50 cm /Im1 Do Q ${spec.colour ?? ""} BT /F1 12 Tf 20 200 Td (${spec.text}) Tj ET`;
     const contentId = add("");
@@ -38,8 +39,9 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
     pageBodies[pageId - 1] =
       `<< /Type /Page /Parent ${tree} 0 R /MediaBox [0 0 ${TRIM.width + 2 * BLEED} ${TRIM.height + 2 * BLEED}] /TrimBox [${trim.join(" ")}] /BleedBox [${bleed.join(" ")}] ` +
       `/Resources << /Font << /F1 ${font} 0 R >> /XObject << /Im1 ${image} 0 R >> >> /Contents ${contentId} 0 R >>`;
-    streams[contentId - 1] = spec.deflate ? Buffer.from(Bun.deflateSync(new TextEncoder().encode(content))) : Buffer.from(content, "latin1");
-    if (spec.deflate) filtered.add(contentId - 1);
+    const filters = specFilters(spec);
+    streams[contentId - 1] = encodeContent(content, filters);
+    if (filters.length > 0) filtered.set(contentId - 1, filters);
   }
   objects[catalog - 1] = `<< /Type /Catalog /Pages ${tree} 0 R >>`;
   objects[tree - 1] = `<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(" ")}] /Count ${kids.length} >>`;
@@ -52,9 +54,44 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
   return objects.map((body, index) => {
     const stream = streams[index];
     if (stream === undefined) return body;
-    const dict = body === "" ? `<< ${filtered.has(index) ? "/Filter /FlateDecode " : ""}/Length ${stream.length} >>` : body;
+    const dict = body === "" ? `<< ${filterEntry(filtered.get(index))}/Length ${stream.length} >>` : body;
     return `${dict}\nstream\n${stream.toString("latin1")}\nendstream`;
   });
+}
+
+function ascii85(bytes: Buffer): string {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 4) {
+    const chunk = bytes.subarray(i, i + 4);
+    let value = 0;
+    for (let j = 0; j < 4; j++) value = value * 256 + (chunk[j] ?? 0);
+    const digits: string[] = [];
+    for (let j = 0; j < 5; j++, value = Math.floor(value / 85)) digits.unshift(String.fromCharCode((value % 85) + 33));
+    out += digits.slice(0, chunk.length + 1).join("");
+  }
+  return `${out}~>`;
+}
+
+/** Applies the filters in order, as a PDF writer would; the dictionary lists them in decode order. */
+function encodeContent(content: string, filters: string[]): Buffer {
+  let data = Buffer.from(content, "latin1");
+  for (const name of filters) {
+    if (name === "FlateDecode") data = deflateSync(data);
+    else if (name === "ASCIIHexDecode") data = Buffer.from(`${data.toString("hex")}>`, "latin1");
+    else data = Buffer.from(ascii85(data), "latin1");
+  }
+  return data;
+}
+
+function specFilters(spec: PdfPageSpec): string[] {
+  const names = spec.deflate ? ["FlateDecode"] : [];
+  if (spec.encode === "hex") names.push("ASCIIHexDecode");
+  if (spec.encode === "ascii85") names.push("ASCII85Decode");
+  return names;
+}
+
+function filterEntry(filters: string[] | undefined): string {
+  return filters === undefined ? "" : `/Filter [${[...filters].reverse().map((name) => `/${name}`).join(" ")}] `;
 }
 
 /** Writes a small valid PDF whose fonts are Type 3 (always embedded). */
