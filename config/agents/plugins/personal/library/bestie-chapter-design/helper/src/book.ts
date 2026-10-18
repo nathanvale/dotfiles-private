@@ -1,6 +1,7 @@
 import { type CheckResult, verdict } from "./check-result.ts";
 import { type BookContract, type BookReadback, readBookContract, readBookReadback } from "./book-input.ts";
 import { nativeFindings } from "./book-native.ts";
+import { sourceIssues } from "./book-source.ts";
 import { familyCoverage, templateFindings } from "./book-template.ts";
 import { type PdfFacts, readPdf } from "./book-pdf.ts";
 import { pdfFindings } from "./book-pdf-checks.ts";
@@ -23,6 +24,7 @@ function manifest(book: BookReadback, contract: BookContract, pdf: PdfFacts, inp
     book: book.book,
     coverage: familyCoverage(contract),
     exportSettings: book.exportSettings,
+    links: book.links.map((l) => ({ ...l, diskSha256: sha256File(l.path) })),
     native: book.native,
     pageCount: book.pageCount,
     pages: book.pages.map((page) => {
@@ -59,7 +61,7 @@ function manifest(book: BookReadback, contract: BookContract, pdf: PdfFacts, inp
 
 function sections(book: BookReadback, contract: BookContract, pdf: PdfFacts) {
   const native = nativeFindings(book, contract);
-  return { sections: { ...native.sections, ...templateFindings(book, contract), ...pdfFindings(pdf, book, contract) } };
+  return { sections: { ...native.sections, ...templateFindings(book, contract), source: sourceIssues(book, contract), ...pdfFindings(pdf, book, contract) } };
 }
 
 function pdfOrRefusal(book: BookReadback): PdfFacts | string {

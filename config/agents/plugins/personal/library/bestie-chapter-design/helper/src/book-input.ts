@@ -81,7 +81,7 @@ export type BookReadback = {
 };
 
 export type BookContract = {
-  stories: { key: string; pages: number[] }[];
+  stories: { key: string; pages: number[]; owner: string; sha256: string }[];
   template: Template;
   families: Family[];
   pageFamilies: { page: number; family: string }[];
@@ -308,7 +308,7 @@ export function readBookContract(path: string): BookContract {
   return {
     stories: mapList(root.stories, `${path}.stories`, (v, w) => {
       const item = record(v, w);
-      return { key: text(item.key, `${w}.key`), pages: mapList(item.pages, `${w}.pages`, integer) };
+      return { key: text(item.key, `${w}.key`), owner: text(item.owner, `${w}.owner`), pages: mapList(item.pages, `${w}.pages`, integer), sha256: text(item.sha256, `${w}.sha256`) };
     }),
     exceptions: mapList(root.exceptions, `${path}.exceptions`, (v, w) => {
       const item = record(v, w);

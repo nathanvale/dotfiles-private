@@ -69,11 +69,11 @@ export function git(dir: string, ...args: string[]): string {
 }
 
 /** A one-commit repository standing in for the source vault. */
-export function sourceRepository(dir: string): { repository: string; commit: string } {
+export function sourceRepository(dir: string, note = "# Note\n"): { repository: string; commit: string } {
   const repository = join(dir, "vault");
   Bun.spawnSync(["mkdir", "-p", repository]);
   git(repository, "init", "-q");
-  writeFileSync(join(repository, "note.md"), "# Note\n");
+  writeFileSync(join(repository, "note.md"), note);
   git(repository, "add", "note.md");
   git(repository, "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "seed");
   return { commit: git(repository, "rev-parse", "HEAD"), repository };

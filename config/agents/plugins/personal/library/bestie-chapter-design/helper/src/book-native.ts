@@ -119,7 +119,7 @@ function storyIssues(book: BookReadback, contract: BookContract): string[] {
       const at = firstDifference(story.text, story.expected);
       issues.push(`story ${story.key} differs from its selected source text at character ${at} (exact comparison, whitespace included): native ${JSON.stringify(story.text.slice(at, at + 20))}, source ${JSON.stringify(story.expected.slice(at, at + 20))}.`);
     }
-    if (story.oversetText.trim()) issues.push(`story ${story.key} is overset: "${story.oversetText.trim().slice(0, 40)}" does not fit.`);
+    if (story.oversetText !== "") issues.push(`story ${story.key} is overset: ${JSON.stringify(story.oversetText.slice(0, 40))} does not fit.`);
     for (const reason of story.hidden) issues.push(`story ${story.key} has hidden text: ${reason}.`);
     return issues;
   })];
@@ -130,6 +130,7 @@ function linkIssues(book: BookReadback, contract: BookContract): string[] {
   return book.links.flatMap((link) => {
     const where = `link ${link.id} on page ${link.page}`;
     const issues: string[] = [];
+    if (link.page < 1 || link.page > book.pageCount) issues.push(`${where} is outside pages 1-${book.pageCount}.`);
     if (link.status !== status) issues.push(`${where} is ${link.status}, not ${status}.`);
     if (link.sha256 !== link.expectedSha256) issues.push(`${where} reports target digest ${link.sha256 || "none"}, not the selected ${link.expectedSha256}.`);
     const actual = sha256File(link.path);

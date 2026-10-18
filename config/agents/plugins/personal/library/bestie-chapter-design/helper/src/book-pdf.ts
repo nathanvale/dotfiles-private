@@ -57,12 +57,102 @@ function header(info: string, name: string): string {
   return new RegExp(`^${name}:\\s*(.*)$`, "m").exec(info)?.[1]?.trim() ?? "";
 }
 
-const CONTENT_MARK = /(?:^|\s)(?:BT|cm|re|Do|f|S|m)(?:\s|$)/;
-const NUMBER = "-?\\d*\\.?\\d+";
+const CONTENT_OPERATORS = new Set(["BT", "cm", "re", "Do", "f", "S", "m", "l", "q", "Q"]);
+const DELIMITERS = "()<>[]{}/%";
+const isSpace = (c: string) => c === " " || c === "\n" || c === "\r" || c === "\t" || c === "\f" || c === "\0";
+const isNumber = (token: string) => /^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(token);
+
+/** Index after a literal string that opens at `from`, honouring nesting and escapes. */
+function skipLiteral(text: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\") i++;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) return i + 1;
+  }
+  return text.length;
+}
+
+function endOfWord(text: string, from: number): number {
+  let j = from;
+  while (j < text.length && !isSpace(text[j] ?? "") && !DELIMITERS.includes(text[j] ?? "")) j++;
+  return j;
+}
+
+function endOfLine(text: string, from: number): number {
+  const at = text.indexOf("\n", from);
+  return at < 0 ? text.length : at + 1;
+}
+
+function endOfAngle(text: string, from: number): number {
+  if (text[from + 1] === "<") return from + 2;
+  const at = text.indexOf(">", from);
+  return at < 0 ? text.length : at + 1;
+}
+
+/** Index after a non-token construct that opens at `from` (comment, string, name, whitespace), or -1 when it is a token. */
+function skipNonToken(text: string, from: number): number {
+  const c = text[from] ?? "";
+  if (isSpace(c)) return from + 1;
+  if (c === "%") return endOfLine(text, from);
+  if (c === "(") return skipLiteral(text, from);
+  if (c === "<") return endOfAngle(text, from);
+  if (c === "/") return endOfWord(text, from + 1);
+  return -1;
+}
+
+/** Content-stream tokens that matter here: numbers and bare operators; strings, names, comments and inline image data are skipped. */
+function* operatorTokens(text: string): Generator<string> {
+  let i = 0;
+  while (i < text.length) {
+    const skipped = skipNonToken(text, i);
+    if (skipped >= 0) {
+      i = skipped;
+      continue;
+    }
+    const c = text[i] ?? "";
+    const end = DELIMITERS.includes(c) ? i + 1 : endOfWord(text, i);
+    const token = text.slice(i, end);
+    i = end;
+    yield token;
+    if (token === "ID") i = skipInlineImage(text, i);
+  }
+}
+
+function skipInlineImage(text: string, from: number): number {
+  const end = text.indexOf("EI", from);
+  return end < 0 ? text.length : end + 2;
+}
+
+const COLOUR_ARITY: Record<string, { space: keyof ContentColours; operands: number }> = {
+  G: { operands: 1, space: "gray" },
+  K: { operands: 4, space: "cmyk" },
+  RG: { operands: 3, space: "rgb" },
+  g: { operands: 1, space: "gray" },
+  k: { operands: 4, space: "cmyk" },
+  rg: { operands: 3, space: "rgb" },
+};
+
+/** True when the text holds drawing operators, so it is a content stream and not font or image data. */
+function isContent(text: string): boolean {
+  for (const token of operatorTokens(text)) if (CONTENT_OPERATORS.has(token)) return true;
+  return false;
+}
 
 function colourOperators(content: string): ContentColours {
-  const count = (operands: number, ops: string) => content.match(new RegExp(`(?:^|\\s)(?:${NUMBER}\\s+){${operands}}(?:${ops})(?=\\s|$)`, "g"))?.length ?? 0;
-  return { cmyk: count(4, "k|K"), gray: count(1, "g|G"), rgb: count(3, "rg|RG") };
+  const found: ContentColours = { cmyk: 0, gray: 0, rgb: 0 };
+  let numbers = 0;
+  for (const token of operatorTokens(content)) {
+    if (isNumber(token)) {
+      numbers++;
+      continue;
+    }
+    const colour = COLOUR_ARITY[token];
+    if (colour !== undefined && numbers >= colour.operands) found[colour.space]++;
+    numbers = 0;
+  }
+  return found;
 }
 
 function decoded(bytes: Buffer): string {
@@ -91,7 +181,7 @@ function readContentColours(path: string): ContentColours {
     if (file.subarray(open - 3, open).toString("latin1") === "end") continue;
     const start = file.subarray(open + 6, open + 8).toString("latin1").startsWith("\r\n") ? open + 8 : open + 7;
     const content = decoded(file.subarray(start, close));
-    if (!CONTENT_MARK.test(content)) continue;
+    if (!isContent(content)) continue;
     const found = colourOperators(content);
     total.cmyk += found.cmyk;
     total.gray += found.gray;

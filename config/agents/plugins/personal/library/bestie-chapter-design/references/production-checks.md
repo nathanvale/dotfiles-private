@@ -149,9 +149,11 @@ Deterministic, failing the command:
   family or declared exception, and for family pages the page-local margins,
   columns and required frame bounds (card placement) of that family;
 - each story against its selected text, compared exactly (whitespace
-  included), plus overset text and declared hidden text;
-- the contract's story inventory (an omitted, extra or relocated story fails);
-- links: status, the target hashed on disk, reconciled with the bound art
+  included), plus any overset text (blank paragraphs included) and declared hidden text;
+- the contract's story inventory (an omitted, extra or relocated story fails),
+  each story's expected text bound to the contract's digest and found
+  paragraph-for-paragraph in its owner file at the bound source commit;
+- links: page inside the book, status, the target hashed on disk, reconciled with the bound art
   entry of the same id, effective ppi and profile;
 - every inventoried document font installed, the contract's required fonts
   present, and rendered-glyph evidence for every non-Latin character, emoji

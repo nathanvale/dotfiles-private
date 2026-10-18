@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, run, scratch } from "./fixtures.ts";
+import { cleanup, run, scratch, sha256, sourceRepository } from "./fixtures.ts";
 import { BLEED, book, type Fixture, rewritePdf, TRIM } from "./book-fixtures.ts";
 
 afterEach(cleanup);
@@ -188,6 +188,40 @@ describe.skipIf(!poppler)("book: whole-book evidence", () => {
     refused(runBook(h), "story p1:body is on pages 2; the contract lists 1");
   });
 
+  test("binds expected story text to the contract digest and the bound source revision", () => {
+    const f = book(scratch());
+    Object.assign(f.native.stories[0], { expected: "HH", text: "HH" });
+    refused(runBook(f), "expected text is", "not the contract's selected", "is not paragraph-for-paragraph in note.md");
+    const g = book(scratch());
+    g.contract.stories[0].owner = "absent.md";
+    refused(runBook(g), "owner absent.md is not in source revision");
+  });
+
+  test("accepts a story that is a contiguous run of source paragraphs, unwrapped", () => {
+    const f = book(scratch());
+    f.native.sourceRevision = sourceRepository(f.dir, "# T\n\nfirst\nline\n\nsecond\n\nthird\n");
+    Object.assign(f.native.stories[0], { expected: "first line\rsecond", text: "first line\rsecond" });
+    f.contract.stories[0].sha256 = sha256("first line\rsecond");
+    const message = runBook(f).envelope.message;
+    expect(message).not.toContain("[source]");
+    expect(message).not.toContain("[stories]");
+  });
+
+  test("refuses a link on a page outside the book, and keeps every link in the manifest", () => {
+    const f = book(scratch());
+    f.native.links[0].page = 999;
+    refused(runBook(f), "is outside pages 1-3");
+    const g = book(scratch());
+    const data = runBook(g).envelope.result.data as { manifest: { links: { id: string }[] } };
+    expect(data.manifest.links.map((l) => l.id)).toEqual(["art-1"]);
+  });
+
+  test("refuses whitespace-only overset", () => {
+    const f = book(scratch());
+    f.native.stories[0].oversetText = "\r\r";
+    refused(runBook(f), "story p1:body is overset");
+  });
+
   test("refuses lost paragraph breaks, since the source is compared exactly", () => {
     const f = book(scratch());
     f.native.stories[0].expected = "H\rH";
@@ -268,6 +302,17 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0 0 0 1 k" } : p)));
     f.contract.pdf.colourSpaces = ["rgb"];
     refused(runBook(f), "1 cmyk colour operator(s)");
+  });
+
+  test("reads colour operators as PDF tokens: not inside text strings, and before comments", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "(H 0 0 0 1 k H) Tj" } : p)));
+    expect(runBook(f).exitCode).toBe(0);
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0 0 0 1 k% black\n" } : p)));
+    refused(runBook(f), "paint 1 cmyk colour operator(s)");
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "% 0 0 0 1 k in a comment\n<0000> Tj" } : p)));
+    expect(runBook(f).exitCode).toBe(0);
   });
 
   test("reads colour operators from Flate-compressed content streams too", () => {

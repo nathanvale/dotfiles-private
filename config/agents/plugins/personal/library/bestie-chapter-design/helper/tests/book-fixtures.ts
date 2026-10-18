@@ -115,7 +115,7 @@ export function book(dir: string): Fixture {
   }));
   const fixture: Fixture = {
     contract: {
-      stories: [{ key: "p1:body", pages: [1] }],
+      stories: [{ key: "p1:body", owner: "note.md", pages: [1], sha256: sha256("H") }],
       exceptions: [{ page: 3, reason: "source-specific page kept on its own layout" }],
       families: [
         { columns, frames: [{ bounds: FRAMES[0], label: "body" }], margins, name: "Card-A" },
@@ -154,7 +154,7 @@ export function book(dir: string): Fixture {
       pdf: { path: pdfPath, sha256: fileSha(pdfPath) },
       preflight: { enabled: ["Overset text"], profile: "[Basic]", scope: "All pages" },
       revision: "r1",
-      sourceRevision: sourceRepository(dir),
+      sourceRevision: sourceRepository(dir, "# Note\n\nH\n"),
       stories: [{ expected: "H", hidden: [], key: "p1:body", pages: [1], text: "H" }],
       styles: { character: ["Emoji"], object: ["Art Frame"], paragraph: ["Bestie Body"], parent: ["A-Left", "B-Right"] },
       unicode: [],
