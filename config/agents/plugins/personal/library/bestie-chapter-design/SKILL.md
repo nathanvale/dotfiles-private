@@ -14,11 +14,13 @@ determine its rhythm.
 As of 18 October 2026, Nathan's operational nine-family layout library is
 `Recovered-Library-r20.indt`, SHA256
 `fcb90f8d4567f20f263bcad00b0ed0cbfd923a99c343680498cdbdba647311aa`, in
-`Bestie-Style-Kit-r20`. Source path:
+`Bestie-Style-Kit-r20`. It owns layout card geometry, typography and colours
+wherever its contract supersedes Phone r9. Mini custody path (evidence of where
+it was qualified, not a path every machine has):
 `/Users/server/.local/state/my-second-brain-playground/bstie-12-layout-review-20261018-r1/Delivery/Bestie-Style-Kit-r20/Recovered-Library-r20.indt`.
 Its report is `/Users/server/.herdr-projects/reports/bestie-book/12/style-library-r20/report.md`.
 
-- Recompute the hash before relying on the file; a different hash is a different library.
+- Use a local copy only after recomputing its hash with `shasum -a 256` and matching it. On a machine without a verified same-hash copy (for example a fresh MacBook session), report the library as unavailable; do not substitute r9, r3 or another file.
 - r20 is a technically qualified, editable REVIEW library. It is not the final book, exact-file acceptance, art acceptance or print acceptance.
 - Phone r9 and the r3 template are historical receipts and accepted artwork or drawing references, never the operational template. Ignore an older operational r9 or r3 template direction.
 - The canonical design system, roadmap and README may still carry that older direction. Their update belongs to the BSTIE-28 Vault Steward route; do not edit those notes or an installed cache from here. Where they disagree with this binding on the operational library, surface it before a new layout decision.
@@ -46,7 +48,7 @@ Reuse accepted art unless Nathan authorizes a specific redraw. For a requested n
 
 Apply the resolved design contract and actual approved native proof. Give each content type its suitable treatment: a quiet exact reply, a poem, a compact chart or a newspaper review can differ while sharing the book's typography, palette and spacing. Place whole proportional artwork with readable lettering. Fit full selected text with honest continuations before proposing a copy change.
 
-Build from the bound r20 library: open it into an independent editable document and exercise ordinary text and image changes before relying on it for the chapter. Keep current print geometry and technical mechanics in the packet's InDesign research owners.
+Reuse r20 through ordinary Parent and style import or reuse inside the document being built; for the existing one-INDD book, never create a new document from the `.indt`. Exercise ordinary text and image changes on the imported items before relying on them for the chapter. Keep current print geometry and technical mechanics in the packet's InDesign research owners.
 
 ## Shared typography and message headers
 
