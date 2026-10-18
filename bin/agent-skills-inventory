@@ -186,6 +186,7 @@ class Inventory:
         self.project_only = topology.get("projectOnly", {})
         self.third_party = topology.get("thirdParty", {})
         self.retired = set(topology.get("retired", []))
+        self.app_owned = topology.get("appOwned", {})
         self.locked = locked
         self.lock_path = lock_path
         self.native = {
@@ -408,6 +409,15 @@ class Inventory:
             row["content_agreement"] = "missing-target"
             self.attach(row, "dangling-symlink", "live address has no resolved target")
             return
+        declaration = self.app_owned.get(name)
+        if declaration and self.app_owned_matches(row, declaration):
+            row.update(
+                provenance="app-owned",
+                source_owner=declaration.get("owner", "unknown"),
+                source_path=target,
+                content_agreement="owned",
+            )
+            return
         if name in self.native:
             self.classify_native(row)
             return
@@ -495,6 +505,30 @@ class Inventory:
             )
             return
         self.attach(row, "unknown-provenance", "entry has no declared source owner")
+
+    def app_owned_matches(self, row, declaration):
+        """An app-owned entry is a real directory at a declared address."""
+        if row["address"] not in declaration.get("addresses", []):
+            return False
+        if row["filesystem_kind"] != "directory":
+            return False
+        required = declaration.get("requiredFile")
+        if not required:
+            return True
+        try:
+            with open(os.path.join(row["path"], required), encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+        except (OSError, UnicodeDecodeError):
+            return False
+        if not lines or lines[0].strip() != "---":
+            return False
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            key, separator, value = line.partition(":")
+            if separator and key == "name":
+                return value.strip().strip("\"'") == row["name"]
+        return False
 
     def classify_native(self, row):
         row.update(

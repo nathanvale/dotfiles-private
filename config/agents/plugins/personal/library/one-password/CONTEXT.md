@@ -44,6 +44,14 @@ _Avoid_: broad enumeration, vault discovery, item discovery
 A metadata-only search within the vault scope granted to a capability's service account, used when the capability knows the token-scoped vault but not yet the exact item. Candidate Login items require the approved origin; an optional login path may rank or disambiguate same-origin candidates after query and fragment removal. A unique deterministic match may bind automatically; ambiguity requires human selection. Title and field shape are hints only.
 _Avoid_: account-wide enumeration, cross-vault search, secret-value scan, ambiguous automatic binding
 
+**Browser login whitelist**:
+A user-approved mapping from one automation name to an exact vault, Login item,
+item ID, HTTPS origin and Chrome profile. It restricts where an existing login
+may be filled; it never expands the service account's vault grants. The generic
+`one-password` browser-login Module owns validation and custody. Consuming
+skills own their navigation and business effects.
+_Avoid_: vault-wide login permission, wildcard destination, per-portal credential helper
+
 **Materialized secret adapter**:
 A generated compatibility surface that contains plaintext secret values only because a target tool cannot consume `op run` or 1Password references directly. It is never the source of truth and should be scoped to the tool that needs it.
 _Avoid_: secret source, canonical env file, synced secrets file

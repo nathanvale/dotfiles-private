@@ -1,7 +1,6 @@
 ---
 name: one-password
-description: "1Password/op: scoped service-account reads first, targeted secret read/store/inject, interactive desktop sign-in fallback."
-role: tool-workflow
+description: "1Password/op: scoped secret custody, approved allowlisted browser login, and interactive sign-in fallback."
 metadata: {"clawdbot":{"emoji":"🔐","requires":{"bins":["op"]}}}
 ---
 
@@ -19,13 +18,13 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 ## Token custody
 
 - Let `$HOME/code/dotfiles/bin/with-one-password-token` own token custody and process-scoped injection. Never read, source, create, or export its token source from this workflow; never place the token in shell rc, tmux/PTY environment, or ambient env.
-- Browser filling is human-visible work in the 1Password browser extension.
-  This CLI workflow never fetches a browser-login secret, fills a browser,
-  transfers a credential through the clipboard, or puts authentication material
-  in an adapter plan.
-- At a browser login wall, stop and let Nathan sign in inside the native
-  Harness browser; `$HOME/code/dotfiles/docs/agents/browser-automation.md`
-  owns that rule. Resume only after he returns the same visible tab.
+- Browser login uses the extension or a specifically authorised capability's
+  native-browser custody helper. Read [browser-login](references/browser-login.md)
+  for that branch; it binds exact vault, item, origin and profile. Use its helper
+  rather than returning secrets to an agent.
+  Other browser logins remain Nathan's sign-in handoff under
+  `$HOME/code/dotfiles/docs/agents/browser-automation.md`.
+- Keep browser secrets out of clipboard, adapter plans and model output.
 - Keep explicit vault listing and item create/update requests in this workflow.
 
 ## Workflow

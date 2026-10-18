@@ -39,6 +39,9 @@ config/agents/plugins/personal/library/xero-cash-coding/helper/dist/*
 !config/agents/plugins/personal/library/imazing-archive/helper/dist/
 config/agents/plugins/personal/library/imazing-archive/helper/dist/*
 !config/agents/plugins/personal/library/imazing-archive/helper/dist/imazing-archive.js
+!config/agents/plugins/personal/library/bestie-chapter-design/helper/dist/
+config/agents/plugins/personal/library/bestie-chapter-design/helper/dist/*
+!config/agents/plugins/personal/library/bestie-chapter-design/helper/dist/bestie-chapter-check.js
 
 # Karabiner automatic backups (generated)
 config/karabiner/automatic_backups/

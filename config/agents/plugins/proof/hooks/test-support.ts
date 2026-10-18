@@ -53,11 +53,13 @@ export async function runHook(
 	hookPath: string,
 	input: unknown,
 	extraArgs: string[] = [],
+	env?: Record<string, string>,
 ): Promise<HookRunResult> {
 	const proc = Bun.spawn([process.execPath, 'run', hookPath, ...extraArgs], {
 		stdin: 'pipe',
 		stdout: 'pipe',
 		stderr: 'pipe',
+		env: env ? { ...process.env, ...env } : process.env,
 	})
 	proc.stdin.write(JSON.stringify(input))
 	proc.stdin.end()

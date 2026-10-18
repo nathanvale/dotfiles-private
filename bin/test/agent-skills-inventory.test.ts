@@ -438,6 +438,50 @@ describe('agent-skills-inventory public process', () => {
 		)
 	})
 
+	test('accepts a declared app-owned entry and rejects an undeclared one', () => {
+		const fixture = makeFixture()
+		skill(join(fixture.claude, 'app-one', 'SKILL.md'), 'app-one')
+
+		const undeclared = run(fixture.home, '--json')
+		expect(JSON.parse(undeclared.stdout.toString()).issues).toEqual([
+			expect.objectContaining({ code: 'unknown-provenance', name: 'app-one' }),
+		])
+
+		const topologyPath = join(fixture.dotfiles, 'config', 'agents', 'skills', 'topology.json')
+		const topology = JSON.parse(readFileSync(topologyPath, 'utf8'))
+		topology.appOwned = { 'app-one': { owner: 'fixture-app', addresses: ['claude'] } }
+		write(topologyPath, JSON.stringify(topology))
+
+		const declared = run(fixture.home, '--json')
+		const report = JSON.parse(declared.stdout.toString())
+		expect(report.issues).toEqual([])
+		expect(
+			report.entries.find((entry: { name: string }) => entry.name === 'app-one'),
+		).toMatchObject({ provenance: 'app-owned', source_owner: 'fixture-app' })
+
+		rmSync(join(fixture.claude, 'app-one'), { recursive: true })
+		mkdirSync(join(fixture.home, 'unrelated'), { recursive: true })
+		symlinkSync(join(fixture.home, 'unrelated'), join(fixture.claude, 'app-one'))
+		const lookalike = JSON.parse(run(fixture.home, '--json').stdout.toString())
+		expect(lookalike.issues).toEqual([
+			expect.objectContaining({ code: 'unknown-provenance', name: 'app-one' }),
+		])
+
+		// A real directory whose required file names a different skill is not the app's.
+		rmSync(join(fixture.claude, 'app-one'))
+		skill(join(fixture.claude, 'app-one', 'SKILL.md'), 'other-skill')
+		topology.appOwned['app-one'].requiredFile = 'SKILL.md'
+		write(topologyPath, JSON.stringify(topology))
+		write(
+			join(fixture.claude, 'app-one', 'SKILL.md'),
+			'---\nname: other-skill\n---\n\n```yaml\nname: app-one\n```\n',
+		)
+		const renamed = JSON.parse(run(fixture.home, '--json').stdout.toString())
+		expect(renamed.issues).toEqual([
+			expect.objectContaining({ code: 'unknown-provenance', name: 'app-one' }),
+		])
+	})
+
 	test('fails closed on legacy, retired, dangling, and content disagreement', () => {
 		const fixture = makeFixture()
 		skill(join(fixture.legacySource, 'legacy-one', 'SKILL.md'), 'legacy-one')
