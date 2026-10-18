@@ -16,10 +16,21 @@ content; this file owns only how to find and trust it.
    That index names the snapshot location and its verification boundary. Read
    it each time. Mini paths, hashes and revisions are mutable state: take them
    from the live owner, never from this skill or an earlier session.
-3. For the owning receipt, look in the project's public coordinator record (the
-   Herdr project state for `bestie-book`; see Herdr control for how to read it)
-   for a handoff that names the snapshot, its hash and the canonical source.
-   Without one, request a fresh source handoff.
+3. Find the owning receipt through the installed board CLI. Read its help
+   (`herdr-projects --help`, from the installed `herdr-projects` binary) for the
+   `coordinator --project REPO where` command, then run it with `--json` and
+   `HERDR_SOCKET_PATH` set to the live Herdr socket:
+
+   ```sh
+   herdr-projects coordinator --project bestie-book where --json
+   ```
+
+   Plain `where` shows truncated previews; only `--json` returns each entry's
+   full `.said`. Select `.where[]` by the full entry `id`. A qualifying receipt
+   is an entry whose full text names the snapshot path, its sha256, and the
+   canonical source path and revision. Do not read the coordinator's private
+   state files, and do not match on an id prefix or a preview. With no match,
+   request a fresh source handoff.
 
 ## Accept one source
 
@@ -35,8 +46,11 @@ Record which one you used:
 
 A verified snapshot is authority as of the receipt, not proof of the current
 canonical file. Say so: report the receipt's recorded source revision, and
-treat the snapshot as current only if fresh foreground evidence (Nathan or
-Desktop) confirms the canonical file's hash is unchanged. When currency is
+treat the snapshot as current only if fresh foreground evidence confirms the
+canonical file's hash is unchanged. Accept that evidence only as a newer
+coordinator entry found the same way (full `.said` with the canonical path,
+revision, last file-changing commit and hash) or a direct reply from Nathan. A
+claim you cannot resolve to such an entry stays unconfirmed. When currency is
 unconfirmed, a settled choice may continue; ask before a new layout decision
 the later canonical revisions could change.
 
