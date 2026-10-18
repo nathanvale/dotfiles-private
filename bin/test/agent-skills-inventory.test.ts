@@ -466,6 +466,16 @@ describe('agent-skills-inventory public process', () => {
 		expect(lookalike.issues).toEqual([
 			expect.objectContaining({ code: 'unknown-provenance', name: 'app-one' }),
 		])
+
+		// A real directory whose required file names a different skill is not the app's.
+		rmSync(join(fixture.claude, 'app-one'))
+		skill(join(fixture.claude, 'app-one', 'SKILL.md'), 'other-skill')
+		topology.appOwned['app-one'].requiredFile = 'SKILL.md'
+		write(topologyPath, JSON.stringify(topology))
+		const renamed = JSON.parse(run(fixture.home, '--json').stdout.toString())
+		expect(renamed.issues).toEqual([
+			expect.objectContaining({ code: 'unknown-provenance', name: 'app-one' }),
+		])
 	})
 
 	test('fails closed on legacy, retired, dangling, and content disagreement', () => {

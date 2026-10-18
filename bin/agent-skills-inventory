@@ -513,7 +513,13 @@ class Inventory:
         if row["filesystem_kind"] != "directory":
             return False
         required = declaration.get("requiredFile")
-        return not required or os.path.isfile(os.path.join(row["path"], required))
+        if not required:
+            return True
+        try:
+            with open(os.path.join(row["path"], required), encoding="utf-8") as handle:
+                return f"\nname: {row['name']}\n" in handle.read(4096)
+        except OSError:
+            return False
 
     def classify_native(self, row):
         row.update(
