@@ -16,21 +16,29 @@ content; this file owns only how to find and trust it.
    That index names the snapshot location and its verification boundary. Read
    it each time. Mini paths, hashes and revisions are mutable state: take them
    from the live owner, never from this skill or an earlier session.
-3. Find the owning receipt through the installed board CLI. Read its help
-   (`herdr-projects --help`, from the installed `herdr-projects` binary) for the
-   `coordinator --project REPO where` command, then run it with `--json` and
-   `HERDR_SOCKET_PATH` set to the live Herdr socket:
+3. Find the owning receipt, durable record first:
+   - **Durable.** The project memory index (step 2), or a note it links, may
+     record the receipt: snapshot path, sha256, canonical source path and
+     revision, and the date. Prefer it; it survives project traffic.
+   - **Transient.** The coordinator's recent-entries window. Read the installed
+     board CLI help (`herdr-projects --help`) for `coordinator --project REPO
+     where`, then run it with `--json` and `HERDR_SOCKET_PATH` set to the live
+     Herdr socket:
 
-   ```sh
-   herdr-projects coordinator --project bestie-book where --json
-   ```
+     ```sh
+     herdr-projects coordinator --project bestie-book where --json
+     ```
 
-   Plain `where` shows truncated previews; only `--json` returns each entry's
-   full `.said`. Select `.where[]` by the full entry `id`. A qualifying receipt
-   is an entry whose full text names the snapshot path, its sha256, and the
-   canonical source path and revision. Do not read the coordinator's private
-   state files, and do not match on an id prefix or a preview. With no match,
-   request a fresh source handoff.
+     Plain `where` shows truncated previews; only `--json` returns each entry's
+     full `.said`. The window is short: ordinary project traffic pushes older
+     entries out, so a receipt found there earlier may be gone now.
+
+   A qualifying receipt, from either, names the snapshot path, its sha256, and
+   the canonical source path and revision. Select entries by full `id`; never by
+   prefix or preview, and never from the coordinator's private state files. If
+   neither source yields one, the receipt is unresolvable: say so, stop layout
+   decisions, and ask the owner (Desktop or the native Bestie project) to record
+   the receipt in the project memory. Do not write it yourself.
 
 ## Accept one source
 
@@ -47,9 +55,9 @@ Record which one you used:
 A verified snapshot is authority as of the receipt, not proof of the current
 canonical file. Say so: report the receipt's recorded source revision, and
 treat the snapshot as current only if fresh foreground evidence confirms the
-canonical file's hash is unchanged. Look for that evidence in a second public
-lookup, the default (machine) coordinator, which is a different record from the
-project's:
+canonical file's hash is unchanged. Check the durable project memory first, then
+a second public lookup, the default (machine) coordinator, which is a different
+record from the project's and has the same short window:
 
 ```sh
 herdr-projects coordinator where --json
