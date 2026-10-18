@@ -14,6 +14,27 @@
 			]
 		}
 	},
+	"appOwned": {
+		".trash": {
+			"owner": "claude-desktop",
+			"addresses": [
+				"claude"
+			]
+		},
+		"herdr-projects": {
+			"owner": "herdr-projects",
+			"requiredFile": "SKILL.md",
+			"addresses": [
+				"claude"
+			]
+		},
+		"synced": {
+			"owner": "claude-desktop",
+			"addresses": [
+				"claude"
+			]
+		}
+	},
 	"thirdParty": {
 		"find-skills": {
 			"owner": "vercel-labs/skills",
