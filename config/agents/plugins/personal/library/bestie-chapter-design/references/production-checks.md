@@ -171,6 +171,8 @@ exclusions when counting device colour operators. The helper refuses object
 streams because it cannot establish their page-content membership; use a PDF
 with plain objects or a qualified independent inspection path. A refusal is
 missing evidence, never a colour pass.
+Indirect stream lengths require a readable classic cross-reference entry;
+unreadable or inconsistent lengths refuse the check instead of truncating it.
 
 The contract, not the helper, owns which pages belong to which family and which
 are exceptions. Derive both from the latest book and its coverage record each

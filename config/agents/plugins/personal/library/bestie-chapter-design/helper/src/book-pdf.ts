@@ -215,14 +215,58 @@ function streamKeys(dictionary: string): Map<string, string> {
   return out;
 }
 
-/** Body of indirect object `id generation`, or undefined when the file has no such plain object (for example one packed in an object stream). */
+/** Read a classic cross-reference subsection, validating its rows before using an offset. */
+function xrefRows(text: string, from: number, count: number, wanted: number, generation: number): { next: number; position: number | null | undefined } {
+  if (!Number.isSafeInteger(count) || count > text.length) throw new InputError("PDF cross-reference count is unreadable; colour cannot be checked.");
+  let position: number | null | undefined;
+  for (let index = 0; index < count; index++) {
+    const row = /^(\d+)[ \t]+(\d+)[ \t]+([nf])[ \t]*(?:\r\n|\n|\r)/.exec(text.slice(from));
+    if (row === null) throw new InputError("PDF cross-reference row is unreadable; colour cannot be checked.");
+    if (index === wanted) position = row[3] === "n" && Number(row[2]) === generation ? Number(row[1]) : null;
+    from += row[0].length;
+  }
+  return { next: from, position };
+}
+
+function xrefOffset(text: string, from: number, id: number, generation: number): { position?: number | null; previous?: number } {
+  if (!Number.isSafeInteger(from) || !text.startsWith("xref", from)) throw new InputError("PDF indirect Length needs a readable classic cross-reference table; colour cannot be checked.");
+  from += 4;
+  for (;;) {
+    from = afterTrivia(text, from);
+    if (text.startsWith("trailer", from)) {
+      const start = afterTrivia(text, from + 7);
+      const trailer = streamKeys(withoutComments(text.slice(start, valueEnd(text, start))));
+      const previous = trailer.get("Prev");
+      return previous !== undefined && /^\d+$/.test(previous) ? { previous: Number(previous) } : {};
+    }
+    const section = /^(\d+)\s+(\d+)\s+/.exec(text.slice(from));
+    if (section === null) throw new InputError("PDF cross-reference subsection is unreadable; colour cannot be checked.");
+    const rows = xrefRows(text, from + section[0].length, Number(section[2]), id - Number(section[1]), generation);
+    if (rows.position !== undefined) return { position: rows.position };
+    from = rows.next;
+  }
+}
+
+/** Resolve indirect Length by the actual xref entry, never by header-like text in a string or stream. */
 function objectBody(file: Buffer, id: string, generation: string): string | undefined {
   const text = file.toString("latin1");
-  const opener = new RegExp(`(?:^|[\\r\\n ])${id}\\s+${generation}\\s+obj\\b`).exec(text);
-  if (opener === null) return undefined;
-  const from = opener.index + opener[0].length;
-  const end = text.indexOf("endobj", from);
-  return end < 0 ? undefined : withoutComments(text.slice(from, end));
+  const start = /startxref\s+(\d+)\s+%%EOF\s*$/.exec(text);
+  let table = start === null ? undefined : Number(start[1]);
+  const seen = new Set<number>();
+  while (table !== undefined && !seen.has(table)) {
+    seen.add(table);
+    const entry = xrefOffset(text, table, Number(id), Number(generation));
+    if (entry.position !== undefined) {
+      if (entry.position === null) return undefined;
+      const header = new RegExp(`^${id}\\s+${generation}\\s+obj\\b`).exec(text.slice(entry.position));
+      if (header === null) return undefined;
+      const from = afterTrivia(text, entry.position + header[0].length);
+      const end = valueEnd(text, from);
+      return /^endobj\b/.test(text.slice(afterTrivia(text, end))) ? withoutComments(text.slice(from, end)) : undefined;
+    }
+    table = entry.previous;
+  }
+  return undefined;
 }
 
 /** Replaces each indirect reference in `value` by the body of the object it names; one that cannot be read fails closed. */
@@ -390,18 +434,21 @@ function nonContent(dictionary: Map<string, string>): boolean {
 }
 
 /** Declared /Length of a stream, direct or through an indirect object, or undefined when it cannot be read. */
-function declaredLength(dictionary: Map<string, string>, file: Buffer): number | undefined {
+function declaredLength(dictionary: Map<string, string>, file: Buffer): number {
   const raw = dictionary.get("Length") ?? "";
   const indirect = /^(\d+)\s+(\d+)\s+R$/.exec(raw);
   const value = indirect === null ? raw : objectBody(file, indirect[1] ?? "", indirect[2] ?? "")?.trim();
-  return value !== undefined && /^\d+$/.test(value) ? Number(value) : undefined;
+  if (value === undefined || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new InputError("PDF stream Length is unreadable; colour cannot be checked.");
+  return Number(value);
 }
 
-/** End of the stream data: where its declared /Length says when `endstream` follows there, else the first `endstream`. */
+/** Stream boundaries require the declared length; unreadable boundaries are never treated as absent colour. */
 function streamEnd(file: Buffer, dictionary: Map<string, string>, start: number): number {
   const length = declaredLength(dictionary, file);
-  if (length !== undefined && /^\s*endstream/.test(file.toString("latin1", start + length, start + length + 12))) return start + length;
-  return file.indexOf("endstream", start, "latin1");
+  const text = file.toString("latin1");
+  const marker = afterTrivia(text, start + length);
+  if (/^endstream\b/.test(text.slice(marker)) && /^endobj\b/.test(text.slice(afterTrivia(text, marker + 9)))) return start + length;
+  throw new InputError("PDF stream Length does not end at endstream and endobj; colour cannot be checked.");
 }
 
 /**

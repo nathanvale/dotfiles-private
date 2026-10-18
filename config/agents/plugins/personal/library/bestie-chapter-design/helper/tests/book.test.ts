@@ -524,6 +524,59 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     }
   });
 
+  test("uses the cross-reference entry for indirect stream Length", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "/Span << /ActualText (endstream) >> BDC EMC 0.5 g" } : p));
+    const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(match => match[1] ?? "");
+    const index = objects.findIndex(body => body.includes("0.5 g BT"));
+    expect(index).toBeGreaterThanOrEqual(0);
+    const original = objects[index] ?? "";
+    const start = original.indexOf("stream\n") + 7;
+    const length = original.lastIndexOf("\nendstream") - start;
+    const shorter = original.indexOf("endstream)", start) - start;
+    expect(shorter).toBeGreaterThan(0);
+    const lengthId = objects.length + 1;
+    const render = () => Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+    const control = render();
+    expect(control.exitCode).toBe(0);
+    expect(control.stderr.toString()).toBe("");
+    expect(control.stdout.length).toBeGreaterThan(100);
+    for (const mode of ["control", "string", "incremental"]) {
+      const changed = [...objects];
+      changed[index] = original.replace(/\/Length \d+/, `/Length ${lengthId} 0 R`);
+      if (mode !== "control") changed[index] = (changed[index] ?? "").replace("<< ", `<< /Foo (\n${lengthId} 0 obj\n${shorter}\nendobj\n) `);
+      changed.push(String(length));
+      writePdfObjects(f.pdfPath, changed);
+      if (mode === "incremental") {
+        const pdf = readFileSync(f.pdfPath, "latin1");
+        const previous = /startxref\s+(\d+)/.exec(pdf)?.[1];
+        const update = `xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size ${changed.length + 1} /Root 1 0 R /Prev ${previous} >>\nstartxref\n${Buffer.byteLength(pdf, "latin1")}\n%%EOF\n`;
+        writeFileSync(f.pdfPath, pdf + update, "latin1");
+      }
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      const rendered = render();
+      expect(rendered.exitCode).toBe(0);
+      expect(rendered.stderr.toString()).toBe("");
+      expect(rendered.stdout.equals(control.stdout)).toBe(true);
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
+  });
+
+  test("refuses unreadable stream lengths instead of accepting a partial scan", () => {
+    const f = book(scratch());
+    const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(match => match[1] ?? "");
+    const target = objects.findIndex(body => /\/Length \d+/.test(body));
+    expect(target).toBeGreaterThanOrEqual(0);
+    for (const [replacement, message] of [["/Length 0", "Length does not end at endstream"], ["/Length 999 0 R", "stream Length is unreadable"], ["/OtherLength 0", "stream Length is unreadable"]]) {
+      const changed = [...objects];
+      changed[target] = (changed[target] ?? "").replace(/\/Length \d+/, replacement ?? "");
+      writePdfObjects(f.pdfPath, changed);
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      refused(runBook(f), message ?? "");
+    }
+  });
+
   test("reads escaped PDF filter names and keys", () => {
     const f = book(scratch());
     f.contract.pdf.colourSpaces = ["rgb"];
