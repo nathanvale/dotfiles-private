@@ -23,7 +23,7 @@ Its report is `/Users/server/.herdr-projects/reports/bestie-book/12/style-librar
 - Use a local copy only after recomputing its hash with `shasum -a 256` and matching it. On a machine without a verified same-hash copy (for example a fresh MacBook session), report the library as unavailable; do not substitute r9, r3 or another file.
 - r20 is a technically qualified, editable REVIEW library. It is not the final book, exact-file acceptance, art acceptance or print acceptance.
 - Phone r9 and the r3 template are historical receipts and accepted artwork or drawing references, never the operational template. Ignore an older operational r9 or r3 template direction.
-- The canonical design system, roadmap and README may still carry that older direction. Their update belongs to the BSTIE-28 Vault Steward route; do not edit those notes or an installed cache from here. Where they disagree with this binding on the operational library, surface it before a new layout decision.
+- The canonical design system carries this same hash binding (BSTIE-28 Vault Steward route). A dated snapshot from before that update may still show the older Phone r9 or r3 direction; treat it as history. If the canonical hash differs from this one, surface it before a new layout decision. Never edit those notes or an installed cache from a skill session.
 - Page-level family choices, source-specific exclusions and shared typography still come from the resolved design contract.
 
 ## Resolve the chapter
