@@ -2,6 +2,8 @@ import {
   type ArtBinding,
   anyText,
   artBindings,
+  type Bounds,
+  bounds,
   type FileIdentity,
   fileIdentity,
   type SourceRevision,
@@ -24,7 +26,6 @@ export type Edges = { top: number; bottom: number; outside: number; inside: numb
 
 export type StyleInventory = Record<"paragraph" | "character" | "object" | "parent", string[]>;
 export type Override = { scope: string; property: string; value: string; style: string };
-export type Bounds = [number, number, number, number];
 export type Columns = { count: number; gutter: number };
 export type PageItem = { label: string; kind: string; style: string; bounds: Bounds; overrides: Override[] };
 export type PageRecord = {
@@ -154,12 +155,6 @@ function override(value: unknown, where: string): Override {
   };
 }
 
-function boundsOf(value: unknown, where: string): Bounds {
-  const items = list(value, where);
-  if (items.length !== 4) throw new InputError(`${where} must have 4 numbers.`);
-  return items.map((v, i) => numeric(v, `${where}[${i}]`)) as Bounds;
-}
-
 function columns(value: unknown, where: string): Columns {
   const item = record(value, where);
   return { count: integer(item.count, `${where}.count`), gutter: numeric(item.gutter, `${where}.gutter`) };
@@ -176,7 +171,7 @@ function family(value: unknown, where: string): Family {
     columns: columns(item.columns, `${where}.columns`),
     frames: list(item.frames, `${where}.frames`).map((f, i) => {
       const frame = record(f, `${where}.frames[${i}]`);
-      return { bounds: boundsOf(frame.bounds, `${where}.frames[${i}].bounds`), label: text(frame.label, `${where}.frames[${i}].label`) };
+      return { bounds: bounds(frame.bounds, `${where}.frames[${i}].bounds`), label: text(frame.label, `${where}.frames[${i}].label`) };
     }),
     margins: edges(item.margins, `${where}.margins`),
     name: text(item.name, `${where}.name`),
@@ -186,7 +181,7 @@ function family(value: unknown, where: string): Family {
 function pageItem(value: unknown, where: string): PageItem {
   const item = record(value, where);
   return {
-    bounds: boundsOf(item.bounds, `${where}.bounds`),
+    bounds: bounds(item.bounds, `${where}.bounds`),
     kind: text(item.kind, `${where}.kind`),
     label: text(item.label, `${where}.label`),
     overrides: list(item.overrides, `${where}.overrides`).map((entry, i) => override(entry, `${where}.overrides[${i}]`)),

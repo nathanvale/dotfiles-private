@@ -1,4 +1,5 @@
-import type { BookContract, BookReadback, Bounds, Edges, Family, PageRecord } from "./book-input.ts";
+import type { Bounds } from "./input.ts";
+import type { BookContract, BookReadback, Edges, Family, PageRecord } from "./book-input.ts";
 import { sha256File } from "./input.ts";
 
 const differs = (a: number, b: number, tolerance: number) => Math.abs(a - b) > tolerance;
