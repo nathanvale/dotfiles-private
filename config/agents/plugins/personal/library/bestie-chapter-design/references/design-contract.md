@@ -9,14 +9,17 @@ content; this file owns only how to find and trust it.
 
 1. Read `~/.config/context/vault.md`, then the canonical packet
    `projects/melanie-fourth-anniversary-meme-album/` (`README.md`, `GOAL.md`).
-   Look for the design owner there. Do not assume a fixed path, or that the
-   packet names one: on the Mini it currently has no `design-system.md` and no
-   pointer to it.
-2. When the packet has no design owner, follow the Bestie project memory route:
-   `MEMORY.md`, then `memory/reference/README.md` (from the Herdr project root
-   `bestie-book`). That index names the snapshot location and its verification
-   boundary. Read it each time; do not copy its paths here or from an earlier
-   session.
+   Look for the design owner there. Do not assume a fixed path or that the
+   packet names one; a machine may hold the packet without that file.
+2. When the file is absent, follow the Bestie project memory route:
+   `MEMORY.md`, then `memory/reference/README.md` (Herdr project `bestie-book`).
+   That index names the snapshot location and its verification boundary. Read
+   it each time. Mini paths, hashes and revisions are mutable state: take them
+   from the live owner, never from this skill or an earlier session.
+3. For the owning receipt, look in the project's public coordinator record (the
+   Herdr project state for `bestie-book`; see Herdr control for how to read it)
+   for a handoff that names the snapshot, its hash and the canonical source.
+   Without one, request a fresh source handoff.
 
 ## Accept one source
 
@@ -26,15 +29,22 @@ Record which one you used:
   path, revision (commit or digest) and the time read.
 - **Verified dated snapshot.** Only when the canonical file is absent. It needs
   all of: the date and source revision in its name or header; a content hash
-  you recompute with `shasum -a 256`; and an owning receipt, named by the memory
-  index or a fresh source handoff, that records that hash. A snapshot is not
-  automatically current. A dated copy found anywhere else (worktree, cache,
-  handoff, chat) is context, not authority.
+  you recompute with `shasum -a 256`; and an owning receipt (step 3) that records
+  that same hash and names the canonical source it came from. A dated copy found
+  anywhere else (worktree, cache, handoff text, chat) is context, not authority.
 
-A snapshot missing the receipt, or whose hash differs, is unverified: request a
-fresh source handoff. Never invent a receipt, infer authority from a filename, or
-rebuild the contract from memory or exemplar pixels. With no verified source,
-stop layout decisions and keep to read-only inspection and copy checks.
+A verified snapshot is authority as of the receipt, not proof of the current
+canonical file. Say so: report the receipt's recorded source revision, and
+treat the snapshot as current only if fresh foreground evidence (Nathan or
+Desktop) confirms the canonical file's hash is unchanged. When currency is
+unconfirmed, a settled choice may continue; ask before a new layout decision
+the later canonical revisions could change.
+
+A snapshot with no matching receipt, or a hash that differs, is unverified:
+request a fresh source handoff. Never invent a receipt, infer authority from a
+filename, create the canonical file on a machine that lacks it, or rebuild the
+contract from memory or exemplar pixels. With no verified source, stop layout
+decisions and keep to read-only inspection and copy checks.
 
 ## Surface uncertainty first
 
@@ -52,5 +62,5 @@ Do not restate them here.
 
 ## Hand back
 
-Name the contract source (canonical revision, or snapshot path, hash and
-receipt), and any deviation or unresolved uncertainty.
+Name the contract source (canonical revision, or snapshot path, hash, receipt
+and its currency qualification), and any deviation or unresolved uncertainty.

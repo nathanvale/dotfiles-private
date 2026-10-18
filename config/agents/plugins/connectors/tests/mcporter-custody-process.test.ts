@@ -31,15 +31,18 @@ const LIVE_NOTARIZATION = ["/usr/bin/codesign", "--verify", "--strict", "--check
 // on hosted runners (exit 3, indistinguishable from the denied sandbox's exit).
 // Retry the unsandboxed control only; the denied control below is never retried,
 // so a pass still proves the sandbox denies what the pinned bytes otherwise pass.
-// Each probe is killed after probeTimeoutMs and the whole loop stops at budgetMs,
-// so an unreachable service fails well inside the test timeout.
-async function liveNotarizationPasses(binary: string, budgetMs = 60000, probeTimeoutMs = 15000, delayMs = 5000) {
-	const deadline = Date.now() + budgetMs;
+// Each probe is killed after PROBE_TIMEOUT_MS and the whole loop stops within
+// RETRY_BUDGET_MS, so an unreachable service fails well inside the test timeout.
+const RETRY_BUDGET_MS = 60000;
+const PROBE_TIMEOUT_MS = 15000;
+const RETRY_DELAY_MS = 5000;
+async function liveNotarizationPasses(binary: string) {
+	const deadline = Date.now() + RETRY_BUDGET_MS;
 	for (;;) {
-		const probe = Bun.spawnSync([...LIVE_NOTARIZATION, binary], { stdout: "ignore", stderr: "ignore", timeout: probeTimeoutMs });
+		const probe = Bun.spawnSync([...LIVE_NOTARIZATION, binary], { stdout: "ignore", stderr: "ignore", timeout: PROBE_TIMEOUT_MS });
 		if (probe.exitCode === 0) return true;
-		if (Date.now() + delayMs + probeTimeoutMs > deadline) return false;
-		await Bun.sleep(delayMs);
+		if (Date.now() + RETRY_DELAY_MS + PROBE_TIMEOUT_MS > deadline) return false;
+		await Bun.sleep(RETRY_DELAY_MS);
 	}
 }
 
