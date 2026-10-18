@@ -193,8 +193,8 @@ function containerEnd(text: string, from: number, close: string): number {
 }
 
 /** Only actual stream keys classify it; resource values and strings are never keys. */
-function streamKeys(dictionary: string): string {
-  let out = "";
+function streamKeys(dictionary: string): Map<string, string> {
+  const out = new Map<string, string>();
   let at = dictionary.indexOf("<<") + 2;
   while (at < dictionary.length && !dictionary.startsWith(">>", at)) {
     if (isSpace(dictionary[at] ?? "")) { at++; continue; }
@@ -205,8 +205,7 @@ function streamKeys(dictionary: string): string {
     while (isSpace(dictionary[at] ?? "")) at++;
     const next = valueEnd(dictionary, at);
     const value = dictionary.slice(at, next);
-    if (["Filter", "F", "Length", "Length1", "Length2", "Length3", "N", "FunctionType", "ShadingType"].includes(key)) out += ` /${key} ${value}`;
-    else if (["Type", "Subtype"].includes(key) && value.startsWith("/")) out += ` /${key} ${pdfName(value)}`;
+    out.set(key, value);
     at = Math.max(next, at + 1);
   }
   return out;
@@ -232,13 +231,13 @@ function resolveReferences(value: string, file: Buffer, depth = 0): string {
 }
 
 /** Filter names of a stream dictionary, in application order, with abbreviations expanded and indirect values followed. */
-function filtersOf(dictionary: string, file: Buffer): string[] {
-  const value = /\/(?:Filter|F)\s*(\[[^\]]*\]|\/[^\s/<>[\]()]+|\d+\s+\d+\s+R)/.exec(dictionary)?.[1];
-  if (value === undefined) {
-    if (/\/Filter\b/.test(dictionary)) throw new InputError("PDF stream has a /Filter this reader cannot parse, so its colour operators cannot be checked.");
-    return [];
-  }
-  return [...resolveReferences(value, file).matchAll(/\/([^\s/<>[\]()]+)/g)].map((m) => FILTER_NAMES[pdfName(m[1] ?? "")] ?? pdfName(m[1] ?? ""));
+function filtersOf(dictionary: Map<string, string>, file: Buffer): string[] {
+  const raw = dictionary.get("Filter") ?? dictionary.get("F");
+  if (raw === undefined) return [];
+  const value = resolveReferences(raw, file).trim();
+  const names = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  if (!/^(?:\s*\/[^\s/<>[\]()%]+\s*)*$/.test(names)) throw new InputError("PDF stream has a /Filter this reader cannot parse, so its colour operators cannot be checked.");
+  return [...names.matchAll(/\/([^\s/<>[\]()%]+)/g)].map((m) => FILTER_NAMES[pdfName(m[1] ?? "")] ?? pdfName(m[1] ?? ""));
 }
 
 function ascii85(text: string): Buffer {
@@ -299,10 +298,10 @@ function applyFilter(name: string, bytes: Buffer): Buffer {
 }
 
 /** Decoded stream text, or undefined for image data the colour operators do not live in. A filter that cannot be read fails closed. */
-function decoded(dictionary: string, bytes: Buffer, file: Buffer): string | undefined {
+function decoded(dictionary: Map<string, string>, bytes: Buffer, file: Buffer): string | undefined {
   const filters = filtersOf(dictionary, file);
   if (filters.some((name) => IMAGE_FILTERS.has(name))) return undefined;
-  if (/\/Subtype\s*\/Image/.test(dictionary)) return undefined;
+  if (pdfName(dictionary.get("Subtype") ?? "") === "/Image") return undefined;
   try {
     return filters.reduce((data, name) => applyFilter(name, data), bytes).toString("latin1");
   } catch (error) {
@@ -317,17 +316,24 @@ function streamDictionary(file: Buffer, open: number): string {
 }
 
 /** Streams that carry fonts, images, profiles, tables or structure, never page content, told by their dictionary. */
-const NON_CONTENT = /\/Type\s*\/(?:XRef|ObjStm|Metadata|EmbeddedFile|CMap)\b|\/Subtype\s*\/(?:Image|Type1C|CIDFontType0C|OpenType|XML)\b|\/Length[123]\b|\/FunctionType\b|\/ShadingType\b|\/N\s+\d/;
+function nonContent(dictionary: Map<string, string>): boolean {
+  const type = pdfName(dictionary.get("Type") ?? "");
+  const subtype = pdfName(dictionary.get("Subtype") ?? "");
+  return ["/XRef", "/ObjStm", "/Metadata", "/EmbeddedFile", "/CMap"].includes(type)
+    || ["/Image", "/Type1C", "/CIDFontType0C", "/OpenType", "/XML"].includes(subtype)
+    || ["Length1", "Length2", "Length3", "FunctionType", "ShadingType", "N"].some((key) => /^\d/.test(dictionary.get(key) ?? ""));
+}
 
 /** Declared /Length of a stream, direct or through an indirect object, or undefined when it cannot be read. */
-function declaredLength(dictionary: string, file: Buffer): number | undefined {
-  const indirect = /\/Length\s+(\d+)\s+(\d+)\s+R\b/.exec(dictionary);
-  const value = indirect === null ? /\/Length\s+(\d+)\b/.exec(dictionary)?.[1] : objectBody(file, indirect[1] ?? "", indirect[2] ?? "")?.trim();
+function declaredLength(dictionary: Map<string, string>, file: Buffer): number | undefined {
+  const raw = dictionary.get("Length") ?? "";
+  const indirect = /^(\d+)\s+(\d+)\s+R$/.exec(raw);
+  const value = indirect === null ? raw : objectBody(file, indirect[1] ?? "", indirect[2] ?? "")?.trim();
   return value !== undefined && /^\d+$/.test(value) ? Number(value) : undefined;
 }
 
 /** End of the stream data: where its declared /Length says when `endstream` follows there, else the first `endstream`. */
-function streamEnd(file: Buffer, dictionary: string, start: number): number {
+function streamEnd(file: Buffer, dictionary: Map<string, string>, start: number): number {
   const length = declaredLength(dictionary, file);
   if (length !== undefined && /^\s*endstream/.test(file.toString("latin1", start + length, start + length + 12))) return start + length;
   return file.indexOf("endstream", start, "latin1");
@@ -355,7 +361,7 @@ function readContentColours(path: string): ContentColours {
     const end = streamEnd(file, dictionary, start);
     if (end < 0) return total;
     from = end;
-    if (NON_CONTENT.test(dictionary)) continue;
+    if (nonContent(dictionary)) continue;
     const content = decoded(dictionary, file.subarray(start, end), file);
     if (content === undefined) continue;
     const found = colourOperators(content);

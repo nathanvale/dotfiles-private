@@ -455,6 +455,12 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
       "/Foo <2f54797065202f58526566>",
       "/Foo [/Subtype /Image]",
       "/Foo [/Filter /DCTDecode]",
+      "/Subtype /ImageForm",
+      "/Subtype /Image-Foo",
+      "/Type /Metadata-Foo",
+      "/Subtype /Type1C-Foo",
+      "/Subtype /Image#20Form",
+      "/Type /Metadata#20Foo",
     ];
     for (const dict of dictionaries) {
       rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, extra: { content: "0.5 g", dict } } : p)));
