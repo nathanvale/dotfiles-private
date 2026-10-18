@@ -119,7 +119,11 @@ function filterEntry(filters: string[] | undefined): string {
 
 /** Writes a small valid PDF whose fonts are Type 3 (always embedded). */
 export function writePdf(path: string, pages: PdfPageSpec[]): void {
-  const objects = pdfObjects(pages);
+  writePdfObjects(path, pdfObjects(pages));
+}
+
+/** Serializes test-owned objects and rebuilds every cross-reference offset after a mutation. */
+export function writePdfObjects(path: string, objects: string[]): void {
   let out = "%PDF-1.6\n";
   const offsets: number[] = [];
   for (const [index, body] of objects.entries()) {

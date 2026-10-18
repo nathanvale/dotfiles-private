@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, run, scratch, sha256, sourceRepository } from "./fixtures.ts";
 import { pdfFindings } from "../src/book-pdf-checks.ts";
-import { BLEED, book, type Fixture, fileSha, rewritePdf, TRIM } from "./book-fixtures.ts";
+import { BLEED, book, type Fixture, fileSha, rewritePdf, TRIM, writePdfObjects } from "./book-fixtures.ts";
 
 afterEach(cleanup);
 
@@ -495,6 +495,33 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     const f = book(scratch());
     rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, extra: { dict: "/Type /ObjStm", content: "opaque" } } : p));
     refused(runBook(f), "object streams hide page Contents membership");
+  });
+
+  test("resolves Contents arrays from actual objects, not headers inside strings", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "0.5 g", dictionary: "/N 1" } : p));
+    const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(match => match[1] ?? "");
+    const content = objects.findIndex(body => body.includes("0.5 g BT"));
+    expect(content).toBeGreaterThanOrEqual(0);
+    const arrayId = objects.length + 1;
+    const render = () => Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+    const control = render();
+    expect(control.exitCode).toBe(0);
+    expect(control.stderr.toString()).toBe("");
+    expect(control.stdout.length).toBeGreaterThan(100);
+    for (const comment of [" ", "% legal reference separator\n"]) {
+      const changed = objects.map(body => body.replace(`/Contents ${content + 1} 0 R`, `/Contents ${arrayId}${comment}0 R`));
+      changed[content] = (changed[content] ?? "").replace("<< ", `<< /Foo (\n${arrayId} 0 obj\n[]\nendobj\n) `);
+      changed.push(`[${content + 1} 0 R]`);
+      writePdfObjects(f.pdfPath, changed);
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      const rendered = render();
+      expect(rendered.exitCode).toBe(0);
+      expect(rendered.stderr.toString()).toBe("");
+      expect(rendered.stdout.equals(control.stdout)).toBe(true);
+      refused(runBook(f), "paint 1 gray colour operator(s)");
+    }
   });
 
   test("reads escaped PDF filter names and keys", () => {
