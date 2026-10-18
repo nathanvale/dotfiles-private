@@ -87,3 +87,38 @@ before and after readbacks; check page moves with `protected --pages`.
   (`question`, `answer`, `evidence`) and `open` (`question`), `ui`
   (`owner`, `released`), optional `preview` (`state` plus the `queuedAt`,
   `openedAt` or `viewedEvidence` that proves it) and `nextAction`.
+
+## Whole-book readback and contract
+
+`book --native` takes one page-indexed readback from the reopened native
+file; `--contract` takes the production contract values. Paths are absolute.
+
+- Readback: `book`, `revision`, `native` and `pdf` (`path`, `sha256`),
+  `pageCount`, `sourceRevision` (`repository`, `commit`), `art` as
+  `[{ id, path, sha256 }]`, `preflight` (`profile`, `enabled`, `scope`),
+  `styles` (`paragraph`, `character`, `object`, `parent` names in the document),
+  `exportSettings` (name to value, as read back), `fonts` as
+  `[{ name, installed }]`, and `unicode` as
+  `[{ codepoints, font, method, rendered }]` (`method` as in
+  [ink provenance](#ink-provenance)).
+- `pages`: one per page, `{ page, side, parent: { name, transform }, fields,
+  bleed: { top, bottom, outside, inside }, items }`. `transform` is the six
+  numbers of the parent item's matrix; `fields` maps field name to its value;
+  `items` are `{ label, kind, style, overrides }` with each local override
+  `{ scope, property, value, style }`.
+- `stories`: `{ key, pages, text, expected, oversetText, hidden }`. `text` is
+  the whole story including overset; `expected` is the selected source text;
+  `hidden` lists reasons text is hidden (opaque field, off page, hidden layer).
+- `links`: `{ id, page, path, sha256, expectedSha256, status, effectivePpi,
+  profile }`; an empty `sha256` means the target is missing.
+- Contract: `pageCount`, `firstPageSide`, `tolerance`, `styles`,
+  `allowedOverrides` (`scope`, `property`, optional `value`), `parents`
+  (`name`, `side`, `transform`), `requiredFields`, `fieldExemptPages`, `bleed`,
+  `links` (`minPpi`, `profiles`, `status`), `requiredFonts`,
+  `preflightProfile`, and `pdf` (`trim` as `[width, height]`, `colourSpaces`
+  as poppler spells them, optional `minImagePpi`, `exportSettings`).
+
+On a pass, `data` is the page-indexed manifest (bindings, per-page parent,
+fields, links and PDF boxes, fonts and images), per-section finding counts,
+the open human reviews and the qualifications not granted. A failure lists
+each finding as `[section] message`.

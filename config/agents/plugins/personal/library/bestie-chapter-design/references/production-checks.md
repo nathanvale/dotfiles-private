@@ -125,6 +125,36 @@ unresolved qualifications. Keep creative acceptance, exact-source proof,
 accessible-PDF findings and print qualification distinct.
 
 The existing helper owns `baseline`, `copy`, `story`, `protected`, `dispatch`,
-`geometry` and `handback`. Reuse those commands with their documented inputs.
-This checklist adds evidence requirements; it adds no helper command, schema
-field or automated production/accessibility PASS.
+`geometry`, `book` and `handback`. Reuse those commands with their documented
+inputs. This checklist adds evidence requirements; it adds no automated
+production or accessibility PASS.
+
+## Whole-book evidence
+
+Run `book --native FILE --contract FILE` on the saved and reopened editable
+native and the exported PDF it names. Inputs are in
+[check inputs](check-inputs.md#whole-book-readback-and-contract). The helper
+reads the PDF itself with poppler (`pdfinfo`, `pdffonts`, `pdfimages`,
+`pdftotext`); native facts come from the readback, which must be taken from the
+reopened file, not remembered.
+
+Deterministic, failing the command:
+
+- source commit on HEAD, art and native/PDF digests as bound;
+- every page once and in order, page parity, parent per side and its transform;
+- paragraph, character, object and parent styles against the contract, and
+  every local override not allowed by the contract;
+- each story against its selected text, overset text and declared hidden text;
+- links: status, target digest, effective ppi and profile;
+- required fonts installed, and rendered-glyph evidence for every non-Latin
+  character, emoji joiner and variation selector in a story;
+- required folio and metadata fields, native bleed per page;
+- PDF pages equal native pages; TrimBox and BleedBox per side; fonts embedded;
+  image colour space and ppi; story text present in the exported page text;
+  export settings read back against the contract.
+
+Not decided by the helper, and always reported open: full-size visual review of
+every page, privacy review and accessibility review. A pass is also never
+native execution, visual acceptance, PDF/X conformance, output-intent or
+profile-embedding proof, or print qualification; poppler cannot read those.
+`pdf-word-box` Unicode evidence is listed for review, never as proof.

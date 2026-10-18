@@ -84,6 +84,8 @@ Save, reopen and export the candidate. Read back every labelled page item regard
 
 Compare native readbacks with source extents and art hashes. Check title roles, captions, links, overset, facing relationships and the ending. Inspect all exported pages for rhythm and clipping, plus difficult text, glyphs and art at useful scale; geometry passes never replace that review.
 
+For the whole book, read the [whole-book evidence](references/production-checks.md#whole-book-evidence) section, then pass `book` against the editable native readback and the exported PDF. It is deterministic evidence only: full-size visual, privacy and accessibility review stay open, and it never qualifies native execution or print.
+
 Show Nathan the actual candidate and make focused revisions within his feedback. Record his creative verdict separately from source, image, Unicode and print qualifications. A chapter accepted as a design reference does not establish whole-book acceptance or a default chapter length.
 
 ## Hand back

@@ -109,3 +109,30 @@ export function bounds(value: unknown, where: string): Bounds {
     numeric(item, `${where}[${index}]`),
   ) as Bounds;
 }
+
+export type FileIdentity = { path: string; sha256: string };
+export type ArtBinding = FileIdentity & { id: string };
+export type SourceRevision = { repository: string; commit: string };
+
+export function fileIdentity(value: unknown, where: string): FileIdentity {
+  const item = record(value, where);
+  return {
+    path: text(item.path, `${where}.path`),
+    sha256: text(item.sha256, `${where}.sha256`),
+  };
+}
+
+export function artBindings(value: unknown, where: string): ArtBinding[] {
+  return list(value, where).map((entry, index) => ({
+    ...fileIdentity(entry, `${where}[${index}]`),
+    id: text(record(entry, `${where}[${index}]`).id, `${where}[${index}].id`),
+  }));
+}
+
+export function sourceRevision(value: unknown, where: string): SourceRevision {
+  const item = record(value, where);
+  return {
+    commit: text(item.commit, `${where}.commit`),
+    repository: text(item.repository, `${where}.repository`),
+  };
+}
