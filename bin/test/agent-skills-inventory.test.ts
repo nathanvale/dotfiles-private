@@ -458,6 +458,14 @@ describe('agent-skills-inventory public process', () => {
 		expect(
 			report.entries.find((entry: { name: string }) => entry.name === 'app-one'),
 		).toMatchObject({ provenance: 'app-owned', source_owner: 'fixture-app' })
+
+		rmSync(join(fixture.claude, 'app-one'), { recursive: true })
+		mkdirSync(join(fixture.home, 'unrelated'), { recursive: true })
+		symlinkSync(join(fixture.home, 'unrelated'), join(fixture.claude, 'app-one'))
+		const lookalike = JSON.parse(run(fixture.home, '--json').stdout.toString())
+		expect(lookalike.issues).toEqual([
+			expect.objectContaining({ code: 'unknown-provenance', name: 'app-one' }),
+		])
 	})
 
 	test('fails closed on legacy, retired, dangling, and content disagreement', () => {

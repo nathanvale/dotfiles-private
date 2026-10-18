@@ -410,7 +410,7 @@ class Inventory:
             self.attach(row, "dangling-symlink", "live address has no resolved target")
             return
         declaration = self.app_owned.get(name)
-        if declaration and row["address"] in declaration.get("addresses", []):
+        if declaration and self.app_owned_matches(row, declaration):
             row.update(
                 provenance="app-owned",
                 source_owner=declaration.get("owner", "unknown"),
@@ -505,6 +505,15 @@ class Inventory:
             )
             return
         self.attach(row, "unknown-provenance", "entry has no declared source owner")
+
+    def app_owned_matches(self, row, declaration):
+        """An app-owned entry is a real directory at a declared address."""
+        if row["address"] not in declaration.get("addresses", []):
+            return False
+        if row["filesystem_kind"] != "directory":
+            return False
+        required = declaration.get("requiredFile")
+        return not required or os.path.isfile(os.path.join(row["path"], required))
 
     def classify_native(self, row):
         row.update(

@@ -23,6 +23,7 @@
 		},
 		"herdr-projects": {
 			"owner": "herdr-projects",
+			"requiredFile": "SKILL.md",
 			"addresses": [
 				"claude"
 			]
