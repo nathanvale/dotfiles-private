@@ -64,10 +64,30 @@ function squash(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
+/** Length of the longest prefix of `wanted` that `page` contains; a prefix of a contained prefix is contained, so bisect. */
+function longestPrefix(page: string, wanted: string): number {
+  let low = 0;
+  let high = wanted.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (page.includes(wanted.slice(0, mid))) low = mid;
+    else high = mid - 1;
+  }
+  return low;
+}
+
+/** True when the story's text is read in order across its pages, however much page furniture (folios, running heads) sits between the fragments. */
+function storyPresent(pdf: PdfFacts, story: BookReadback["stories"][number]): boolean {
+  let remaining = squash(story.expected);
+  for (const page of story.pages) {
+    remaining = remaining.slice(longestPrefix(squash(pdf.readback[page - 1]?.text ?? ""), remaining));
+  }
+  return remaining.length === 0;
+}
+
 function textIssues(pdf: PdfFacts, book: BookReadback): string[] {
   return book.stories.flatMap((story) => {
-    const rendered = squash(story.pages.map((p) => pdf.readback[p - 1]?.text ?? "").join(""));
-    const missing = squash(story.expected).length > 0 && !rendered.includes(squash(story.expected));
+    const missing = squash(story.expected).length > 0 && !storyPresent(pdf, story);
     return missing ? [`story ${story.key} text is not all present in the exported PDF pages ${story.pages.join(",")}; text may be hidden or clipped.`] : [];
   });
 }

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, run, scratch, sha256, sourceRepository } from "./fixtures.ts";
+import { pdfFindings } from "../src/book-pdf-checks.ts";
 import { BLEED, book, type Fixture, fileSha, rewritePdf, TRIM } from "./book-fixtures.ts";
 
 afterEach(cleanup);
@@ -181,7 +182,7 @@ describe.skipIf(!poppler)("book: whole-book evidence", () => {
     f.native.stories = [];
     refused(runBook(f), "story p1:body is in the contract's story inventory but missing from the readback");
     const g = book(scratch());
-    g.native.stories.push({ expected: "H", hidden: [], key: "p9:extra", pages: [1], text: "H" });
+    g.native.stories.push({ expected: "H", hidden: [], key: "p9:extra", oversetText: "", pages: [1], text: "H" });
     refused(runBook(g), "story p9:extra is in the document but not in the contract's story inventory");
     const h = book(scratch());
     h.native.stories[0].pages = [2];
@@ -381,6 +382,75 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     const result = runBook(f);
     expect(result.exitCode).not.toBe(0);
     expect(JSON.stringify(result.envelope)).toContain("LZWDecode");
+  });
+
+  test("refuses readback values that would be coerced into text, and an omitted overset observation", () => {
+    const nullField = book(scratch());
+    (nullField.native.pages[0].fields as Record<string, unknown>).folio = null;
+    expect(runBook(nullField).exitCode).toBe(4);
+    expect(runBook(nullField).envelope.message).toContain("fields.folio must be a string or number");
+    const objectSetting = book(scratch());
+    (objectSetting.native.exportSettings as Record<string, unknown>)["Include Bleed"] = {};
+    expect(runBook(objectSetting).envelope.message).toContain("must be a string or number");
+    const omitted = book(scratch());
+    delete (omitted.native.stories[0] as { oversetText?: string }).oversetText;
+    const result = runBook(omitted);
+    expect(result.exitCode).toBe(4);
+    expect(result.envelope.message).toContain("oversetText");
+  });
+
+  test("refuses a source commit that is not a hexadecimal id before git sees it", () => {
+    const f = book(scratch());
+    f.native.sourceRevision.commit = "--output=/tmp/bestie-should-not-exist";
+    const result = runBook(f);
+    expect(result.exitCode).toBe(4);
+    expect(result.envelope.message).toContain("commit must be a hexadecimal commit id");
+  });
+
+  test("reads prose straight after a heading as its own paragraph", () => {
+    const f = book(scratch());
+    f.native.sourceRevision = sourceRepository(f.dir, "# Note\nH\n\n## Next\nsecond\n");
+    const message = runBook(f).envelope.message;
+    expect(message).not.toContain("[source]");
+  });
+
+  test("leaves soft-mask rows out of the image colour check", () => {
+    const f = book(scratch());
+    const listing = Bun.spawnSync(["pdfimages", "-list", f.pdfPath], { stdout: "pipe" }).stdout.toString();
+    expect(listing).toContain("smask");
+    f.contract.pdf.colourSpaces = ["rgb"];
+    expect(runBook(f).exitCode).toBe(0);
+  });
+
+  test("cuts streams at their declared length and counts colour split across streams", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["cmyk"];
+    f.contract.pdf.minImagePpi = undefined;
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "BT /F1 12 Tf (endstream) Tj ET 1 0 0 rg" } : p)));
+    refused(runBook(f), "paint 1 rgb colour operator(s)");
+    f.contract.pdf.colourSpaces = ["rgb"];
+    rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, extra: { content: "0 0 0 1 k" } } : p)));
+    refused(runBook(f), "paint 1 cmyk colour operator(s)");
+  });
+
+  test("does not read font, profile or table streams as page content", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    for (const dict of ["/Length1 20", "/N 3", "/Type /XRef", "/Subtype /Type1C"]) {
+      rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, extra: { content: "1 f 0.5 g 0 0 0 1 k", dict } } : p)));
+      expect(runBook(f).exitCode).toBe(0);
+    }
+  });
+
+  test("finds a story across pages although folios and running heads sit between its fragments", () => {
+    const page = (text: string) => ({ boxes: {}, fonts: [], images: [], page: 1, text });
+    const pdf = { contentColours: { cmyk: 0, gray: 0, rgb: 0 }, pages: 2, producer: "", readback: [page("Head\nfirst\n1\n"), page("Head\nsecond\n2\n")], tagged: false, version: "1.6" };
+    const story = (expected: string) => ({ expected, hidden: [], key: "s", oversetText: "", pages: [1, 2], text: expected });
+    const contract = { bleed: {}, pdf: { colourSpaces: [], exportSettings: {}, trim: [1, 1] }, requiredFonts: [], tolerance: 0 };
+    const findings = (expected: string) => pdfFindings(pdf as never, { exportSettings: {}, pageCount: 2, pages: [], stories: [story(expected)] } as never, contract as never).pdfText;
+    expect(findings("first\rsecond")).toEqual([]);
+    expect(findings("first\rsecond\rthird")).toHaveLength(1);
+    expect(findings("first\rmissing\rsecond")).toHaveLength(1);
   });
 
   test("keeps overrides, fonts, Unicode evidence, links and story digests in the manifest, with input digests", () => {

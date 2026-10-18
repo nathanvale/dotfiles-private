@@ -47,7 +47,7 @@ function parseImages(listing: string): Map<number, PdfPage["images"]> {
   const out = new Map<number, PdfPage["images"]>();
   for (const line of listing.split("\n").slice(2)) {
     const cells = line.trim().split(/\s+/);
-    if (cells.length < 14) continue;
+    if (cells.length < 14 || cells[2] !== "image") continue;
     const page = Number(cells[0]);
     out.set(page, [...(out.get(page) ?? []), { colour: cells[5] ?? "", xPpi: Number(cells[12]), yPpi: Number(cells[13]) }]);
   }
@@ -58,7 +58,6 @@ function header(info: string, name: string): string {
   return new RegExp(`^${name}:\\s*(.*)$`, "m").exec(info)?.[1]?.trim() ?? "";
 }
 
-const CONTENT_OPERATORS = new Set(["BT", "cm", "re", "Do", "f", "S", "m", "l", "q", "Q"]);
 const DELIMITERS = "()<>[]{}/%";
 const isSpace = (c: string) => c === " " || c === "\n" || c === "\r" || c === "\t" || c === "\f" || c === "\0";
 const isNumber = (token: string) => /^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(token);
@@ -134,12 +133,6 @@ const COLOUR_ARITY: Record<string, { space: keyof ContentColours; operands: numb
   k: { operands: 4, space: "cmyk" },
   rg: { operands: 3, space: "rgb" },
 };
-
-/** True when the text holds drawing operators, so it is a content stream and not font or image data. */
-function isContent(text: string): boolean {
-  for (const token of operatorTokens(text)) if (CONTENT_OPERATORS.has(token)) return true;
-  return false;
-}
 
 function colourOperators(content: string): ContentColours {
   const found: ContentColours = { cmyk: 0, gray: 0, rgb: 0 };
@@ -276,9 +269,27 @@ function streamDictionary(file: Buffer, open: number): string {
   return file.subarray(object < 0 ? 0 : object, open).toString("latin1");
 }
 
+/** Streams that carry fonts, images, profiles, tables or structure, never page content, told by their dictionary. */
+const NON_CONTENT = /\/Type\s*\/(?:XRef|ObjStm|Metadata|EmbeddedFile|CMap)\b|\/Subtype\s*\/(?:Image|Type1C|CIDFontType0C|OpenType|XML)\b|\/Length[123]\b|\/FunctionType\b|\/ShadingType\b|\/N\s+\d/;
+
+/** Declared /Length of a stream, direct or through an indirect object, or undefined when it cannot be read. */
+function declaredLength(dictionary: string, file: Buffer): number | undefined {
+  const indirect = /\/Length\s+(\d+)\s+(\d+)\s+R\b/.exec(dictionary);
+  const value = indirect === null ? /\/Length\s+(\d+)\b/.exec(dictionary)?.[1] : objectBody(file, indirect[1] ?? "", indirect[2] ?? "")?.trim();
+  return value !== undefined && /^\d+$/.test(value) ? Number(value) : undefined;
+}
+
+/** End of the stream data: where its declared /Length says when `endstream` follows there, else the first `endstream`. */
+function streamEnd(file: Buffer, dictionary: string, start: number): number {
+  const length = declaredLength(dictionary, file);
+  if (length !== undefined && /^\s*endstream/.test(file.toString("latin1", start + length, start + length + 12))) return start + length;
+  return file.indexOf("endstream", start, "latin1");
+}
+
 /**
- * Counts device colour operators in every content-like stream of the file.
+ * Counts device colour operators in every content stream of the file.
  * Poppler lists only images, so text and vector ink would otherwise go unread.
+ * Streams are cut at their declared length, so `endstream` inside a string or compressed bytes does not end one early.
  * The count is document-wide, not per page; ICC-based operators (sc, scn) are not resolved.
  */
 function readContentColours(path: string): ContentColours {
@@ -288,13 +299,18 @@ function readContentColours(path: string): ContentColours {
   for (;;) {
     const open = file.indexOf("stream", from, "latin1");
     if (open < 0) return total;
-    const close = file.indexOf("endstream", open + 6, "latin1");
-    if (close < 0) return total;
-    from = close + 9;
-    if (file.subarray(open - 3, open).toString("latin1") === "end") continue;
+    if (file.subarray(open - 3, open).toString("latin1") === "end") {
+      from = open + 6;
+      continue;
+    }
     const start = file.subarray(open + 6, open + 8).toString("latin1").startsWith("\r\n") ? open + 8 : open + 7;
-    const content = decoded(streamDictionary(file, open), file.subarray(start, close), file);
-    if (content === undefined || !isContent(content)) continue;
+    const dictionary = withoutComments(streamDictionary(file, open));
+    const end = streamEnd(file, dictionary, start);
+    if (end < 0) return total;
+    from = end;
+    if (NON_CONTENT.test(dictionary)) continue;
+    const content = decoded(dictionary, file.subarray(start, end), file);
+    if (content === undefined) continue;
     const found = colourOperators(content);
     total.cmyk += found.cmyk;
     total.gray += found.gray;

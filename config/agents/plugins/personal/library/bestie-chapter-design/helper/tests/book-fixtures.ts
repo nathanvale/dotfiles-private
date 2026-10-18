@@ -11,7 +11,7 @@ export const CONTRACT_BLEED = { bottom: BLEED, inside: BLEED, outside: BLEED, to
 const LEFT_TRANSFORM = [1, 0, 0, 1, 0, 0];
 const RIGHT_TRANSFORM = [1, 0, 0, 1, 318, 0];
 
-export type PdfPageSpec = { text: string; image: boolean; colour?: string; deflate?: boolean; encode?: "hex" | "ascii85"; trimBox?: number[]; bleedBox?: number[] };
+export type PdfPageSpec = { text: string; image: boolean; colour?: string; deflate?: boolean; encode?: "hex" | "ascii85"; extra?: { content: string; dict?: string }; trimBox?: number[]; bleedBox?: number[] };
 
 function pdfObjects(pages: PdfPageSpec[]): string[] {
   const objects: string[] = [];
@@ -25,6 +25,7 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
   const proc = add("");
   const imageData = deflateSync(new Uint8Array(30 * 30 * 3).fill(120));
   const image = add("");
+  const mask = add("");
   const kids: number[] = [];
   const pageBodies: string[] = [];
   const streams: Buffer[] = [];
@@ -42,6 +43,11 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
     const filters = specFilters(spec);
     streams[contentId - 1] = encodeContent(content, filters);
     if (filters.length > 0) filtered.set(contentId - 1, filters);
+    if (spec.extra !== undefined) {
+      const extraId = add("");
+      streams[extraId - 1] = Buffer.from(spec.extra.content, "latin1");
+      objects[extraId - 1] = `<< ${spec.extra.dict ?? ""} /Length ${spec.extra.content.length} >>`;
+    }
   }
   objects[catalog - 1] = `<< /Type /Catalog /Pages ${tree} 0 R >>`;
   objects[tree - 1] = `<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(" ")}] /Count ${kids.length} >>`;
@@ -49,7 +55,10 @@ function pdfObjects(pages: PdfPageSpec[]): string[] {
   objects[proc - 1] = "";
   streams[proc - 1] = Buffer.from("600 0 0 0 600 700 d1 0 0 600 700 re f", "latin1");
   streams[image - 1] = Buffer.from(imageData);
-  objects[image - 1] = `<< /Type /XObject /Subtype /Image /Width 30 /Height 30 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${imageData.length} >>`;
+  objects[image - 1] = `<< /Type /XObject /Subtype /Image /Width 30 /Height 30 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask ${mask} 0 R /Filter /FlateDecode /Length ${imageData.length} >>`;
+  const maskData = deflateSync(new Uint8Array(30 * 30).fill(255));
+  streams[mask - 1] = maskData;
+  objects[mask - 1] = `<< /Type /XObject /Subtype /Image /Width 30 /Height 30 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${maskData.length} >>`;
   objects[font - 1] = objects[font - 1]?.replace("/H 0 0 R", `/H ${proc} 0 R`) ?? "";
   return objects.map((body, index) => {
     const stream = streams[index];
@@ -192,7 +201,7 @@ export function book(dir: string): Fixture {
       preflight: { enabled: ["Overset text"], profile: "[Basic]", scope: "All pages" },
       revision: "r1",
       sourceRevision: sourceRepository(dir, "# Note\n\nH\n"),
-      stories: [{ expected: "H", hidden: [], key: "p1:body", pages: [1], text: "H" }],
+      stories: [{ expected: "H", hidden: [], key: "p1:body", oversetText: "", pages: [1], text: "H" }],
       styles: { character: ["Emoji"], object: ["Art Frame"], paragraph: ["Bestie Body"], parent: ["A-Left", "B-Right"] },
       unicode: [],
     },

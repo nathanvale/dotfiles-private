@@ -131,8 +131,10 @@ export function artBindings(value: unknown, where: string): ArtBinding[] {
 
 export function sourceRevision(value: unknown, where: string): SourceRevision {
   const item = record(value, where);
+  const commit = text(item.commit, `${where}.commit`);
+  if (!/^[0-9a-f]{7,64}$/i.test(commit)) throw new InputError(`${where}.commit must be a hexadecimal commit id.`);
   return {
-    commit: text(item.commit, `${where}.commit`),
+    commit,
     repository: text(item.repository, `${where}.repository`),
   };
 }

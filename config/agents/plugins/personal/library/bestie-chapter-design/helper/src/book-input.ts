@@ -141,7 +141,11 @@ function inventory(value: unknown, where: string): StyleInventory {
 
 function stringMap(value: unknown, where: string): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(record(value, where)).map(([key, entry]) => [key, String(entry)]),
+    Object.entries(record(value, where)).map(([key, entry]) => {
+      if (typeof entry === "string") return [key, entry];
+      if (typeof entry === "number" && Number.isFinite(entry)) return [key, String(entry)];
+      throw new InputError(`${where}.${key} must be a string or number.`);
+    }),
   );
 }
 
@@ -211,7 +215,7 @@ function storyRecord(value: unknown, where: string): StoryRecord {
     expected: text(item.expected, `${where}.expected`),
     hidden: strings(item.hidden, `${where}.hidden`),
     key: text(item.key, `${where}.key`),
-    oversetText: optional(item.oversetText, (v) => anyText(v, `${where}.oversetText`)) ?? "",
+    oversetText: anyText(item.oversetText, `${where}.oversetText`),
     pages: list(item.pages, `${where}.pages`).map((p, i) => integer(p, `${where}.pages[${i}]`)),
     text: anyText(item.text, `${where}.text`),
   };

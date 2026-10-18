@@ -114,6 +114,9 @@ file; `--contract` takes the production contract values. Paths are absolute.
 - `stories`: `{ key, pages, text, expected, oversetText, hidden }`. `text` is
   the whole story including overset; `expected` is the selected source text, compared exactly;
   `hidden` lists reasons text is hidden (opaque field, off page, hidden layer).
+  `oversetText` is required: `""` records an observed zero overset, and an omitted field is refused.
+  `fields` and export-setting values must be strings or finite numbers; `null` and objects are refused.
+  `sourceRevision.commit` must be a hexadecimal commit id.
 - `links`: `{ id, page, path, sha256, expectedSha256, status, effectivePpi,
   profile }`; `path` is hashed on disk and must equal `expectedSha256`, which
   must equal the bound `art` entry with the same `id`.
