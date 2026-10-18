@@ -3,7 +3,7 @@
 Use this checklist before page copy, move or import, native save/reopen, PDF
 export or production review.
 The canonical packet owns selected content, paragraph-style values and printer
-requirements. Read its current `design-system.md`, the chapter's exact source
+requirements. Resolve the design contract through [design contract resolution](design-contract.md), then read the chapter's exact source
 and approval record, and the applicable production specification. Record their
 revisions in the handback. For a managed Herdr unit, also read the project's
 current native custody and InDesign gotchas through its memory index.
