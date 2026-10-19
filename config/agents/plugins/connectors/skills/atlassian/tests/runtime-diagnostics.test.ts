@@ -188,6 +188,33 @@ test("a failed diagnostic-record write never changes the real delivery outcome",
 	}
 });
 
+test("a malformed on-disk record -- an extra key, a wrong-typed field, or an unknown kind -- reads as absent, never thrown or silently accepted", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "runtime-diagnostics-malformed-"));
+	const state = path.join(root, "state");
+	mkdirSync(state, { recursive: true });
+	try {
+		const env = { HOME: root, XDG_STATE_HOME: state };
+		const recordFile = path.join(state, "connectors", "diagnostics", "atlassian", "example", "last-failure.json");
+		mkdirSync(path.dirname(recordFile), { recursive: true });
+		const wellFormedBase = { schemaVersion: 1, connector: "atlassian", tenant: "example", tool: "jira_add_comment", server: CJ, cause: "failed-unknown", kind: "process", exitCode: 9, stderrLength: 1, stdoutLength: 0, transportCallId: "call-malformed", observedAt: "2026-10-19T05:00:00.000Z" };
+
+		// Shape: an extra key breaks the closed key set, even though every named
+		// field is otherwise valid.
+		writeFileSync(recordFile, `${JSON.stringify({ ...wellFormedBase, extra: "unexpected" })}\n`);
+		expect(readProviderFailure("atlassian", "example", env)).toBeNull();
+
+		// Scalar/type: exitCode as a string, not the required nullable integer.
+		writeFileSync(recordFile, `${JSON.stringify({ ...wellFormedBase, exitCode: "9" })}\n`);
+		expect(readProviderFailure("atlassian", "example", env)).toBeNull();
+
+		// Closed enum: kind outside the three observed kinds.
+		writeFileSync(recordFile, `${JSON.stringify({ ...wellFormedBase, kind: "unknown-kind" })}\n`);
+		expect(readProviderFailure("atlassian", "example", env)).toBeNull();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 // Local-doctor proof: the actual packaged bin/connectors CLI subprocess (not a
 // unit-level call), reading a record this same diagnostic-record.ts module
 // wrote, through connectors.doctor -- a command that starts no Provider, reads

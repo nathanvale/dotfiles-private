@@ -78,7 +78,7 @@ export type Kept = { readonly kind: "retained" } | { readonly kind: "not-retaine
 // `.`, `/`, or empty string, so a malformed caller can never traverse out of
 // the connector's own diagnostics directory.
 const SAFE_TENANT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-export function tenantPathSafe(tenant: string): boolean {
+function tenantPathSafe(tenant: string): boolean {
 	return SAFE_TENANT.test(tenant);
 }
 
@@ -116,11 +116,16 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
 const RECORD_KEYS = ["schemaVersion", "connector", "tenant", "tool", "server", "cause", "kind", "exitCode", "stderrLength", "stdoutLength", "transportCallId", "observedAt"];
 const KINDS: ReadonlySet<string> = new Set(["process", "tool-error", "malformed"]);
 
-function wellFormed(value: unknown): value is ProviderFailureRecord {
-	if (!isObject(value)) return false;
+// Exactly RECORD_KEYS, no more, no fewer -- the closed-shape boundary itself,
+// kept separate from what each field's own value must look like.
+function hasClosedKeys(value: Record<string, unknown>): boolean {
 	const keys = Object.keys(value);
-	if (keys.length !== RECORD_KEYS.length || !RECORD_KEYS.every((key) => keys.includes(key))) return false;
-	const exitCodeValid = value.exitCode === null || (typeof value.exitCode === "number" && Number.isInteger(value.exitCode));
+	return keys.length === RECORD_KEYS.length && RECORD_KEYS.every((key) => keys.includes(key));
+}
+
+// The fixed schema literal and the plain string-identity fields, including the
+// one closed-enum field (kind).
+function scalarFieldsValid(value: Record<string, unknown>): boolean {
 	return (
 		value.schemaVersion === 1 &&
 		typeof value.connector === "string" &&
@@ -129,17 +134,25 @@ function wellFormed(value: unknown): value is ProviderFailureRecord {
 		typeof value.server === "string" &&
 		typeof value.cause === "string" &&
 		typeof value.kind === "string" &&
-		KINDS.has(value.kind) &&
-		exitCodeValid &&
-		typeof value.stderrLength === "number" &&
-		Number.isInteger(value.stderrLength) &&
-		typeof value.stdoutLength === "number" &&
-		Number.isInteger(value.stdoutLength) &&
-		typeof value.transportCallId === "string" &&
-		value.transportCallId.length > 0 &&
-		typeof value.observedAt === "string" &&
-		!Number.isNaN(Date.parse(value.observedAt))
+		KINDS.has(value.kind)
 	);
+}
+
+// The two retained text-size counters and the nullable process exit code.
+function numericFieldsValid(value: Record<string, unknown>): boolean {
+	const exitCodeValid = value.exitCode === null || (typeof value.exitCode === "number" && Number.isInteger(value.exitCode));
+	return exitCodeValid && typeof value.stderrLength === "number" && Number.isInteger(value.stderrLength) && typeof value.stdoutLength === "number" && Number.isInteger(value.stdoutLength);
+}
+
+// The correlation id and the observed timestamp -- the two fields a caller
+// joins against, not merely stored facts about one attempt.
+function transportFieldsValid(value: Record<string, unknown>): boolean {
+	return typeof value.transportCallId === "string" && value.transportCallId.length > 0 && typeof value.observedAt === "string" && !Number.isNaN(Date.parse(value.observedAt));
+}
+
+function wellFormed(value: unknown): value is ProviderFailureRecord {
+	if (!isObject(value) || !hasClosedKeys(value)) return false;
+	return scalarFieldsValid(value) && numericFieldsValid(value) && transportFieldsValid(value);
 }
 
 // Read-only: never writes, repairs, or deletes. A malformed or absent record,
