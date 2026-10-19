@@ -35,6 +35,19 @@ Browser Use are retired by
 - The Harness owns attachment. Never copy, enumerate, or attach to a Chrome
   profile directory yourself.
 
+## Native capture density
+
+- For genuine DPR 2 proof, use qualified native window sizing and default
+  density. On 20 October 2026, the supported viewport override changed observed
+  DPR from 2 to 1 on both laptop and Mini. Keep that override unqualified for
+  this proof until revalidated after tool updates.
+- Measure CSS viewport, `devicePixelRatio` and `visualViewport.scale` before and
+  after any viewport change.
+- Accept a capture only when the required CSS size, DPR, visual scale and
+  original encoded image pixel-to-CSS correspondence all match.
+- On mismatch, restore owned prior state and report the gap. Keep originals;
+  do not upscale, emulate density or relabel a 1x capture as genuine 2x.
+
 ## Private previews
 
 - Start with the existing authorized private VPN route. Resolve the execution host,
