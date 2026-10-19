@@ -120,12 +120,38 @@ function restCall(command: readonly string[], env: Environment, tenant: string, 
 // rerun. `recordProviderFailure` below retains only what this seam already
 // computed and already intended to be safe (the closed cause, exit code, and
 // text lengths) -- never the stderr/stdout content itself.
+//
+// Spec, second pass: a retained record an operator can only find by already
+// knowing to look is not correlation. The failure envelope's own JSON
+// contract (bin/connectors.ts's closed RESULT_KEYS) has no room for a new
+// field, and result.runId cannot be reused or re-timed for this (see the
+// diagnostic-record.ts header). The supported, documented, owned output
+// location that changes nothing about that contract is stderr: one fixed,
+// greppable line naming only the transportCallId already being retained. The
+// JSON envelope on stdout is completely unchanged; a caller that only reads
+// stdout sees nothing different, and one that also reads stderr (as the real
+// CLI-proof test does) can join it to the same id in `doctor`'s record.
+//
+// Scoped to exactly the unclassified ("failed-unknown") cause, not every
+// classified failure: an already-classified cause (auth, not-found,
+// transport, precondition) already carries a meaningful, actionable
+// repairAction in the envelope today, unchanged by any of this; only the
+// classifier's own unmatched default leaves an operator with nothing to act
+// on beyond "inspect provider diagnostics", which is the one gap this whole
+// repair exists to close. This also keeps the change bounded: dozens of
+// existing tests assert empty stderr for other, already-classified
+// provider-call failures (auth/not-found/transport/precondition); widening
+// this to all of them would touch that whole existing surface for no stated
+// requirement, which is exactly the kind of broader-authority expansion this
+// unit was told to avoid taking on by itself.
+const DIAGNOSTIC_STDERR_PREFIX = "connectors:diagnostic:transportCallId:";
 export function routeTransport(env: Environment, tenant: string, skillsRoot: string, capabilities: ExecutionCapabilities): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
 	const failure = (server: string, operation: string, transportCallId: string, observed: ObservedFailure): TransportResult => {
 		const translated = translateFailure(observed);
 		recordProviderFailure({
 			connector: "atlassian",
+			tenant,
 			tool: operation,
 			server,
 			cause: translated.cause,
@@ -137,6 +163,7 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 			env,
 			observedAt: new Date(),
 		});
+		if (translated.cause === "failed-unknown") process.stderr.write(`${DIAGNOSTIC_STDERR_PREFIX}${transportCallId}\n`);
 		return { ok: false, ...translated };
 	};
 	const toResult = (run: { code: number; stdout: string; stderr: string }, server: string, operation: string, transportCallId: string): TransportResult => {

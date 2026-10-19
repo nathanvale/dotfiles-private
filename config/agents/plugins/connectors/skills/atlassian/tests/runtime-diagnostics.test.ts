@@ -70,7 +70,7 @@ test("a provider call that fails through the normal classified path (never a thr
 		const skillsRoot = path.join(import.meta.dir, "..", "..");
 		const transport = routeTransport(env, "example", skillsRoot, capabilities);
 
-		expect(readProviderFailure("atlassian", env)).toBeNull();
+		expect(readProviderFailure("atlassian", "example", env)).toBeNull();
 
 		const result = await transport.call(binding, CJ, "jira_add_comment", { issueKey: "EX-1", body: "x" });
 
@@ -80,7 +80,7 @@ test("a provider call that fails through the normal classified path (never a thr
 		// PROVIDER_CAUSE_HINTS only has entries for refused-precondition codes).
 		expect(result).toEqual({ ok: false, cause: "failed-unknown", hint: null });
 
-		const record = readProviderFailure("atlassian", env);
+		const record = readProviderFailure("atlassian", "example", env);
 		expect(record).not.toBeNull();
 		expect(record?.connector).toBe("atlassian");
 		expect(record?.tool).toBe("jira_add_comment");
@@ -94,7 +94,7 @@ test("a provider call that fails through the normal classified path (never a thr
 
 		// The critical secret-safety assertion: the sentinel must not survive
 		// anywhere in the retained private-state tree, byte for byte.
-		const recordFile = path.join(state, "connectors", "diagnostics", "atlassian", "last-failure.json");
+		const recordFile = path.join(state, "connectors", "diagnostics", "atlassian", "example", "last-failure.json");
 		const written = await Bun.file(recordFile).text();
 		expect(written).not.toContain(SENTINEL);
 		expect(written).not.toContain("mystery-provider-fault");
@@ -121,13 +121,13 @@ test("two separate failing invocations get two distinct transportCallIds, and th
 		const firstMcporter = fakeScript(root, "fake-mcporter-1", 'echo "first-mystery-fault" 1>&2\nexit 7');
 		const firstTransport = routeTransport(env, "example", skillsRoot, { selectMcporter: async () => firstMcporter, internalCommand: () => [providerScript] });
 		await firstTransport.call(binding, CJ, "jira_add_comment", { issueKey: "EX-1", body: "x" });
-		const first = readProviderFailure("atlassian", env);
+		const first = readProviderFailure("atlassian", "example", env);
 		expect(first?.exitCode).toBe(7);
 
 		const secondMcporter = fakeScript(root, "fake-mcporter-2", 'echo "second-mystery-fault" 1>&2\nexit 8');
 		const secondTransport = routeTransport(env, "example", skillsRoot, { selectMcporter: async () => secondMcporter, internalCommand: () => [providerScript] });
 		await secondTransport.call(binding, CJ, "jira_get_issue", { issueKey: "EX-2" });
-		const second = readProviderFailure("atlassian", env);
+		const second = readProviderFailure("atlassian", "example", env);
 		expect(second?.exitCode).toBe(8);
 		expect(second?.tool).toBe("jira_get_issue");
 
@@ -136,7 +136,7 @@ test("two separate failing invocations get two distinct transportCallIds, and th
 		// Overwrite honesty: only the second is now readable. There is no history;
 		// this is the documented, bounded, single-record retention shape, not a
 		// defect -- the first attempt's exitCode (7) is genuinely gone.
-		const onlyRecord = readProviderFailure("atlassian", env);
+		const onlyRecord = readProviderFailure("atlassian", "example", env);
 		expect(onlyRecord?.exitCode).toBe(8);
 		expect(onlyRecord?.exitCode).not.toBe(first?.exitCode);
 	} finally {
@@ -157,7 +157,7 @@ test("a successful provider call writes no diagnostic record", async () => {
 
 		const result = await transport.call(binding, CJ, "jira_add_comment", { issueKey: "EX-1", body: "x" });
 		expect(result.ok).toBe(true);
-		expect(readProviderFailure("atlassian", env)).toBeNull();
+		expect(readProviderFailure("atlassian", "example", env)).toBeNull();
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -182,7 +182,7 @@ test("a failed diagnostic-record write never changes the real delivery outcome",
 		// The real TransportResult the caller depends on is identical to the
 		// no-write-fault case: observability must not become a new failure mode.
 		expect(result).toEqual({ ok: false, cause: "failed-unknown", hint: null });
-		expect(readProviderFailure("atlassian", env)).toBeNull();
+		expect(readProviderFailure("atlassian", "example", env)).toBeNull();
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -205,10 +205,10 @@ test("the packaged bin/connectors CLI's doctor command surfaces the retained fai
 		// secret-free: recordProviderFailure's own closed field set has no room
 		// for raw stderr/message text, so there is nothing further to leak here.
 		// This test's job is the read/surface side: the real CLI, not a unit call.
-		recordProviderFailure({ connector: "atlassian", tool: "jira_add_comment", server: CJ, cause: "failed-unknown", kind: "process", exitCode: 9, stderrLength: 42, stdoutLength: 0, transportCallId: "call-doctor-cli-proof", env, observedAt: new Date("2026-10-19T05:00:00.000Z") });
+		recordProviderFailure({ connector: "atlassian", tenant: "example", tool: "jira_add_comment", server: CJ, cause: "failed-unknown", kind: "process", exitCode: 9, stderrLength: 42, stdoutLength: 0, transportCallId: "call-doctor-cli-proof", env, observedAt: new Date("2026-10-19T05:00:00.000Z") });
 
 		const binary = path.join(import.meta.dir, "..", "..", "..", "bin", "connectors");
-		const run = Bun.spawnSync([binary, "doctor", "atlassian"], { env: { ...env, PATH: process.env.PATH ?? "" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		const run = Bun.spawnSync([binary, "doctor", "atlassian", "--select", "tenant=example"], { env: { ...env, PATH: process.env.PATH ?? "" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 		const stderr = run.stderr.toString();
 		const stdout = run.stdout.toString();
 		expect([run.exitCode, stderr]).toEqual([0, ""]);
