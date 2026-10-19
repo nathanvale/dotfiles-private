@@ -37,30 +37,38 @@ Browser Use are retired by
 
 ## Private previews
 
-- Resolve the execution host, app command/version, loopback port and process owner.
-  Keep the backend on `127.0.0.1`.
-- Use private [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
-  HTTPS for an authorized tailnet device. Check device access, MagicDNS, HTTPS
-  readiness and the destination port's policy. Tailnet access does not authorize
-  employer data on personal devices. Keep Funnel and access-policy changes under
-  their separate explicit authority.
-- Inspect the selected host's installed `tailscale serve --help` and current
-  mappings before effects. Preserve other owners' mappings. Stop at consent or
-  uncertain outcomes; inspect before retrying.
-- Prefer one owned HTTPS port at `/` per app. Configure only the exact required
-  host/origin. Qualify subpaths through the app's base-path support. Check assets,
-  deep links, API/auth URLs and live-reload WebSocket from the viewing device.
-  Use the installed app version's [Vite](https://vite.dev/config/server-options)
-  or [Storybook](https://storybook.js.org/docs/api/main-config/main-config-core)
-  settings; retain host validation.
-- Reuse Herdr Projects' native review/board link owner. Resolve the actual host,
-  executable and version before using its current CLI/docs. Preserve its access
-  gate and shared server ownership.
-- Report the verified HTTPS URL and task-owned process/mapping custody. Keep the
-  host awake under the global Mac rule. At handback, retain the preview only when
-  requested; otherwise stop only owned processes and remove only their exact
-  mappings after readback. Recheck other mappings. Follow the browser route above
-  when opening the link.
+- Start with the existing authorized private VPN route. Resolve the execution host,
+  app command/version, port and process owner. Verify the viewing device's route,
+  DNS and firewall access. VPN membership does not authorize employer data on
+  personal devices.
+- Treat `localhost` as the viewing device itself. Keep app backends on loopback
+  behind an existing proxy bound to the intended private interface, or qualify an
+  explicitly authorized direct listener and firewall scope. Discover the existing
+  owner before proposing setup. Do not widen listeners to all interfaces or add
+  web-app WAN port forwarding automatically.
+- Choose HTTP or HTTPS for the app's requirements. Use HTTPS for secure-context
+  or authentication requirements. Verify its certificate name and device trust.
+  A VPN provides neither HTTP proxying nor certificate issuance. Keep certificate
+  installation and trust changes under their separate authority.
+- Prefer one owned port at `/` per app. Qualify subpaths through the app's
+  base-path support. Check assets, deep links, API/auth URLs and live-reload
+  WebSocket from the viewing device. Use the installed app version's
+  [Vite](https://vite.dev/config/server-options) or
+  [Storybook](https://storybook.js.org/docs/api/main-config/main-config-core)
+  settings; retain exact host/origin validation.
+- Reuse Herdr Projects' native review/board owner and access gate. Resolve its
+  host, executable and version. Native local/Tailscale links do not establish
+  WireGuard integration. Qualify a VPN/proxy compatibility route, including
+  absolute links, before reporting it working.
+- Use [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) only
+  when that authorized route is selected. Inspect installed help, prerequisites
+  and existing mappings; preserve other owners' routes. Stop at consent or
+  uncertain outcomes and inspect before retrying. Funnel/public exposure and
+  access-policy changes require separate explicit authority.
+- Report the verified URL and owned process/proxy custody. Follow the global Mac
+  awake rule. Retain the preview only when requested; otherwise stop only owned
+  processes and remove only exact owned mappings after readback. Recheck other
+  routes. Follow the browser route above to open the link.
 
 ## Generic tooling
 
