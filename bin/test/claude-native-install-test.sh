@@ -127,18 +127,18 @@ run_phase() {
   done
   rm -rf "$phase_home" "$record_dir"
   mkdir -p "$phase_home/state" \
-    "$phase_home/.codex/packages/standalone/current" "$record_dir"
+    "$phase_home/.codex/packages/standalone/current/bin" "$record_dir"
   # Keep the managed Codex contract out of this Claude-specific lane.
-  printf '#!/bin/sh\nexit 0\n' \
-    >"$phase_home/.codex/packages/standalone/current/codex"
-  chmod +x "$phase_home/.codex/packages/standalone/current/codex"
+  printf '#!/bin/sh\necho "codex-cli 0.162.0"\n' \
+    >"$phase_home/.codex/packages/standalone/current/bin/codex"
+  chmod +x "$phase_home/.codex/packages/standalone/current/bin/codex"
   if [[ "$preinstalled" -eq 1 ]]; then
     mkdir -p "$phase_home/.local/bin"
     printf '#!/bin/sh\nexit 0\n' >"$phase_home/.local/bin/claude"
     chmod +x "$phase_home/.local/bin/claude"
   fi
   env -i HOME="$phase_home" PATH="$stub_bin:/usr/bin:/bin" \
-    RECORD_DIR="$record_dir" CURL_MODE="$curl_mode" \
+    RECORD_DIR="$record_dir" CURL_MODE="$curl_mode" DOTFILES_DIR="$REPO_ROOT" \
     bash -c '
       set -euo pipefail
       STATE_DIR="$HOME/state"

@@ -97,6 +97,8 @@ prepare_fixture() {
     "$RECORD_DIR"
   cp "$REPO_ROOT/setup.sh" "$FIXTURE_DOTFILES/setup.sh"
   chmod +x "$FIXTURE_DOTFILES/setup.sh"
+  cp "$REPO_ROOT/bin/test/fixtures/codex-sync-collaborator.py" \
+    "$FIXTURE_DOTFILES/bin/dotfiles/codex_sync.py"
 
   mkdir -p "$FIXTURE_DOTFILES/bin/dotfiles/symlinks"
   printf '%s\n' '#!/bin/bash' \
@@ -282,6 +284,8 @@ assert_file_contains "$RECORD_DIR/calls" 'symlinks-called' \
   'valid suffix executes the configuration phase'
 assert_file_contains "$RECORD_DIR/calls" 'prefs-called:--set' \
   'valid suffix executes the preference step'
+assert_file_contains "$RECORD_DIR/calls" 'codex-sync-called:--apply' \
+  'desktop configuration suffix applies shared Codex setup'
 assert_file_contains "$RECORD_DIR/calls" 'verifier-called' \
   'successful suffix runs the final verifier'
 assert_file_absent "$FIXTURE_HOME/.dotfiles_state/checkpoint" \
@@ -303,10 +307,27 @@ run_setup '' pass --server --start-phase 6
 pass 'server configuration suffix exits zero after verification'
 assert_file_contains "$RECORD_DIR/calls" 'symlinks-called' \
   'server configuration suffix executes symlinks'
+assert_file_contains "$RECORD_DIR/calls" 'codex-sync-called:--apply' \
+  'server configuration suffix applies shared Codex setup'
 assert_file_not_contains "$RECORD_DIR/calls" 'prefs-called:--set' \
   'server configuration suffix skips desktop preferences'
 assert_file_contains "$RECORD_DIR/calls" 'verifier-called' \
   'server configuration suffix runs the final verifier'
+
+# Shared Codex setup is mandatory. A native collaborator failure must retain
+# Phase 6 and prevent a successful final verifier from hiding that failure.
+reset_fixture
+write_verifier pass
+: >"$RECORD_DIR/codex-sync-fail"
+mkdir -p "$FIXTURE_HOME/.dotfiles_state"
+printf '%s\n' server >"$FIXTURE_HOME/.dotfiles_state/profile"
+printf '%s\n' 6 >"$FIXTURE_HOME/.dotfiles_state/checkpoint"
+run_setup '' pass --resume
+[[ "$RUN_EXIT" -ne 0 ]] || fail 'Codex sync failure exits nonzero'
+pass 'Codex sync failure exits nonzero'
+assert_checkpoint_equals 6 'Codex sync failure retains the configuration checkpoint'
+assert_file_not_contains "$RECORD_DIR/calls" 'verifier-called' \
+  'Codex sync failure prevents final verification'
 
 # ---------------------------------------------------------------------------
 # A mandatory verifier failure retains the checkpoint and gives a repair path.
@@ -486,7 +507,7 @@ pass 'linked-worktree activation exits nonzero'
 assert_file_contains "$TEST_ROOT/boundary-stdout" 'linked worktree is blocked' \
   'linked-worktree activation reports the canonical checkout boundary'
 
-expected_assertions=73
+expected_assertions=78
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

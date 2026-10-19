@@ -66,10 +66,10 @@ printf '%s\n' "$@" >"$RECORD_DIR/codex-curl-argv"
 if [[ "${CURL_MODE:-ok}" == fail ]]; then
   exit 22
 fi
-printf 'mkdir -p "$HOME/.codex/packages/standalone/current" "$HOME/.local/bin"\n'
-printf 'printf "#!/bin/sh\\nexit 0\\n" >"$HOME/.codex/packages/standalone/current/codex"\n'
-printf 'chmod +x "$HOME/.codex/packages/standalone/current/codex"\n'
-printf 'ln -s "$HOME/.codex/packages/standalone/current/codex" "$HOME/.local/bin/codex"\n'
+printf 'mkdir -p "$HOME/.codex/packages/standalone/current/bin" "$HOME/.local/bin"\n'
+printf 'printf "#!/bin/sh\\necho codex-cli 0.162.0\\n" >"$HOME/.codex/packages/standalone/current/bin/codex"\n'
+printf 'chmod +x "$HOME/.codex/packages/standalone/current/bin/codex"\n'
+printf 'ln -s "$HOME/.codex/packages/standalone/current/bin/codex" "$HOME/.local/bin/codex"\n'
 STUB
 chmod +x "$stub_bin/curl"
 
@@ -106,14 +106,14 @@ run_phase() {
   chmod +x "$phase_home/.local/bin/claude"
 
   if [[ "$managed" -eq 1 ]]; then
-    mkdir -p "$phase_home/.codex/packages/standalone/current"
-    printf '#!/bin/sh\nexit 0\n' \
-      >"$phase_home/.codex/packages/standalone/current/codex"
-    chmod +x "$phase_home/.codex/packages/standalone/current/codex"
+    mkdir -p "$phase_home/.codex/packages/standalone/current/bin"
+    printf '#!/bin/sh\necho codex-cli 0.162.0\n' \
+      >"$phase_home/.codex/packages/standalone/current/bin/codex"
+    chmod +x "$phase_home/.codex/packages/standalone/current/bin/codex"
   fi
 
   env -i HOME="$phase_home" PATH="$stub_bin:/usr/bin:/bin" \
-    RECORD_DIR="$record_dir" CURL_MODE="$curl_mode" \
+    RECORD_DIR="$record_dir" CURL_MODE="$curl_mode" DOTFILES_DIR="$REPO_ROOT" \
     bash -c '
       set -euo pipefail
       STATE_DIR="$HOME/state"
@@ -144,7 +144,7 @@ assert_equals "$(cat "$record_dir/codex-curl-argv")" '-fsSL
 https://chatgpt.com/codex/install.sh' \
   'fresh run fetches the managed installer with the expected argv'
 
-[[ -x "$phase_home/.codex/packages/standalone/current/codex" ]] ||
+[[ -x "$phase_home/.codex/packages/standalone/current/bin/codex" ]] ||
   fail 'fresh run did not leave the fixed managed Codex executable'
 pass 'fresh run leaves the fixed managed Codex executable'
 
@@ -170,7 +170,7 @@ refuse_brew 'managed preinstalled run'
 run_phase --fail-install || fail 'failed managed install must stay non-fatal'
 pass 'failed managed install stays non-fatal'
 
-[[ ! -e "$phase_home/.codex/packages/standalone/current/codex" ]] ||
+[[ ! -e "$phase_home/.codex/packages/standalone/current/bin/codex" ]] ||
   fail 'failed managed install left a managed executable'
 pass 'failed managed install leaves no managed executable'
 
