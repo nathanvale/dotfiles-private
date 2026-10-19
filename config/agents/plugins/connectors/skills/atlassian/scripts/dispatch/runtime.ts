@@ -4,6 +4,7 @@
 // front door supplies its MCPorter selection and its own internal-role
 // command for every invocation.
 import type { ExecutionCapabilities } from "../../../../bin/adapters/contract.ts";
+import { recordProviderFailure } from "../../../../bin/diagnostic-record.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, type RegisteredItems, TENANT_PATTERN } from "../custody/index.ts";
@@ -12,7 +13,7 @@ import { productFor, REST_SERVER } from "./contract.ts";
 import type { Dependencies, Transport, TransportFailure, TransportResult } from "./engine.ts";
 import { openJournal } from "./journal.ts";
 import { restReply, restSchema } from "./rest.ts";
-import { translateFailure } from "./translate.ts";
+import { type ObservedFailure, translateFailure } from "./translate.ts";
 
 const CALL_TIMEOUT_MS = "30000";
 
@@ -110,41 +111,66 @@ function restCall(command: readonly string[], env: Environment, tenant: string, 
 // MCPorter's JSON shapes are not fully documented; a result that is not JSON is
 // reported as malformed rather than guessed. This adapter is the only place
 // provider text is seen; it leaves here as a translated closed cause.
+//
+// Spec: SMSTX-574 E1 delivery-loop observability gap. A call that fails
+// through this normal, fully-classified path (never a throw) previously left
+// no retained trace once `translateFailure` discarded the raw stderr/stdout:
+// the outward envelope alone (`failed-unknown`, data: null) gave no way to
+// tell an unmatched-pattern failure apart from any other, short of a live
+// rerun. `recordProviderFailure` below retains only what this seam already
+// computed and already intended to be safe (the closed cause, exit code, and
+// text lengths) -- never the stderr/stdout content itself.
 export function routeTransport(env: Environment, tenant: string, skillsRoot: string, capabilities: ExecutionCapabilities): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
-	const toResult = (run: { code: number; stdout: string; stderr: string }): TransportResult => {
-		if (run.code !== 0) return { ok: false, ...translateFailure({ kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout }) };
+	const failure = (server: string, operation: string, observed: ObservedFailure): TransportResult => {
+		const translated = translateFailure(observed);
+		recordProviderFailure({
+			connector: "atlassian",
+			tool: operation,
+			server,
+			cause: translated.cause,
+			kind: observed.kind,
+			exitCode: observed.kind === "process" ? observed.exitCode : null,
+			stderrLength: observed.kind === "process" ? observed.stderr.length : 0,
+			stdoutLength: observed.kind === "process" ? observed.stdout.length : 0,
+			env,
+			observedAt: new Date(),
+		});
+		return { ok: false, ...translated };
+	};
+	const toResult = (run: { code: number; stdout: string; stderr: string }, server: string, operation: string): TransportResult => {
+		if (run.code !== 0) return failure(server, operation, { kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout });
 		const data = parseJson(run.stdout);
-		if (data === undefined) return { ok: false, ...translateFailure({ kind: "malformed", message: "MCPorter output was not JSON" }) };
+		if (data === undefined) return failure(server, operation, { kind: "malformed", message: "MCPorter output was not JSON" });
 		if (typeof data === "object" && data !== null && (data as { isError?: unknown }).isError === true) {
-			return { ok: false, ...translateFailure({ kind: "tool-error", message: JSON.stringify(data).slice(0, 2000) }) };
+			return failure(server, operation, { kind: "tool-error", message: JSON.stringify(data).slice(0, 2000) });
 		}
 		const inBand = inBandError(data);
-		if (inBand !== undefined) return { ok: false, ...translateFailure({ kind: "tool-error", message: inBand.slice(0, 2000) }) };
+		if (inBand !== undefined) return failure(server, operation, { kind: "tool-error", message: inBand.slice(0, 2000) });
 		return { ok: true, data };
 	};
 	const mcporter = packagedMcporter(capabilities);
 	const providerCommand = capabilities.internalCommand("provider");
 	const restProviderCommand = capabilities.internalCommand("rest-provider");
-	const request = async (binding: CredentialBinding, server: string, mcporterArgs: string[]): Promise<TransportResult> => {
+	const request = async (binding: CredentialBinding, server: string, operation: string, mcporterArgs: string[]): Promise<TransportResult> => {
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
 		const readiness = providerReadiness(env, tenant, binding, server, providerCommand);
 		if (readiness) return readiness;
 		const selected = await mcporter();
 		if (!selected.ok) return selected;
-		return toResult(spawnRoute(selected.binary, planned));
+		return toResult(spawnRoute(selected.binary, planned), server, operation);
 	};
 	return {
 		async listTools(binding, server) {
 			// The REST route's schema is owned, not live; the REST Provider refuses
 			// the same vocabulary itself.
 			if (server === REST_SERVER) return { ok: true, data: restSchema() };
-			return request(binding, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]);
+			return request(binding, server, "list", ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 		async call(binding, server, tool, args) {
 			if (server === REST_SERVER) return restCall(restProviderCommand, env, tenant, binding, tool, args);
-			return request(binding, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]);
+			return request(binding, server, tool, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 	};
 }
