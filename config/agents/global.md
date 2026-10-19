@@ -133,6 +133,9 @@
 - Use `ghh` for GitHub CLI work.
 - Managed project coordination or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
+- Herdr or Herdr Projects coordinator/worker startup, resume, or model change:
+  read `$HOME/code/dotfiles/docs/agents/model-selection.md` before selecting or
+  changing its model, provider, account or effort.
 - Prior shell activity: when recent terminal state may explain a task, use
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.
 - Accessible email question: read
