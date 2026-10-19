@@ -28,6 +28,7 @@ import { loginKeychain, storeServiceToken } from "./setup/keychain.ts";
 import { stateRoot } from "./private-state.ts";
 import { observeEvidence } from "./evidence-state.ts";
 import { retainFixtureObservation, retainObservation } from "./evidence-record.ts";
+import { doctorFailureView, readProviderFailure } from "./diagnostic-record.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -1928,7 +1929,13 @@ function handleDoctor(args: readonly string[]): void {
 	// selector problem cannot arise here.
 	const row = evidenceRow(manifest, new Map(), new Date().toISOString());
 	const evidence = "problem" in row ? {} : row.evidence;
-	emitSuccess("connectors.doctor", `${id} declared configuration validated; evidence reports local readiness`, { connector: id, ...evidence }, "connectors.status");
+	// Reads only the local diagnostics file this connector's own transport may
+	// have already written on a prior failure (see diagnostic-record.ts): no
+	// Provider start, no credential read, no network call. Present only when
+	// a record exists, so doctor's data shape is unchanged when it does not.
+	const lastFailure = readProviderFailure(id, process.env);
+	const data = { connector: id, ...evidence, ...(lastFailure ? { lastFailure: doctorFailureView(lastFailure) } : {}) };
+	emitSuccess("connectors.doctor", `${id} declared configuration validated; evidence reports local readiness`, data, "connectors.status");
 }
 
 // The only command that exercises a packaged adapter's auth-shaped

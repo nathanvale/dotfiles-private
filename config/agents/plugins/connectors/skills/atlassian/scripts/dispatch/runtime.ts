@@ -122,7 +122,7 @@ function restCall(command: readonly string[], env: Environment, tenant: string, 
 // text lengths) -- never the stderr/stdout content itself.
 export function routeTransport(env: Environment, tenant: string, skillsRoot: string, capabilities: ExecutionCapabilities): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
-	const failure = (server: string, operation: string, observed: ObservedFailure): TransportResult => {
+	const failure = (server: string, operation: string, transportCallId: string, observed: ObservedFailure): TransportResult => {
 		const translated = translateFailure(observed);
 		recordProviderFailure({
 			connector: "atlassian",
@@ -133,33 +133,40 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 			exitCode: observed.kind === "process" ? observed.exitCode : null,
 			stderrLength: observed.kind === "process" ? observed.stderr.length : 0,
 			stdoutLength: observed.kind === "process" ? observed.stdout.length : 0,
+			transportCallId,
 			env,
 			observedAt: new Date(),
 		});
 		return { ok: false, ...translated };
 	};
-	const toResult = (run: { code: number; stdout: string; stderr: string }, server: string, operation: string): TransportResult => {
-		if (run.code !== 0) return failure(server, operation, { kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout });
+	const toResult = (run: { code: number; stdout: string; stderr: string }, server: string, operation: string, transportCallId: string): TransportResult => {
+		if (run.code !== 0) return failure(server, operation, transportCallId, { kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout });
 		const data = parseJson(run.stdout);
-		if (data === undefined) return failure(server, operation, { kind: "malformed", message: "MCPorter output was not JSON" });
+		if (data === undefined) return failure(server, operation, transportCallId, { kind: "malformed", message: "MCPorter output was not JSON" });
 		if (typeof data === "object" && data !== null && (data as { isError?: unknown }).isError === true) {
-			return failure(server, operation, { kind: "tool-error", message: JSON.stringify(data).slice(0, 2000) });
+			return failure(server, operation, transportCallId, { kind: "tool-error", message: JSON.stringify(data).slice(0, 2000) });
 		}
 		const inBand = inBandError(data);
-		if (inBand !== undefined) return failure(server, operation, { kind: "tool-error", message: inBand.slice(0, 2000) });
+		if (inBand !== undefined) return failure(server, operation, transportCallId, { kind: "tool-error", message: inBand.slice(0, 2000) });
 		return { ok: true, data };
 	};
 	const mcporter = packagedMcporter(capabilities);
 	const providerCommand = capabilities.internalCommand("provider");
 	const restProviderCommand = capabilities.internalCommand("rest-provider");
+	// Freshly generated per request() attempt. This is NOT the outward
+	// envelope's result.runId (see the module header): that id does not exist
+	// yet at this point in the control flow, generated later and separately
+	// when bin/connectors.ts assembles the final envelope. transportCallId
+	// only has to distinguish this one attempt from a different one.
 	const request = async (binding: CredentialBinding, server: string, operation: string, mcporterArgs: string[]): Promise<TransportResult> => {
+		const transportCallId = `call-${crypto.randomUUID()}`;
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
 		const readiness = providerReadiness(env, tenant, binding, server, providerCommand);
 		if (readiness) return readiness;
 		const selected = await mcporter();
 		if (!selected.ok) return selected;
-		return toResult(spawnRoute(selected.binary, planned), server, operation);
+		return toResult(spawnRoute(selected.binary, planned), server, operation, transportCallId);
 	};
 	return {
 		async listTools(binding, server) {

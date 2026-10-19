@@ -3,11 +3,27 @@
 // under $XDG_STATE_HOME/connectors/diagnostics/<connector>/last-failure.json.
 // It never holds raw provider stderr, stdout, or message text, a stack, or
 // any free-text field -- only the already-closed cause code the transport
-// seam already computed, the exit code, text lengths, and the observed-kind.
-// This makes an unclassified ("failed-unknown") provider failure explainable
-// without a live rerun, while keeping the existing "provider text never
-// crosses the transport seam" boundary intact: nothing here is new exposure,
-// only retention of facts the seam already held and previously discarded.
+// seam already computed, the exit code, text lengths, the observed-kind, and
+// a transportCallId. This retains recurrence, timing, and size for an
+// unclassified ("failed-unknown") provider failure where none was kept
+// before, while keeping the existing "provider text never crosses the
+// transport seam" boundary intact: nothing here is new exposure, only
+// retention of facts the seam already held and previously discarded. It does
+// not explain an unclassified failure's cause; see ProviderFailureRecord's
+// own doc comment for why, and doctorFailureView for how that limit is
+// surfaced.
+//
+// transportCallId is NOT the outward envelope's `result.runId`: that id is
+// generated lazily, inside bin/connectors.ts's emitAdapterEnvelope, at the
+// moment the final envelope is assembled -- after the transport call this
+// record is written from has already completed. No earlier-available,
+// pre-generated invocation id exists anywhere in the current architecture to
+// thread down instead. transportCallId is a distinct identifier, freshly
+// generated once per routeTransport request() attempt, that at least lets a
+// retained record be correlated to a specific attempt and distinguished from
+// a different one -- the achievable part of "correlation" without changing
+// the shared envelope-assembly timing used by every command, success or
+// failure alike, which would be a materially larger, cross-cutting change.
 import { ownedDirectory, type PrivateStateReason, readPrivateFile, stateRoot, writePrivateFile } from "./private-state.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 import path from "node:path";
@@ -24,6 +40,7 @@ export interface ProviderFailureRecord {
 	readonly exitCode: number | null;
 	readonly stderrLength: number;
 	readonly stdoutLength: number;
+	readonly transportCallId: string;
 	readonly observedAt: string;
 }
 
@@ -36,6 +53,7 @@ export interface RecordFailureRequest {
 	readonly exitCode: number | null;
 	readonly stderrLength: number;
 	readonly stdoutLength: number;
+	readonly transportCallId: string;
 	readonly env: EnvironmentSource;
 	readonly observedAt: Date;
 }
@@ -60,6 +78,7 @@ export function recordProviderFailure(request: RecordFailureRequest): Kept {
 		exitCode: request.exitCode,
 		stderrLength: request.stderrLength,
 		stdoutLength: request.stdoutLength,
+		transportCallId: request.transportCallId,
 		observedAt: request.observedAt.toISOString(),
 	};
 	const file = recordFile(request.env, request.connector);
@@ -70,7 +89,7 @@ export function recordProviderFailure(request: RecordFailureRequest): Kept {
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const RECORD_KEYS = ["schemaVersion", "connector", "tool", "server", "cause", "kind", "exitCode", "stderrLength", "stdoutLength", "observedAt"];
+const RECORD_KEYS = ["schemaVersion", "connector", "tool", "server", "cause", "kind", "exitCode", "stderrLength", "stdoutLength", "transportCallId", "observedAt"];
 const KINDS: ReadonlySet<string> = new Set(["process", "tool-error", "malformed"]);
 
 function wellFormed(value: unknown): value is ProviderFailureRecord {
@@ -91,6 +110,8 @@ function wellFormed(value: unknown): value is ProviderFailureRecord {
 		Number.isInteger(value.stderrLength) &&
 		typeof value.stdoutLength === "number" &&
 		Number.isInteger(value.stdoutLength) &&
+		typeof value.transportCallId === "string" &&
+		value.transportCallId.length > 0 &&
 		typeof value.observedAt === "string" &&
 		!Number.isNaN(Date.parse(value.observedAt))
 	);
@@ -107,4 +128,25 @@ export function readProviderFailure(connector: string, env: EnvironmentSource): 
 	} catch {
 		return null;
 	}
+}
+
+// Classified causes (auth, not-found, capability, precondition, transport)
+// already carried real meaning before this record existed; only the
+// classifier's own "failed-unknown" default leaves the cause itself unknown.
+// This view exists so a surface like `connectors.doctor` can show the safe
+// facts together with an explicit, non-overstated limit and a human next
+// step -- never a free-text field, never a claim of causal diagnosis.
+export interface DoctorFailureView extends ProviderFailureRecord {
+	readonly reasonKnown: boolean;
+	readonly limit: string;
+	readonly supportedNextAction: string;
+}
+
+const UNCLASSIFIED_LIMIT = "Recurrence, timing and output size are retained; the provider's own failure text is not kept, so this is not a causal diagnosis.";
+const CLASSIFIED_LIMIT = "This cause was already classified by the existing failure translator before this record existed.";
+const SUPPORTED_NEXT_ACTION = "An operator may manually rerun the same read-only preview with stderr captured to learn more; no automatic retry is performed by this plugin.";
+
+export function doctorFailureView(record: ProviderFailureRecord): DoctorFailureView {
+	const reasonKnown = record.cause !== "failed-unknown";
+	return { ...record, reasonKnown, limit: reasonKnown ? CLASSIFIED_LIMIT : UNCLASSIFIED_LIMIT, supportedNextAction: SUPPORTED_NEXT_ACTION };
 }
