@@ -7,8 +7,9 @@ with `npx skills`.
 Bitbucket belongs to Monash Tools, its source of truth: the `bitbucket` skill
 at `plugins/monash-tools/skills/bitbucket/` in `nathanvale/monash-plugins`.
 This source no longer ships it. Merge this removal, and refresh the installed
-personal plugin, only after Monash Tools is active on that machine; until then
-the installed personal copy stays the Bitbucket fallback.
+personal plugin only after Monash Tools is qualified in fresh sessions on every
+affected host and harness. Verify skill discovery and successful tool use
+separately. Until then, the installed personal copy stays the Bitbucket fallback.
 
 ```text
 personal/
