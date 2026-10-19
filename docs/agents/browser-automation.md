@@ -70,6 +70,25 @@ Browser Use are retired by
   processes and remove only exact owned mappings after readback. Recheck other
   routes. Follow the browser route above to open the link.
 
+### Nathan's home route
+
+Nathan already uses WireGuard on his UniFi home router. Its
+[VPN server settings](https://192.168.1.1/network/default/settings/vpn/server)
+are the existing configuration owner.
+
+- Home-LAN access may not need a VPN. For remote access, use an existing
+  authorized client route on the device making the connection, including the
+  execution host when needed. Verify routing, DNS and firewall access to the
+  actual Mini/app; do not infer addresses or client configuration. VPN access
+  does not expose loopback listeners.
+- Inspect router settings read-only through native Chrome in the current
+  personal profile. Hand login to Nathan.
+- Keep network effects in the foreground session. Obtain appropriate
+  authority before creating or importing peers, changing router rules or
+  certificate trust, replacing a VPN, or starting sharing. Preserve other Mini
+  apps. Keep keys, configuration files, QR codes and credentials out of source
+  and receipts.
+
 ## Generic tooling
 
 Agent Browser, Playwright, MCPorter, and the `chrome-devtools` MCPorter entry
