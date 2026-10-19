@@ -28,7 +28,7 @@
 // `doctor` command safely surfaces a retained record with its explicit
 // "not a causal diagnosis" limit and a supported next action, with no
 // Provider start, credential read, network call, or secret/free-text leak.
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -178,10 +178,16 @@ test("a failed diagnostic-record write never changes the real delivery outcome",
 		const skillsRoot = path.join(import.meta.dir, "..", "..");
 		const transport = routeTransport(env, "example", skillsRoot, { selectMcporter: async () => mcporterScript, internalCommand: () => [providerScript] });
 
-		const result = await transport.call(binding, CJ, "jira_add_comment", { issueKey: "EX-1", body: "x" });
+		const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const result = await transport.call(binding, CJ, "jira_add_comment", { issueKey: "EX-1", body: "x" });
+			expect(result).toEqual({ ok: false, cause: "failed-unknown", hint: null });
+			expect(stderr).not.toHaveBeenCalled();
+		} finally {
+			stderr.mockRestore();
+		}
 		// The real TransportResult the caller depends on is identical to the
 		// no-write-fault case: observability must not become a new failure mode.
-		expect(result).toEqual({ ok: false, cause: "failed-unknown", hint: null });
 		expect(readProviderFailure("atlassian", "example", env)).toBeNull();
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -257,6 +263,50 @@ test("the packaged bin/connectors CLI's doctor command surfaces the retained fai
 		expect(stdout).not.toContain("example.atlassian.net");
 		expect(stdout).not.toContain("onepassword-item-version");
 		expect(stdout).not.toContain(SENTINEL);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an unknown preflight failure retains a joinable safe record and never selects MCPorter", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "runtime-preflight-"));
+	const env = { HOME: root, XDG_STATE_HOME: path.join(root, "state") };
+	const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+	try {
+		const provider = fakeScript(root, "provider", `echo "unmatched preflight fault ${SENTINEL}" >&2\nexit 9`);
+		let selected = false;
+		const transport = routeTransport(env, "example", path.join(import.meta.dir, "..", ".."), {
+			selectMcporter: async () => {
+				selected = true;
+				return null;
+			},
+			internalCommand: () => [provider],
+		});
+		expect(await transport.call(binding, CJ, "jira_get_issue", { issue_key: "EX-1" })).toEqual({ ok: false, cause: "failed-unknown", hint: null });
+		expect(selected).toBe(false);
+		const record = readProviderFailure("atlassian", "example", env);
+		expect(record?.exitCode).toBe(9);
+		expect(record?.tool).toBe("jira_get_issue");
+		expect(stderr.mock.calls).toEqual([[`connectors:diagnostic:transportCallId:${record?.transportCallId}\n`]]);
+		expect(await Bun.file(path.join(env.XDG_STATE_HOME, "connectors/diagnostics/atlassian/example/last-failure.json")).text()).not.toContain(SENTINEL);
+	} finally {
+		stderr.mockRestore();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test.each([{ cause: SENTINEL }, { connector: "other" }, { tenant: "other" }])("the packaged doctor rejects invalid stored fields %j", (override) => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "doctor-invalid-record-"));
+	const env = { HOME: root, XDG_STATE_HOME: path.join(root, "state"), PATH: process.env.PATH ?? "" };
+	const file = path.join(env.XDG_STATE_HOME, "connectors/diagnostics/atlassian/example/last-failure.json");
+	const base = { schemaVersion: 1, connector: "atlassian", tenant: "example", tool: "jira_get_issue", server: CJ, cause: "failed-unknown", kind: "process", exitCode: 9, stderrLength: 1, stdoutLength: 0, transportCallId: "call-invalid-proof", observedAt: "2026-10-19T05:00:00.000Z" };
+	try {
+		mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+		writeFileSync(file, JSON.stringify({ ...base, ...override }), { mode: 0o600 });
+		const run = Bun.spawnSync([path.join(import.meta.dir, "../../../bin/connectors"), "doctor", "atlassian", "--select", "tenant=example"], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
+		expect(run.stdout.toString()).not.toContain(SENTINEL);
+		expect(JSON.parse(run.stdout.toString()).result.data).not.toHaveProperty("lastFailure");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

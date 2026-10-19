@@ -71,7 +71,7 @@ function inBandError(data: unknown): string | undefined {
 // failure, so a Provider refusal that ran under MCPorter would be flattened
 // into an offline transport failure; running --preflight here first keeps the
 // refusal and its fixed hint.
-function providerReadiness(env: Environment, tenant: string, binding: CredentialBinding, server: string, providerCommand: readonly string[]): TransportResult | null {
+function providerReadiness(env: Environment, tenant: string, binding: CredentialBinding, server: string, providerCommand: readonly string[], failure: (observed: ObservedFailure) => TransportResult): TransportResult | null {
 	const product = productFor(server);
 	if (!product) return { ok: false, ...translateFailure({ kind: "malformed", message: "unknown Provider route" }) };
 	const run = Bun.spawnSync([...providerCommand, "--preflight"], {
@@ -81,10 +81,10 @@ function providerReadiness(env: Environment, tenant: string, binding: Credential
 		stderr: "pipe",
 	});
 	if (run.exitCode !== 0) {
-		return { ok: false, ...translateFailure({ kind: "process", exitCode: run.exitCode, stderr: run.stderr.toString(), stdout: run.stdout.toString() }) };
+		return failure({ kind: "process", exitCode: run.exitCode, stderr: run.stderr.toString(), stdout: run.stdout.toString() });
 	}
 	if (run.stdout.length > 0 || run.stderr.length > 0) {
-		return { ok: false, ...translateFailure({ kind: "malformed", message: "Provider readiness emitted unexpected output" }) };
+		return failure({ kind: "malformed", message: "Provider readiness emitted unexpected output" });
 	}
 	return null;
 }
@@ -149,7 +149,7 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
 	const failure = (server: string, operation: string, transportCallId: string, observed: ObservedFailure): TransportResult => {
 		const translated = translateFailure(observed);
-		recordProviderFailure({
+		const retention = recordProviderFailure({
 			connector: "atlassian",
 			tenant,
 			tool: operation,
@@ -163,7 +163,7 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 			env,
 			observedAt: new Date(),
 		});
-		if (translated.cause === "failed-unknown") process.stderr.write(`${DIAGNOSTIC_STDERR_PREFIX}${transportCallId}\n`);
+		if (translated.cause === "failed-unknown" && retention.kind === "retained") process.stderr.write(`${DIAGNOSTIC_STDERR_PREFIX}${transportCallId}\n`);
 		return { ok: false, ...translated };
 	};
 	const toResult = (run: { code: number; stdout: string; stderr: string }, server: string, operation: string, transportCallId: string): TransportResult => {
@@ -189,7 +189,7 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 		const transportCallId = `call-${crypto.randomUUID()}`;
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
-		const readiness = providerReadiness(env, tenant, binding, server, providerCommand);
+		const readiness = providerReadiness(env, tenant, binding, server, providerCommand, (observed) => failure(server, operation, transportCallId, observed));
 		if (readiness) return readiness;
 		const selected = await mcporter();
 		if (!selected.ok) return selected;

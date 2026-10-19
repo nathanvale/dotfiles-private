@@ -33,6 +33,7 @@
 // JSON envelope on stdout completely unchanged. See runtime.ts's own comment
 // at the write site for the exact line shape.
 import { ownedDirectory, type PrivateStateReason, readPrivateFile, stateRoot, writePrivateFile } from "./private-state.ts";
+import { isProviderFailureCause } from "../skills/atlassian/scripts/dispatch/translate.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 import path from "node:path";
 
@@ -132,7 +133,7 @@ function scalarFieldsValid(value: Record<string, unknown>): boolean {
 		typeof value.tenant === "string" &&
 		typeof value.tool === "string" &&
 		typeof value.server === "string" &&
-		typeof value.cause === "string" &&
+		isProviderFailureCause(value.cause) &&
 		typeof value.kind === "string" &&
 		KINDS.has(value.kind)
 	);
@@ -166,7 +167,7 @@ export function readProviderFailure(connector: string, tenant: string, env: Envi
 	if (!read.ok) return null;
 	try {
 		const value: unknown = JSON.parse(read.text);
-		return wellFormed(value) ? value : null;
+		return wellFormed(value) && value.connector === connector && value.tenant === tenant ? value : null;
 	} catch {
 		return null;
 	}
