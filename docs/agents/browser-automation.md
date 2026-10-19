@@ -35,6 +35,33 @@ Browser Use are retired by
 - The Harness owns attachment. Never copy, enumerate, or attach to a Chrome
   profile directory yourself.
 
+## Private previews
+
+- Resolve the execution host, app command/version, loopback port and process owner.
+  Keep the backend on `127.0.0.1`.
+- Use private [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
+  HTTPS for an authorized tailnet device. Check device access, MagicDNS, HTTPS
+  readiness and the destination port's policy. Tailnet access does not authorize
+  employer data on personal devices. Keep Funnel and access-policy changes under
+  their separate explicit authority.
+- Inspect the selected host's installed `tailscale serve --help` and current
+  mappings before effects. Preserve other owners' mappings. Stop at consent or
+  uncertain outcomes; inspect before retrying.
+- Prefer one owned HTTPS port at `/` per app. Configure only the exact required
+  host/origin. Qualify subpaths through the app's base-path support. Check assets,
+  deep links, API/auth URLs and live-reload WebSocket from the viewing device.
+  Use the installed app version's [Vite](https://vite.dev/config/server-options)
+  or [Storybook](https://storybook.js.org/docs/api/main-config/main-config-core)
+  settings; retain host validation.
+- Reuse Herdr Projects' native review/board link owner. Resolve the actual host,
+  executable and version before using its current CLI/docs. Preserve its access
+  gate and shared server ownership.
+- Report the verified HTTPS URL and task-owned process/mapping custody. Keep the
+  host awake under the global Mac rule. At handback, retain the preview only when
+  requested; otherwise stop only owned processes and remove only their exact
+  mappings after readback. Recheck other mappings. Follow the browser route above
+  when opening the link.
+
 ## Generic tooling
 
 Agent Browser, Playwright, MCPorter, and the `chrome-devtools` MCPorter entry

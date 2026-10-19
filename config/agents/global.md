@@ -133,6 +133,9 @@
 - Use `ghh` for GitHub CLI work.
 - Managed project coordination or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
+- Cross-device previews of local apps, Storybook or Herdr review pages: read
+  `$HOME/code/dotfiles/docs/agents/browser-automation.md#private-previews` before
+  starting or sharing a preview.
 - Herdr or Herdr Projects coordinator/worker startup, resume, or model change:
   read `$HOME/code/dotfiles/docs/agents/model-selection.md` before selecting or
   changing its model, provider, account or effort.
