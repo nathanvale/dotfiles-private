@@ -1,5 +1,8 @@
 # Herdr control
 
+For coordinator or worker startup, resume, or model changes in Herdr or Herdr
+Projects, read [model selection](model-selection.md) before choosing the route.
+
 For Codex Desktop or Claude Desktop portal/coordinator routes, invoke the
 third-party Herdr skill even when the request does not mention Herdr, and permit
 direct Herdr CLI control outside `HERDR_ENV=1`. This owned instruction overrides
