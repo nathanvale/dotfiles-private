@@ -256,7 +256,7 @@ describe("handback printer-pdf gate", () => {
     const refused = (lines: (sha: string) => string) => refusal(handback("printer-pdf", withReport(lines)));
 
     test("accepts a plain pass with benign extra fields", () => {
-      expect(handback("printer-pdf", withReport((sha) => good(sha, "Warnings: 2\nErrors: 0\nValidation: passed\nChecked 214 pages with profile PDF/X-4\nTotal errors 0"))).exitCode).toBe(0);
+      expect(handback("printer-pdf", withReport((sha) => good(sha, "Warnings: 2\nErrors: 0\nValidation: passed\nChecked 214 pages with profile PDF/X-4\nTotal errors 0\nFailures: 0\nFailed checks: 0\nViolations: none\nProfile: PDF/X-4 on SHA256"))).exitCode).toBe(0);
     });
 
     test.each([
@@ -265,6 +265,11 @@ describe("handback printer-pdf gate", () => {
       ["an unknown key marking rejection", "Rejected: true", "failure or negation"],
       ["an unknown key with a rejected value", "PDF/X: rejected", "failure or negation"],
       ["a parenthesised key marking rejection", "Status (rejected): true", "failure or negation"],
+      ["a negative count after the word", "Errors found -17", "non-zero count"],
+      ["a negative total after the word", "Total errors -17", "non-zero count"],
+      ["a negative count in a count key", "Errors: -17", "not zero"],
+      ["a unicode-minus count", "Total errors \u221217", "non-zero count"],
+      ["a count key whose label also names rejection", "Rejected failures: 0", "failure or negation"],
       ["a count in prose", "17 errors found in total", "non-zero count"],
       ["a count after the word", "Errors found 17", "non-zero count"],
       ["a total after the word", "Total errors 17", "non-zero count"],

@@ -230,41 +230,41 @@ const POSITIVE = new Set(["pass", "passed", "valid", "compliant", "conforms", "c
 
 type Line = { key: string; value: string };
 
-/** Splits a report into `key: value` pairs (keys lower-cased) and every non-empty line, so unknown keys are screened as text. */
-function readReport(body: string): { pairs: Line[]; free: string[] } {
-  const pairs: Line[] = [];
-  const free: string[] = [];
-  for (const raw of body.split(/\r?\n|\r/)) {
-    const line = raw.trim();
-    if (line) free.push(line);
-    const match = line.match(/^([^:=]+?)\s*[:=]\s*(.*)$/);
-    if (match) pairs.push({ key: (match[1] as string).toLowerCase(), value: (match[2] as string).trim().replace(/\.$/, "") });
-  }
-  return { free, pairs };
-}
-
 const words = (key: string) => key.split(/[^a-z]+/).filter(Boolean);
+const PROBLEM_WORD = /\b(?:errors?|failures?|failed|violations?|problems?)\b/i;
+// A leading hyphen or minus makes a count negative; a hyphen inside a token (PDF/X-4) does not.
+const STANDALONE_NUMBER = /(?<![\w./-])[-\u2212]?\d+(?![\w-])/g;
 
-/** A key that counts problems must be zero; a key that gives a verdict must be a plain positive. */
-function pairIssue({ key, value }: Line): string | undefined {
-  const tokens = words(key);
-  if (tokens.some((t) => COUNT_KEYS.has(t)) && !/^(?:0|none)$/i.test(value)) {
-    return `"${key}" is "${value}", not zero.`;
-  }
-  if (tokens.some((t) => VERDICT_KEYS.has(t)) && !POSITIVE.has(value.toLowerCase())) {
-    return `"${key}" is "${value}", not a plain pass.`;
-  }
-  return undefined;
+function pairOf(line: string): Line | undefined {
+  const match = line.match(/^([^:=]+?)\s*[:=]\s*(.*)$/);
+  if (!match) return undefined;
+  return { key: (match[1] as string).toLowerCase(), value: (match[2] as string).trim().replace(/\.$/, "") };
 }
 
-const PROBLEM_WORD = /\b(?:errors?|failures?|failed|violations?|problems?)\b/i;
-const STANDALONE_NUMBER = /(?<![\w./-])\d+(?![\w-])/g;
-
-/** Any report line, whatever its key, may not pair a problem word with a non-zero number in either order, nor negate. */
-function freeIssue(line: string): string | undefined {
-  const nonZero = (line.match(STANDALONE_NUMBER) ?? []).some((n) => Number(n) !== 0);
+/** Free text, and the key and value of an unrecognised pair: no problem word beside a non-zero number, no negation. */
+function textIssue(line: string): string | undefined {
+  const nonZero = (line.match(STANDALONE_NUMBER) ?? []).some((n) => Number(n.replace("\u2212", "-")) !== 0);
   if (PROBLEM_WORD.test(line) && nonZero) return `"${line}" states a non-zero count.`;
   return NEGATION.test(line) ? `"${line}" carries a failure or negation.` : undefined;
+}
+
+/**
+ * Line roles. A count key (errors, failures, violations) must be zero and a verdict key (result,
+ * status, validation) a plain positive; their own label words are not negation, but any other
+ * word in the key is screened. Every other line is screened as text, so unknown keys cannot hide a
+ * contradiction.
+ */
+function lineIssue(raw: string): string | undefined {
+  const pair = pairOf(raw);
+  const tokens = pair ? words(pair.key) : [];
+  const counts = tokens.some((t) => COUNT_KEYS.has(t));
+  const verdict = tokens.some((t) => VERDICT_KEYS.has(t));
+  if (!pair || (!counts && !verdict)) return textIssue(raw);
+  const stray = tokens.filter((t) => !COUNT_KEYS.has(t) && !VERDICT_KEYS.has(t)).join(" ");
+  if (NEGATION.test(stray)) return `"${pair.key}" carries a failure or negation.`;
+  if (counts && !/^(?:0|none)$/i.test(pair.value)) return `"${pair.key}" is "${pair.value}", not zero.`;
+  if (verdict && !POSITIVE.has(pair.value.toLowerCase())) return `"${pair.key}" is "${pair.value}", not a plain pass.`;
+  return undefined;
 }
 
 /**
@@ -283,10 +283,11 @@ function reportIssues(validator: JsonRecord, pdf: Identity, where: string): stri
   const digests = (body.match(/\b[0-9a-f]{64}\b/gi) ?? []).map((d) => d.toLowerCase());
   if (!digests.includes(pdf.sha256)) issues.push("the PDF/X report does not carry the handback PDF's SHA256.");
   if (digests.some((d) => d !== pdf.sha256)) issues.push("the PDF/X report names a different PDF digest.");
-  const { free, pairs } = readReport(body);
+  const lines = body.split(/\r?\n|\r/).map((l) => l.trim()).filter(Boolean);
+  const pairs = lines.flatMap((l) => pairOf(l) ?? []);
   if (pairs.filter((p) => p.key === "result").length !== 1) issues.push("the PDF/X report needs exactly one `Result:` line.");
   if (pairs.filter((p) => p.key === "error count").length !== 1) issues.push("the PDF/X report needs exactly one `Error count:` line.");
-  const found = [...pairs.map(pairIssue), ...free.map(freeIssue)].filter((m): m is string => m !== undefined);
+  const found = lines.map(lineIssue).filter((m): m is string => m !== undefined);
   return [...issues, ...found.map((m) => `PDF/X report: ${m}`)];
 }
 

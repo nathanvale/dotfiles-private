@@ -50,14 +50,16 @@ never says Print PASS.
   mean a trim-only export and fail.
 - Colour: destination profile, PDF output intent present, and a real PDF/X
   validator report (name, PDF/X standard, report path and digest, the validated
-  PDF digest, zero errors). The helper fails closed and reads the report as `key: value` lines: exactly one
-  `Result:` and one `Error count:` line; every key that counts problems (errors,
-  failures, violations) is zero; every verdict key (result, status, validation,
-  outcome, conformance, success) is a plain positive; every line, whatever its key, pairs no problem word (error, failure,
-  violation, problem) with a non-zero number in either order and has no negating
-  or rejecting word; this PDF's SHA256 appears and no
-  other. A report in another format leaves the case open; read the report
-  yourself. A preset or marker is not a report.
+  PDF digest, zero errors). The helper fails closed and reads each line by role: exactly one
+  `Result:` and one `Error count:` line; a count key (errors, failures,
+  violations) must be zero, so `Failures: 0` passes and `Errors: -17` fails; a
+  verdict key (result, status, validation, outcome, conformance, success) must
+  be a plain positive; any other word in those keys, and every line with an
+  unknown key or no key, must pair no problem word (error, failure, violation,
+  problem) with a non-zero or negative number in either order and carry no
+  negating or rejecting word. Version tokens such as `PDF/X-4` and digests are
+  not counts. This PDF's SHA256 must appear and no other. A report in another
+  format leaves the case open; read the report yourself. A preset or marker is not a report.
 - Link PPI against the product requirement. Each link below it needs Nathan's
   recorded acceptance. Every font embedded.
 
