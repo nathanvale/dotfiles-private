@@ -1,4 +1,5 @@
 import { checkBaseline } from "./baseline.ts";
+import { checkBook } from "./book.ts";
 import type { CheckResult } from "./check-result.ts";
 import {
   CAUSES,
@@ -26,6 +27,7 @@ type Envelope = ReturnType<typeof envelope>;
 const USAGE = `Usage: ${CLI} <command> [options] [--json]`;
 const RUNNERS: Record<string, (o: Options) => CheckResult> = {
   baseline: (o) => checkBaseline(need(o, "--binding"), need(o, "--live")),
+  book: (o) => checkBook(need(o, "--native"), need(o, "--contract")),
   copy: (o) => checkCopy(need(o, "--input"), need(o, "--current")),
   dispatch: (o) =>
     checkDispatch({
@@ -77,7 +79,7 @@ function parseOptions(args: string[], specs: OptionSpec[]): Options {
 }
 
 function helpText(): string {
-  const lines = [USAGE, "", "Read-only checks for a Bestie chapter build. Commands:"];
+  const lines = [USAGE, "", "Read-only checks for a Bestie chapter build or the whole book. Commands:"];
   for (const spec of COMMANDS) {
     lines.push(`  ${spec.route[0]}  ${spec.summary}`);
     for (const option of spec.options) {
@@ -182,7 +184,7 @@ function helpEnvelope(): Envelope {
     {
       commands: COMMANDS.map(({ commandIdentity, options, route, summary }) => ({ commandIdentity, options, route, summary })),
       options: [{ name: "--json", summary: "Emit one Contract Core envelope.", valueName: null }],
-      summary: "Read-only checks for a Bestie chapter build.",
+      summary: "Read-only checks for a Bestie chapter build or the whole book.",
       usage: USAGE,
     },
     "Show help.",
