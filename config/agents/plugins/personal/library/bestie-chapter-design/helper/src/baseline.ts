@@ -1,17 +1,19 @@
 import { type CheckResult, verdict } from "./check-result.ts";
 import {
+  type ArtBinding,
+  artBindings,
+  type FileIdentity,
+  fileIdentity,
   flag,
   integer,
-  type JsonRecord,
-  list,
   optional,
   readJson,
   record,
+  type SourceRevision,
   sha256File,
+  sourceRevision,
   text,
 } from "./input.ts";
-
-type FileIdentity = { path: string; sha256: string };
 
 type Binding = {
   chapter: string;
@@ -22,48 +24,30 @@ type Binding = {
     modified: boolean;
     capture: FileIdentity | undefined;
   };
-  sourceRevision: { repository: string; commit: string };
-  art: (FileIdentity & { id: string })[];
+  sourceRevision: SourceRevision;
+  art: ArtBinding[];
   copyResolution: FileIdentity;
 };
 
 /** Active-document readback, in the existing native receipt spelling. */
 type LiveState = { path: string; modified: boolean; pageCount: number };
 
-function identity(value: unknown, where: string): FileIdentity {
-  const item = record(value, where);
-  return {
-    path: text(item.path, `${where}.path`),
-    sha256: text(item.sha256, `${where}.sha256`),
-  };
-}
-
 function readBinding(path: string): Binding {
   const root = record(readJson(path), path);
   const base = record(root.baseline, `${path}.baseline`);
-  const source = record(root.sourceRevision, `${path}.sourceRevision`);
   return {
-    art: list(root.art, `${path}.art`).map((entry, index) => {
-      const where = `${path}.art[${index}]`;
-      return {
-        ...identity(entry, where),
-        id: text((entry as JsonRecord).id, `${where}.id`),
-      };
-    }),
+    art: artBindings(root.art, `${path}.art`),
     baseline: {
-      ...identity(base, `${path}.baseline`),
+      ...fileIdentity(base, `${path}.baseline`),
       capture: optional(base.capture, (v) =>
-        identity(v, `${path}.baseline.capture`),
+        fileIdentity(v, `${path}.baseline.capture`),
       ),
       modified: flag(base.modified, `${path}.baseline.modified`),
       pageCount: integer(base.pageCount, `${path}.baseline.pageCount`),
     },
     chapter: text(root.chapter, `${path}.chapter`),
-    copyResolution: identity(root.copyResolution, `${path}.copyResolution`),
-    sourceRevision: {
-      commit: text(source.commit, `${path}.sourceRevision.commit`),
-      repository: text(source.repository, `${path}.sourceRevision.repository`),
-    },
+    copyResolution: fileIdentity(root.copyResolution, `${path}.copyResolution`),
+    sourceRevision: sourceRevision(root.sourceRevision, `${path}.sourceRevision`),
   };
 }
 

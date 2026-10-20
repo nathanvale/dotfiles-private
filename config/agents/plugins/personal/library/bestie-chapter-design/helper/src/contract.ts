@@ -85,6 +85,10 @@ export const COMMANDS: CommandSpec[] = [
     ],
     true,
   ),
+  command("book", "Check a whole-book native readback and its exported PDF; human review stays open.", [
+    req("--native", "FILE", "Whole-book native readback: page-indexed parents, styles, overrides, stories, links, fonts and export settings."),
+    req("--contract", "FILE", "Book contract derived from the production contract: styles, parents, bleed, links, fonts and PDF expectations."),
+  ]),
   command("handback", "Refuse a handback whose claims exceed its evidence.", [
     req("--record", "FILE", "Current handback record."),
   ]),

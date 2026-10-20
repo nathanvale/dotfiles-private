@@ -112,3 +112,52 @@ before and after readbacks; check page moves with `protected --pages`.
   `minimumObserved`, `belowRequired` as `[{ id, ppi, acceptance }]`) and
   `fonts` (`notEmbedded`). The result lists `cases` and always reports
   `printAccepted: false`.
+
+## Whole-book readback and contract
+
+`book --native` takes one page-indexed readback from the reopened native
+file; `--contract` takes the production contract values. Paths are absolute.
+
+- Readback: `book`, `revision`, `native` and `pdf` (`path`, `sha256`),
+  `pageCount`, `sourceRevision` (`repository`, `commit`), `art` as
+  `[{ id, path, sha256 }]`, `preflight` (`profile`, `enabled`, `scope`),
+  `styles` (`paragraph`, `character`, `object`, `parent` names in the document),
+  `exportSettings` (name to value, as read back), `fonts` as
+  `[{ name, installed }]`, and `unicode` as
+  `[{ codepoints, font, method, rendered }]` (`method` as in
+  [ink provenance](#ink-provenance)).
+- `template`: `{ path, sha256 }` of the template file the book was built from.
+- `pages`: one per page, `{ page, side, family, parent: { name, transform },
+  margins, columns: { count, gutter }, fields,
+  bleed: { top, bottom, outside, inside }, items }`. `family` is the layout
+  family name, or `exception` for a declared special page; `margins` has the
+  same four edges as `bleed`. `transform` is the six
+  numbers of the parent item's matrix; `fields` maps field name to its value;
+  `items` are `{ label, kind, style, bounds, overrides }` (`bounds` page-relative
+  `[top, left, bottom, right]`) with each local override
+  `{ scope, property, value, style }`.
+- `stories`: `{ key, pages, text, expected, oversetText, hidden }`. `text` is
+  the whole story including overset; `expected` is the selected source text, compared exactly;
+  `hidden` lists reasons text is hidden (opaque field, off page, hidden layer).
+  `oversetText` is required: `""` records an observed zero overset, and an omitted field is refused.
+  `fields` and export-setting values must be strings or finite numbers; `null` and objects are refused.
+  `sourceRevision.commit` must be a hexadecimal commit id.
+- `links`: `{ id, page, path, sha256, expectedSha256, status, effectivePpi,
+  profile }`; `path` is hashed on disk and must equal `expectedSha256`, which
+  must equal the bound `art` entry with the same `id`.
+- Contract: `stories` as `[{ key, pages, owner, sha256 }]` (the full story inventory;
+  `owner` is the repository-relative source file at the bound commit and
+  `sha256` the digest of the expected text, paragraphs joined by `\r`), `template` (`path`, pinned `sha256`), `families` as
+  `[{ name, margins, columns, frames: [{ label, bounds }] }]`, `pageFamilies` as
+  `[{ page, family }]` and `exceptions` as `[{ page, reason }]` (every page
+  exactly once), `pageCount`, `firstPageSide`, `tolerance`, `styles`,
+  `allowedOverrides` (`scope`, `property`, optional `value`), `parents`
+  (`name`, `side`, `transform`), `requiredFields`, `fieldExemptPages`, `bleed`,
+  `links` (`minPpi`, `profiles`, `status`), `requiredFonts`,
+  `preflightProfile`, and `pdf` (`trim` as `[width, height]`, `colourSpaces`
+  as poppler spells them, optional `minImagePpi`, `exportSettings`).
+
+On a pass, `data` is the page-indexed manifest (bindings, per-page parent,
+fields, links and PDF boxes, fonts and images), per-section finding counts,
+the open human reviews and the qualifications not granted. A failure lists
+each finding as `[section] message`.

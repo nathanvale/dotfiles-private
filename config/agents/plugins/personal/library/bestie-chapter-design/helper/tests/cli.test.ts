@@ -20,6 +20,7 @@ function human(...args: string[]) {
 // Independent oracle: the public command identities, restated deliberately.
 const IDENTITIES = [
   "bestie-chapter-check.baseline",
+  "bestie-chapter-check.book",
   "bestie-chapter-check.copy",
   "bestie-chapter-check.dispatch",
   "bestie-chapter-check.geometry",
@@ -33,12 +34,12 @@ test("human help names usage and every command", () => {
   expect(result.exitCode).toBe(0);
   expect(result.stderr).toBe("");
   expect(result.stdout).toContain("Usage: bestie-chapter-check <command>");
-  for (const name of ["baseline", "protected", "copy", "story", "geometry", "dispatch", "handback"]) {
+  for (const name of ["baseline", "book", "protected", "copy", "story", "geometry", "dispatch", "handback"]) {
     expect(result.stdout).toContain(`  ${name}  `);
   }
 });
 
-test("machine discovery reports the simple profile, seven checks and their envelope identities", () => {
+test("machine discovery reports the simple profile, eight checks and their envelope identities", () => {
   const result = run("--discover");
   expect(result.exitCode).toBe(0);
   expect(result.stderr).toBe("");

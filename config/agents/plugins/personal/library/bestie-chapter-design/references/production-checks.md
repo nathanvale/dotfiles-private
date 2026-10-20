@@ -208,6 +208,66 @@ unresolved qualifications. Keep creative acceptance, exact-source proof,
 accessible-PDF findings and print qualification distinct.
 
 The existing helper owns `baseline`, `copy`, `story`, `protected`, `dispatch`,
-`geometry` and `handback`. `handback` also checks the gate evidence above; its
+`geometry`, `book` and `handback`. `handback` also checks the gate evidence above; its
 record shape is in [check inputs](check-inputs.md#authored-records). It adds no
 command and never declares Print PASS or accessibility conformance.
+
+## Whole-book evidence
+
+Run `book --native FILE --contract FILE` on the saved and reopened editable
+native and the exported PDF it names. Inputs are in
+[check inputs](check-inputs.md#whole-book-readback-and-contract). The helper
+reads the PDF itself with poppler (`pdfinfo`, `pdffonts`, `pdfimages`,
+`pdftotext`); native facts come from the readback, which must be taken from the
+reopened file, not remembered.
+
+Deterministic, failing the command:
+
+- source commit on HEAD, art and native/PDF digests as bound;
+- every page once and in order, page parity, parent per side and its transform;
+- paragraph, character, object and parent styles against the contract, and
+  every local override not allowed by the contract;
+- the template file and binding against the contract's pinned SHA256 (for r20,
+  the digest `SKILL.md` names), each page assigned to exactly one declared
+  family or declared exception, and for family pages the page-local margins,
+  columns and required frame bounds (card placement) of that family;
+- each story against its selected text, compared exactly (whitespace
+  included), plus any overset text (blank paragraphs included) and declared hidden text;
+- the contract's story inventory (an omitted, extra or relocated story fails),
+  each story's expected text bound to the contract's digest and found
+  paragraph-for-paragraph in its owner file at the bound source commit;
+- links: page inside the book, status, the target hashed on disk, reconciled with the bound art
+  entry of the same id, effective ppi and profile;
+- every inventoried document font installed, the contract's required fonts
+  present, and rendered-glyph evidence for every non-Latin character, emoji
+  joiner and variation selector in a story, accepted only when glyph-tight
+  (`raster-glyph` or `glyph-outline`) and drawn in an installed inventoried
+  font;
+- required folio and metadata fields, native bleed per page;
+- PDF pages equal native pages; TrimBox and BleedBox per side; fonts embedded;
+  image colour space and ppi; device colour operators in text and vector
+  content (document-wide; ICC-based operators are not resolved); story text present in the exported page text;
+  export settings read back against the contract.
+
+Page `/Contents` references and Form streams take precedence over metadata
+exclusions when counting device colour operators. The helper refuses object
+streams because it cannot establish their page-content membership; use a PDF
+with plain objects or a qualified independent inspection path. A refusal is
+missing evidence, never a colour pass.
+Indirect stream lengths require a readable classic cross-reference entry;
+unreadable or inconsistent lengths refuse the check instead of truncating it.
+
+The contract, not the helper, owns which pages belong to which family and which
+are exceptions. Derive both from the latest book and its coverage record each
+run; a stale page list fails rather than being assumed. Style-name inventory
+alone does not prove the template pattern; the family geometry above is what
+the helper compares. Template pinning is not r20 acceptance: r20 stays an
+editable REVIEW library, and Phone r9 stays the artwork reference.
+
+Not decided by the helper, and always reported open: full-size visual review of
+every page, privacy review and accessibility review. A pass is also never
+native execution, visual acceptance, PDF/X conformance, output-intent or
+profile-embedding proof, or print qualification; poppler cannot read those.
+`pdf-word-box` Unicode evidence is refused, never accepted as proof. The
+manifest keeps the observed overrides, fonts, Unicode evidence, links (with
+disk digests), story digests and the digests of both input files.
