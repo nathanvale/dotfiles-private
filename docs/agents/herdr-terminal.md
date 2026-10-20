@@ -33,8 +33,10 @@ For Foundry launches, use the installed `monash:monash-foundry` skill. Verify
 its caller requirements and selected provider/model route before dispatch;
 external Herdr CLI access alone does not prove that launcher works.
 
-Use the skill's agent surface for prompts and identity, and its pane surface
-for ordinary commands and layout. Apply [effect verification](herdr-control.md#verify-effects)
+Use the skill's agent surface for direct terminal supervision and explicit
+legacy coordinator messaging; use [native project messaging](herdr-projects.md#desktop-conversations)
+for a managed project's Desktop conversation. Use the pane surface for ordinary
+commands and layout. Apply [effect verification](herdr-control.md#verify-effects)
 after submission. A busy-agent wait can observe an earlier turn.
 
 For missing output, try a bounded recent-history read on a supported idle

@@ -7,13 +7,15 @@ Choose the owner for the request before acting:
 
 | Request | Read |
 | --- | --- |
+| Desktop typed or spoken request to a named project coordinator | [Project conversation](herdr-projects.md#desktop-conversations) |
 | Herdr Projects board, tasks, coordinators, settings or completion | [Board coordination](herdr-projects.md) |
 | Herdr sessions, workspaces, tabs, panes, terminal agents or remote control | [Terminal control](herdr-terminal.md) |
 | Explicit Stage Manager or Cast workflow | [Cast coordination](herdr-cast.md) |
 | Explicit Beads workflow | [Beads route](beads.md) |
 
-Answer direct questions, research and read-only reviews in the current chat.
-A project name supplies scope; it does not itself request another worker.
+Answer direct questions, research and read-only reviews in the current chat
+unless Nathan asks to contact a coordinator. A project name supplies scope;
+it does not itself request another worker.
 When acting as a board coordinator, follow its app-generated role rules.
 
 Keep an existing task and its coordinator as the work owner. Use terminal

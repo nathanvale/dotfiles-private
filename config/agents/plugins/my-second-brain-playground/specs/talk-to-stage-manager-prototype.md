@@ -2,6 +2,116 @@
 
 ## Outcome
 
+The 18 October 2026 revision below supersedes the original transport and
+monitoring behavior. Earlier qualification remains evidence of the original
+prototype only.
+
+## Native project routing revision, 18 October 2026
+
+Nathan authorized updating the existing Desktop routing skill and testing it
+with the Bestie Book coordinator. Keep Desktop as a conversational proxy bound
+to one host, Herdr session socket and exact native project key. Use installed
+`herdr-projects coordinator --project <repo> tell` for submission, `where --json`
+for request receipt and native status JSON for fresh replies. Preserve raw
+Herdr agent messaging as an explicit legacy fallback.
+
+Acceptance for this revision:
+
+- Resolve the existing native project coordinator without starting another.
+- Submit one tagged, read-only Bestie route probe through its native queue.
+- Verify the request receipt, matching fresh reply and stable coordinator
+  identity; do not count an old reply or terminal echo as success.
+- Document bounded polling for one reply, authorized same-chat or explicitly
+  requested standalone scheduled checks, and an explicitly requested Goal for
+  active outcomes.
+- Preserve route, authorization and receipt correlation across voice and typed
+  requests, including interruption recovery without duplicate submission.
+- Configure a separate watcher's requested model and effort in scheduler fields
+  and verify the first run's actual native metadata separately from configuration.
+- Keep the reviewed third-party Herdr skill and existing discovery script
+  unchanged. Source qualification does not establish installation or fresh-chat
+  activation.
+
+The shared [Herdr route](../../../../../docs/agents/herdr-control.md) reaches the
+updated skill without adding always-loaded startup instructions.
+
+### Current live evidence
+
+The source skill was exercised explicitly against Mac Mini, session `default`,
+project `bestie-book`, socket `/Users/server/.config/herdr/herdr.sock`.
+Herdr Projects 1.2.1 resolved the existing coordinator in pane `wB:p2`, native
+Codex session `01a14c24-380f-7c21-ae68-540b8b5dc039`.
+
+One plain native `tell` submitted `DESKTOP-ROUTE-20261018-7c42` while the
+coordinator was working. Public `where --json` recorded message
+`18d3f501-69b9-47bb-b7f2-9a30d1a3f825` once, then recorded `sentAt`. The
+coordinator's exact session trace contains the user request at
+`2026-10-18T00:04:57.448Z` and this assistant answer at
+`2026-10-18T00:05:00.505Z`:
+
+> DESKTOP-ROUTE-20261018-7c42. Project: bestie-book. Herdr session: default.
+
+The reply continued with a current book status. No `--delegate`, coordinator
+restart, new coordinator or worker prompt was used for the trial. The probe
+requested no new work; unrelated authorized book work continued.
+
+The response arrived in 3.057 seconds. Later book updates replaced it in native
+status's latest `said` before the status polls observed it. Queue acceptance
+and `sentAt` alone therefore did not pass the trial. A bounded marker search
+in the exact observed session trace supplied role and timestamp evidence for
+the fresh reply. The skill now documents that diagnostic fallback and uses
+native task records for durable progress checks.
+
+Skill validation, changed-document link checks and `git diff --check` passed.
+The discovery helper, invocation policy and reviewed third-party Herdr skill
+were not edited. The installed 0.17.5 skill remains the older revision; this
+trial proves explicit source use and a remote native round trip, not fresh-chat
+activation, automatic monitoring or plugin installation. The routing trial
+created no schedule or Goal. The private receipt is
+`/Users/nathanvale/.local/state/herdr-desktop-routing/trials/DESKTOP-ROUTE-20261018-7c42/receipt.json`.
+
+### Separate watcher and input parity revision
+
+Nathan subsequently requested a separate Bestie Book watcher every five minutes
+with GPT-6 Luna and low reasoning, first-run model verification, and this
+Desktop chat retained as the voice interface. The same skill now covers typed
+and spoken requests, pending-request recovery across mode changes, and explicit
+scheduler model selection. This changes branch-level guidance only; there is
+no additional always-loaded startup text or invocation-policy change.
+
+The automation `bestie-book-luna-low-watcher` was configured with those saved
+model, effort and cadence settings. Its first run, Desktop chat
+`01a14c66-2028-7e22-b208-ecbbdb384e68`, connected successfully and saved a private
+baseline. The watcher could not discover its own runtime settings. Foreground
+verification independently read that exact session's native `turn_context` at
+`2026-10-18T00:25:25.102Z`: model `gpt-6-luna`, effort `low`. The scheduler and
+native thread metadata agreed. The first turn completed in 27.817 seconds.
+This proves the requested model on that run, not an immutable model guarantee
+for all future runs. Nathan later paused the watcher when transferring the
+Bestie conversation to the fresh Desktop chat; its saved status was verified
+as `PAUSED`. The earlier first-run evidence remains historical qualification.
+A live voice interruption trial remains unqualified.
+Source edits remain on this candidate branch until normal plugin delivery and
+activation.
+
+Fresh Desktop chat `01a14c63-9c24-7f90-9b62-5b44a58f571a` explicitly loaded this
+candidate source and verified the existing Bestie Book native coordinator by
+read-only status on Mac Mini/default. The turn completed in 21.171 seconds.
+No coordinator message, model change, new worker or duplicate watcher was
+requested. This proves explicit source use in a fresh chat, separately from
+installed-skill discovery and live voice input.
+
+The same fresh chat subsequently sent one status question and Nathan's Premium
+Matte selection through the verified native project route. Public receipts
+`73aa04b9-0b44-4673-95e4-52424009c0d2` and
+`094c67b2-db20-465d-bd23-4c5995764dbb` identify the requests. Fresh coordinator
+answers returned the requested status and explicitly acknowledged Premium
+Matte, 148 gsm. No probe message, duplicate watcher or model change was needed.
+These typed exchanges extend the source trial; they do not qualify live voice
+interruption or installed-skill discovery.
+
+## Original prototype outcome
+
 Let Nathan address an existing Herdr project coordinator by a short tab name
 from Codex Desktop, voice, another Herdr pane, or the coordinator pane itself.
 Keep work with the coordinator while the caller remains a small conversational

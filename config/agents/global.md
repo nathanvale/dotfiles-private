@@ -134,9 +134,9 @@
   exists.
 
 - Use `ghh` for GitHub CLI work.
-- Herdr Projects tasks, completion or coordinators; or Herdr sessions,
-  workspaces, tabs, panes or agents: read
-  `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
+- Desktop typed or spoken requests to a project coordinator; Herdr Projects
+  tasks, completion or settings; or Herdr sessions, workspaces, tabs, panes or
+  agents: read `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
 - Home network or WireGuard access to the Mini, or cross-device previews of
   local apps, Storybook or Herdr review pages: read
   `$HOME/code/dotfiles/docs/agents/browser-automation.md#private-previews` before

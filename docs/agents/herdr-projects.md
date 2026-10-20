@@ -4,6 +4,17 @@ Use the installed `herdr-projects` skill and its full CLI path. Current CLI
 help owns syntax; `details` and `show` own task state and effective settings.
 Read app-generated coordinator or task rules supplied to this session.
 
+## Desktop conversations
+
+For typed or spoken requests to a named project coordinator, use
+[Talk to Stage Manager](../../config/agents/plugins/my-second-brain-playground/skills/talk-to-stage-manager/SKILL.md).
+Bind one verified host, session socket and project key. Use native coordinator
+messaging and its request receipt, then correlate a fresh answer; queue acceptance
+alone is not completion. The skill owns voice and typed parity, interruption
+recovery, bounded reply checks and requested same-chat monitoring. Create a
+separate watcher only when Nathan requests one. Keep worker execution with the
+selected coordinator and qualify source, installation and activation separately.
+
 ## Tasks and settings
 
 - Keep work in its owning project. Reuse an existing task for the same scope;

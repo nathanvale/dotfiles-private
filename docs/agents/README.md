@@ -10,8 +10,8 @@ Scope, admission, and the edit rule:
 | Read this | When |
 |---|---|
 | [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) | Editing or reviewing repository files; running, repairing, or triaging code or tests; setup, profile, or package work |
-| [`herdr-control.md`](herdr-control.md) | Herdr Projects tasks or coordinators, or Herdr terminal control from any app |
-| [`herdr-projects.md`](herdr-projects.md) | Board tasks, settings, completion, cleanup or archiving |
+| [`herdr-control.md`](herdr-control.md) | Desktop typed or spoken requests to a project coordinator, Herdr Projects tasks, or Herdr terminal control |
+| [`herdr-projects.md`](herdr-projects.md) | Desktop coordinator conversations; board tasks, settings, completion, cleanup or archiving |
 | [`herdr-terminal.md`](herdr-terminal.md) | Sessions, panes, agents, remote targeting or terminal recovery |
 | [`herdr-cast.md`](herdr-cast.md) | Explicit Stage Manager or Cast workflow |
 | [`model-selection.md`](model-selection.md) | Starting, resuming or changing a coordinator or worker in Herdr or Herdr Projects; selecting its model, provider, account or effort |
