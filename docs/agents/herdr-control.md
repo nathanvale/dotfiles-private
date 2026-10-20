@@ -1,5 +1,8 @@
 # Herdr routes
 
+For coordinator or worker startup, resume, or model changes in Herdr or Herdr
+Projects, read [model selection](model-selection.md) before choosing the route.
+
 Choose the owner for the request before acting:
 
 | Request | Read |

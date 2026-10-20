@@ -98,11 +98,13 @@ Save, reopen and export the candidate. Read back every labelled page item regard
 
 Compare native readbacks with source extents and art hashes. Check title roles, captions, links, overset, facing relationships and the ending. Inspect all exported pages for rhythm and clipping, plus difficult text, glyphs and art at useful scale; geometry passes never replace that review.
 
+For the whole book, read the [whole-book evidence](references/production-checks.md#whole-book-evidence) section, then pass `book` against the editable native readback and the exported PDF. It is deterministic evidence only: full-size visual, privacy and accessibility review stay open, and it never qualifies native execution or print.
+
 Show Nathan the actual candidate and make focused revisions within his feedback. Record his creative verdict separately from source, image, Unicode and print qualifications. A chapter accepted as a design reference does not establish whole-book acceptance or a default chapter length.
 
 ## Hand back
 
-Write one current handback record and pass `handback`: native/PDF paths and digests, actual page count, manuscript-versus-native copy standing, source extents, UI owner and release, preview state and the next ready action. Carry selected Writing Beats answers with their evidence so settled choices are never asked again. Replace stale counts and pending-question snapshots rather than appending to them. Name the template actually exercised and the design-contract source (canonical revision, or snapshot hash and receipt). Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
+Write one current handback record per output file and pass `handback`: its `gate` (`review-pdf`, `accessible-digital-pdf` or `printer-pdf`, see [production checks](references/production-checks.md)), custody, reopen, render, acceptance and G01 to G08 evidence, native/PDF paths and digests, actual page count, manuscript-versus-native copy standing, source extents, UI owner and release, preview state and the next ready action. Carry selected Writing Beats answers with their evidence so settled choices are never asked again. Replace stale counts and pending-question snapshots rather than appending to them. Name the template actually exercised and the design-contract source (canonical revision, or snapshot hash and receipt). Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
 
 When Nathan names a retro or review procedure, follow that procedure and deliver evidence-based patches when he asks for improvements.
 
