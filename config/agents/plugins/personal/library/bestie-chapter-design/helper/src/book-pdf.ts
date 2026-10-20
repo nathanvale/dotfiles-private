@@ -105,7 +105,7 @@ function skipNonToken(text: string, from: number): number {
   return -1;
 }
 
-/** Content-stream tokens that matter here: numbers and bare operators; strings, names, comments and inline image data are skipped. */
+/** Content-stream tokens that matter here: numbers, names and bare operators; strings, comments and inline image data are skipped. */
 function* operatorTokens(text: string): Generator<string> {
   let i = 0;
   while (i < text.length) {
@@ -163,9 +163,21 @@ function selectedColour(state: ColourState, token: string, operands: string[]): 
   return direct ?? (["sc", "SC", "scn", "SCN"].includes(token) ? state[channel] : undefined);
 }
 
-function colourOperators(content: string): ContentColours {
+function initialColourState(): ColourState {
+  return { fill: DEVICE_SPACES["/DeviceGray"], stroke: DEVICE_SPACES["/DeviceGray"] };
+}
+
+function addColours(total: ContentColours, found: ContentColours): void {
+  total.cmyk += found.cmyk;
+  total.gray += found.gray;
+  total.rgb += found.rgb;
+}
+
+type FormVisitor = (name: string, state: ColourState) => ContentColours;
+
+function colourOperators(content: string, initial: ColourState, visit: FormVisitor): ContentColours {
   const found: ContentColours = { cmyk: 0, gray: 0, rgb: 0 };
-  let state: ColourState = { fill: DEVICE_SPACES["/DeviceGray"], stroke: DEVICE_SPACES["/DeviceGray"] };
+  let state: ColourState = { ...initial };
   const stack: ColourState[] = [];
   let operands: string[] = [];
   for (const token of operatorTokens(content)) {
@@ -175,6 +187,7 @@ function colourOperators(content: string): ContentColours {
     }
     if (token === "q") stack.push({ ...state });
     if (token === "Q") state = stack.pop() ?? state;
+    if (token === "Do") addColours(found, visit(operands[0] ?? "", state));
     const colour = selectedColour(state, token, operands);
     if (colour !== undefined && operands.length === colour.operands && operands.every(isNumber)) found[colour.space]++;
     operands = [];
@@ -503,6 +516,70 @@ function contentPrograms(objects: DictionaryObject[], bodies: Map<string, string
   return decodedStreams;
 }
 
+type ColourReader = {
+  objects: Map<string, DictionaryObject>;
+  bodies: Map<string, string>;
+  streams: Map<string, string>;
+  visited: Set<string>;
+  active: Set<string>;
+  remaining: number;
+};
+
+function resourceReference(value: string | undefined): string | undefined {
+  const match = /^(\d+)\s+(\d+)\s+R$/.exec(value?.trim() ?? "");
+  return match === null ? undefined : `${match[1]} ${match[2]}`;
+}
+
+/** Resource dictionaries and their XObject dictionaries may be direct or indirect. */
+function resourceDictionary(value: string | undefined, bodies: Map<string, string>, depth = 0): Map<string, string> {
+  if (value === undefined) return new Map();
+  if (depth > 16) throw new InputError("PDF resource dictionary nesting is unreadable; colour cannot be checked.");
+  const reference = resourceReference(value);
+  if (reference === undefined) return streamKeys(value);
+  const body = bodies.get(reference);
+  if (body === undefined) throw new InputError("PDF resource dictionary reference is unreadable; colour cannot be checked.");
+  return resourceDictionary(body, bodies, depth + 1);
+}
+
+/** Pages inherit Resources from their page tree; Forms without Resources use the caller's. */
+function resourcesFor(object: DictionaryObject, reader: ColourReader, inherited: Map<string, string>, seen = new Set<string>()): Map<string, string> {
+  const own = object.dictionary.get("Resources");
+  if (own !== undefined) return resourceDictionary(own, reader.bodies);
+  const rawParent = object.dictionary.get("Parent");
+  if (rawParent === undefined) return inherited;
+  const parent = resourceReference(rawParent) ?? "";
+  if (seen.has(parent) || seen.size > 64) throw new InputError("PDF resource parent cycle is unreadable; colour cannot be checked.");
+  seen.add(parent);
+  const next = reader.objects.get(parent);
+  if (next === undefined) throw new InputError("PDF resource parent is unreadable; colour cannot be checked.");
+  return resourcesFor(next, reader, inherited, seen);
+}
+
+/** Execute Form calls in the caller's graphics state, with implicit save/restore and local resources. */
+function formColours(name: string, state: ColourState, resources: Map<string, string>, reader: ColourReader): ContentColours {
+  const xobjects = resourceDictionary(resources.get("XObject"), reader.bodies);
+  const reference = resourceReference(xobjects.get(name.slice(1)));
+  const object = reader.objects.get(reference ?? "");
+  if (object === undefined) throw new InputError(`PDF XObject ${name} is unreadable; colour cannot be checked.`);
+  const subtype = pdfName(object.dictionary.get("Subtype") ?? "");
+  if (subtype === "/Image") return { cmyk: 0, gray: 0, rgb: 0 };
+  if (subtype !== "/Form") throw new InputError(`PDF XObject ${name} has an unsupported subtype; colour cannot be checked.`);
+  if (reader.active.has(object.key) || reader.active.size >= 64 || --reader.remaining < 0) throw new InputError("PDF Form recursion or invocation limit prevents complete colour evidence.");
+  const content = reader.streams.get(object.key);
+  if (content === undefined) throw new InputError(`PDF Form ${name} stream is unreadable; colour cannot be checked.`);
+  reader.visited.add(object.key);
+  reader.active.add(object.key);
+  try {
+    return programColours(content, resourcesFor(object, reader, resources), state, reader);
+  } finally {
+    reader.active.delete(object.key);
+  }
+}
+
+function programColours(content: string, resources: Map<string, string>, state: ColourState, reader: ColourReader): ContentColours {
+  return colourOperators(content, state, (name, current) => formColours(name, current, resources, reader));
+}
+
 /**
  * Counts device colour operators in every content stream of the file.
  * Poppler lists only images, so text and vector ink would otherwise go unread.
@@ -516,20 +593,24 @@ function readContentColours(path: string): ContentColours {
   const objects = dictionaryObjects(file);
   const bodies = new Map(objects.map(object => [object.key, object.body]));
   if (objects.some((object) => pdfName(object.dictionary.get("Type") ?? "") === "/ObjStm")) throw new InputError("PDF object streams hide page Contents membership from this reader; colour cannot be checked.");
-  const programs = objects.filter(object => pdfName(object.dictionary.get("Type") ?? "") === "/Page")
-    .map(object => contentReferences(object.dictionary.get("Contents") ?? "", bodies));
+  const pages = objects.filter(object => pdfName(object.dictionary.get("Type") ?? "") === "/Page");
+  const programs = pages.map(object => contentReferences(object.dictionary.get("Contents") ?? "", bodies));
   const contentIds = new Set(programs.flat());
   const streamIds = new Set(objects.filter(object => object.bytes !== undefined).map(object => object.key));
   for (const key of contentIds) if (!streamIds.has(key)) throw new InputError(`PDF page Contents ${key} R is unreadable; colour cannot be checked.`);
   const decodedStreams = contentPrograms(objects, bodies, contentIds);
-  // A page's Contents array is one ordered program, not independent operand/state scopes.
-  const contents = programs.map(keys => keys.map(key => decodedStreams.get(key) ?? "").join("\n"));
-  for (const [key, content] of decodedStreams) if (!contentIds.has(key)) contents.push(content);
-  for (const content of contents) {
-    const found = colourOperators(content);
-    total.cmyk += found.cmyk;
-    total.gray += found.gray;
-    total.rgb += found.rgb;
+  const reader: ColourReader = { objects: new Map(objects.map(object => [object.key, object])), bodies, streams: decodedStreams, visited: new Set(contentIds), active: new Set(), remaining: 100000 };
+  // Each page is one ordered program; its Do operators evaluate Forms in that program's state.
+  for (const page of pages) {
+    const keys = contentReferences(page.dictionary.get("Contents") ?? "", bodies);
+    const content = keys.map(key => decodedStreams.get(key) ?? "").join("\n");
+    addColours(total, programColours(content, resourcesFor(page, reader, new Map()), initialColourState(), reader));
+  }
+  for (const object of objects) {
+    const content = decodedStreams.get(object.key);
+    if (content === undefined || reader.visited.has(object.key)) continue;
+    reader.visited.add(object.key);
+    addColours(total, programColours(content, resourcesFor(object, reader, new Map()), initialColourState(), reader));
   }
   return total;
 }

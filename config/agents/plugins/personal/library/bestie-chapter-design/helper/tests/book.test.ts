@@ -12,6 +12,42 @@ function runBook(fixture: Fixture) {
   return run("book", "--native", files.native, "--contract", files.contract);
 }
 
+/** Test-owned resource graphs for the same Form call, with no expected findings derived here. */
+function formCallObjects(originals: string[], select: string, mode: string): string[] {
+  const stream = (text: string) => `<< /Length ${text.length} >>\nstream\n${text}\nendstream`;
+  const objects = originals.map(body => body.includes("q /Fm1 Do Q") ? stream(`${select} q /Fm#31 Do Q`) : body);
+  if (mode === "nested") {
+    const wrapper = objects.length + 1;
+    const page = objects.findIndex(body => body.startsWith("<< /Type /Page "));
+    const form = /\/Fm1 (\d+) 0 R/.exec(objects[page] ?? "")?.[1];
+    expect(form).toBeDefined();
+    // Nested Form has its own resource dictionary, using the same local name.
+    const content = "/Fm1 Do";
+    objects.push(`<< /Type /XObject /Subtype /Form /BBox [0 0 318 418] /Resources << /XObject << /Fm1 ${form} 0 R >> >> /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    objects[page] = (objects[page] ?? "").replace(`/Fm1 ${form} 0 R`, `/Fm1 ${wrapper} 0 R`);
+  }
+  if (mode === "indirect-inherited") {
+    const page = objects.findIndex(body => body.startsWith("<< /Type /Page "));
+    const resources = /\/Resources ([\s\S]+) \/Contents/.exec(objects[page] ?? "")?.[1];
+    expect(resources).toBeDefined();
+    const dictionary = resources ?? "";
+    const xobjects = /\/XObject (<<[\s\S]*?>>)/.exec(dictionary)?.[1] ?? "";
+    expect(xobjects).toContain("/Fm1");
+    const xobjectId = objects.length + 1;
+    objects.push(xobjects);
+    const resourceId = objects.length + 1;
+    objects.push(dictionary.replace(xobjects, `${xobjectId}\n0\tR`));
+    objects[page] = (objects[page] ?? "").replace(`/Resources ${dictionary} `, "");
+    objects[1] = (objects[1] ?? "").replace("/Type /Pages", `/Type /Pages /Resources ${resourceId}\n0 R`);
+  }
+  if (mode === "repeated") {
+    const caller = objects.findIndex(body => body.includes("q /Fm#31 Do Q"));
+    const text = `${select} q /Fm1 Do Q q /Fm1 Do Q`;
+    objects[caller] = stream(text);
+  }
+  return objects;
+}
+
 function refused(result: ReturnType<typeof run>, ...fragments: string[]) {
   expect(result.stderr).toBe("");
   expect(result.exitCode).toBe(3);
@@ -543,6 +579,58 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
       expect(changed.stdout.equals(control.stdout)).toBe(true);
       refused(runBook(f), "paint 1 gray colour operator(s)");
     }
+  });
+
+  test("inherits caller device colour through Form calls and restores caller state", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    const render = () => {
+      const out = Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+      expect(out.exitCode).toBe(0);
+      expect(out.stderr.toString()).toBe("");
+      expect(out.stdout.length).toBeGreaterThan(100);
+      return out.stdout;
+    };
+    for (const [direct, inherited, select] of [
+      ["0 0 0 1 k 40 40 30 30 re f", "0 0 0 1 sc 40 40 30 30 re f", "/DeviceCMYK cs"],
+      ["0 0 0 1 K 40 40 30 30 re S", "0 0 0 1 SCN 40 40 30 30 re S", "/DeviceCMYK CS"],
+    ] as const) {
+      rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, form: true, colour: direct } : p));
+      const control = render();
+      refused(runBook(f), "paint 1 cmyk colour operator(s)");
+      rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, form: true, colour: inherited } : p));
+      const originals = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(m => m[1] ?? "");
+      for (const mode of ["direct", "nested", "indirect-inherited", "repeated"]) {
+        const objects = formCallObjects(originals, select, mode);
+        writePdfObjects(f.pdfPath, objects);
+        f.native.pdf.sha256 = fileSha(f.pdfPath);
+        const rendered = render();
+        // Repeated painting can change antialiasing; equivalent single-call variants must match exactly.
+        if (mode !== "repeated") expect(rendered.equals(control)).toBe(true);
+        refused(runBook(f), `paint ${mode === "repeated" ? 2 : 1} cmyk colour operator(s)`);
+      }
+    }
+    // A Form's changed fill space must not leak back into its caller.
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, form: true, colour: "/DeviceCMYK cs" } : p));
+    const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(m => m[1] ?? "");
+    const caller = objects.findIndex(body => body.includes("q /Fm1 Do Q"));
+    const text = "/DeviceRGB cs /Fm1 Do 1 0 0 sc 40 40 30 30 re f";
+    objects[caller] = `<< /Length ${text.length} >>\nstream\n${text}\nendstream`;
+    writePdfObjects(f.pdfPath, objects);
+    f.native.pdf.sha256 = fileSha(f.pdfPath);
+    expect(runBook(f).exitCode).toBe(0);
+  });
+
+  test("refuses cyclic Form calls instead of claiming complete colour evidence", () => {
+    const f = book(scratch());
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, form: true } : p));
+    const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(m => m[1] ?? "");
+    const form = objects.findIndex(body => body.includes("/Subtype /Form"));
+    const text = "/Self Do";
+    objects[form] = `<< /Type /XObject /Subtype /Form /BBox [0 0 318 418] /Resources << /XObject << /Self ${form + 1} 0 R >> >> /Length ${text.length} >>\nstream\n${text}\nendstream`;
+    writePdfObjects(f.pdfPath, objects);
+    f.native.pdf.sha256 = fileSha(f.pdfPath);
+    refused(runBook(f), "Form recursion");
   });
 
   test("checks rendered Form ink despite renderer-ignored metadata", () => {
