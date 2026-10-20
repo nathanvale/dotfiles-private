@@ -1,5 +1,4 @@
 import { readFileSync, statSync } from "node:fs";
-import { basename } from "node:path";
 import {
   anyText,
   flag,
