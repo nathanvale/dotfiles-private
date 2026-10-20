@@ -27,8 +27,10 @@ The agent runs `auth login` in its own PTY and follows
 `--no-browser` prints that URL; `--reset` clears this account's cached grant
 before consent. `SUCCESS_AUTH_LOGIN` is consent and grant storage only. Prove live access with
 an admitted read such as `notion-get-tool-access` or `notion-search` before
-resuming a task. A `schema-list-invalid` result is schema drift, reported
-separately; it does not show an expired grant and needs no second consent.
+resuming a task. A `schema-list-invalid` result means invalid JSON or tool shape,
+not catalogue drift (`comparison.status: "drifted"`). Report it separately from
+authentication; after an admitted authenticated read succeeds, no second consent
+is needed.
 Ordinary reads and schema use cached grants without opening a login browser.
 Status checks file presence only; a present index does not prove authentication.
 

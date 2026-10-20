@@ -14,11 +14,13 @@ cleanup, and the continuation of the waiting task.
    no-browser variant when the host cannot open Nathan's browser. Prefer a
    provider remote or device flow over a localhost redirect.
 3. Keep that process alive until it exits. It owns the callback listener.
-4. Send Nathan the provider-issued URL exactly as printed. For a device flow,
-   send the complete verification URL, or the minimum user code where the
-   provider requires one. Add only what he needs to consent: provider,
-   account, and the reason. Keep the link private to the session and out of
-   committed or published artifacts; terminal and session capture may hold it.
+4. Identify and validate the provider authorization or verification consent
+   URL, then send Nathan that exact value; exclude callback URLs, callback
+   codes, and raw terminal output. For a device flow, include the minimum user
+   code where required. If the consent URL cannot be distinguished safely,
+   use the human terminal fallback. Add only provider, account, and reason.
+   Keep the link private to the session and out of committed or published
+   artifacts; terminal and session capture may hold it.
 5. After consent, verify live (see Proof). Then resume the waiting task inside
    its existing authorization.
 6. Clean up: stop the login process and any forwarding route, whatever the
@@ -61,7 +63,8 @@ Report each state separately; each needs its own evidence.
   prerequisite for it.
 - A failed check after consent says which check failed. If an admitted
   authenticated read succeeds, the grant works: do not send Nathan through
-  consent again. Report the schema or parser failure as drift, separately.
+  consent again. Report invalid JSON or tool shape as a schema/parser failure,
+  separately from catalogue drift and authentication.
 - Continue only admitted, known operations. Newly advertised tools stay
   outside the approved route.
 - Resume the waiting task once the live checks it needs pass.
