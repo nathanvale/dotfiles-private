@@ -45,31 +45,38 @@ never says Print PASS.
   maximum governs. The old 140-page ceiling is superseded (Nathan, 16 October
   2026); never apply it.
 - Page parity: an even count within the paper's range.
-- Full-size boxes on every page: TrimBox is the full trim, MediaBox and
+- Full-size boxes on every page: TrimBox is the full trim placed at the product's bleed offsets inside the MediaBox, MediaBox and
   BleedBox are the product's full bleed size. Equal Trim, Bleed and Media boxes
   mean a trim-only export and fail.
 - Colour: destination profile, PDF output intent present, and a real PDF/X
-  validator report (name, standard, report path and digest, zero errors) run on
-  this exact PDF. A preset or marker is not a report.
+  validator report (name, PDF/X standard, report path and digest, the validated
+  PDF digest, zero errors). The helper also requires the report text to name
+  this PDF and to record no failure; read the report yourself. A preset or marker is not a report.
 - Link PPI against the product requirement. Each link below it needs Nathan's
   recorded acceptance. Every font embedded.
 
 ## Cases G01 to G08
 
-Carry all eight in every handback as `failed`, `open` or `qualified` (a
-qualified case needs evidence). A review may leave them `open` or `failed`,
-disclosed. `printer-pdf` needs every one `qualified`.
+These are the project's operational failure cases, owned by the Bestie
+project memory `reference/indesign-gotchas.md`; keep its identities. Carry all
+eight in every handback as `failed`, `open` or `qualified` (a qualified case
+needs evidence). A review may leave them `open` or `failed`, disclosed.
+`printer-pdf` needs every one `qualified`. G09 (Scripts-panel input) is outside
+the eight; dispatch receipts cover it.
 
-| Case | Question |
+| Case | Failure to rule out |
 | --- | --- |
-| G01 | Colour parity: do source, native and exported colours agree under the export profile in both renderers? |
-| G02 | Background bleed: does every edge-reaching background cover the bleed on each actual page side? |
-| G03 | Book panel control: are the Book panel's numbering and synchronization controls qualified? |
-| G04 | Export-profile control: can the PDF preset, profile and output intent be read back before export? |
-| G05 | Parity and count: even count within the selected paper? |
-| G06 | Resolution: link PPI against the product requirement, with exceptions accepted? |
-| G07 | PDF/X: a real validator report on the exact PDF? |
-| G08 | Fonts and glyphs: embedded, rendered and checked for emoji and Type 3 fonts? |
+| G01 | Preflight says No errors while authored text is invisible (paint order, opaque field) or hidden in overset, conditions or notes. Inspect rendered ink on every changed page. |
+| G02 | Copying pages shifts parent transforms or image Profile values. Compare the immediate readback with the source before saving. |
+| G03 | Colour parity: a joined or exported PDF renders differently though operands match (ICCBased with output intent versus DeviceCMYK without). Compare output intent, image profiles and colour-managed renders. |
+| G04 | Background bleed: a moved field keeps the other side's bounds and misses outside bleed. Check bounds against each page's actual side. |
+| G05 | Transparent PNGs show white rectangles because the carrier inherits a Paper fill. Check the effective carrier fill and sampled transparent regions. |
+| G06 | A successful Open followed by a timeout invites an unsafe replay. Require a unique receipt and fresh app and document identity before any retry. |
+| G07 | Book panel control: the Book options and automatic-numbering controls are unqualified. Bind them before adding chapter copies; keep synchronization unused. |
+| G08 | Export-profile control: the profile-policy popup cannot be set or read back. Require a fresh selected-value readback before export. |
+
+Page parity, link PPI, PDF/X validation and font embedding are not G cases;
+the printer gate checks them directly.
 
 ## Automation qualification
 

@@ -94,13 +94,14 @@ export function production(
   const decision = (evidence: string) =>
     accepted ? { evidence, nativeSha256: native.sha256, pdfSha256: pdf.sha256, state: "accepted" } : { state: "pending" };
   const art = put(dir, "art.png", "art bytes");
-  const report = put(dir, "validator.txt", "PDF/X-4 report: 0 errors");
+  const reportText = `PDF/X-4 report for ${pdf.sha256}: 0 errors`;
+  const report = put(dir, "validator.txt", reportText);
   const a11y = put(dir, "a11y.txt", "checker report");
   const base: Record<string, unknown> = {
     acceptance: { nathan: decision("exact files, 2026-10-20"), privacy: decision("privacy read"), visual: decision("pages viewed") },
     art: [{ id: "art-1", path: art, sha256: sha256("art bytes") }],
     cases: CASE_IDS.map((id) => ({ evidence: state === "qualified" ? `${id} evidence` : "", id, state })),
-    custody: { checkedAt: "2099-01-01T00:00:00Z", documentPath: native.path, dirty: false, soleWriter: true, writer: "foreground Desktop" },
+    custody: { checkedAt: new Date().toISOString(), documentPath: native.path, dirty: false, soleWriter: true, writer: "foreground Desktop" },
     gate,
     render: [
       { pagesViewed: pageCount, pdfSha256: pdf.sha256, renderer: "poppler" },
@@ -125,7 +126,7 @@ export function production(
       colour: {
         destinationProfile: "Blurb ICC",
         outputIntent: true,
-        validator: { errors: 0, exactPdf: true, name: "preflight", reportPath: report, reportSha256: sha256("PDF/X-4 report: 0 errors"), standard: "PDF/X-4" },
+        validator: { errors: 0, name: "preflight", pdfSha256: pdf.sha256, reportPath: report, reportSha256: sha256(reportText), standard: "PDF/X-4" },
       },
       fonts: { notEmbedded: [] },
       linkPpi: { belowRequired: [], minimumObserved: 300, required: 250 },

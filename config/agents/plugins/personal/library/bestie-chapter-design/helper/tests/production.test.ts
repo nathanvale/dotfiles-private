@@ -128,6 +128,11 @@ describe("handback custody, reopen, render and bindings", () => {
     expect(message).toContain("no source binding");
   });
 
+  test("refuses a custody check dated in the future", () => {
+    const result = handback("review-pdf", (r) => (r.custody.checkedAt = "2099-01-01T00:00:00Z"));
+    expect(refusal(result)).toContain("custody check is dated in the future");
+  });
+
   test("a file saved after the custody check invalidates it", () => {
     const result = handback("review-pdf", (r) => {
       r.custody.checkedAt = "2026-10-20T00:00:00Z";
@@ -222,16 +227,36 @@ describe("handback printer-pdf gate", () => {
       handback("printer-pdf", (r) => {
         r.printer.colour.outputIntent = false;
         r.printer.colour.validator.errors = 3;
-        r.printer.colour.validator.exactPdf = false;
+        r.printer.colour.validator.pdfSha256 = sha256("other pdf");
         r.printer.colour.validator.reportSha256 = sha256("forged");
       }),
     );
     expect(message).toContain("no output intent");
     expect(message).toContain("validator reports errors");
-    expect(message).toContain("not run on the handback PDF");
+    expect(message).toContain("validated a different PDF");
     expect(message).toContain("report on disk differs");
     const missing = refusal(handback("printer-pdf", (r) => (r.printer.colour.validator.reportPath = "/missing/report.txt")));
     expect(missing).toContain("report /missing/report.txt is missing");
+  });
+
+  test("refuses a TrimBox outside the MediaBox or off the product bleed offsets", () => {
+    const off = refusal(handback("printer-pdf", (r) => (r.printer.boxes.trimBox = [1000, 1000, 1900, 1765])));
+    expect(off).toContain("not at the product's bleed offsets");
+    const high = refusal(handback("printer-pdf", (r) => (r.printer.boxes.trimBox = [0, 0, 900, 765])));
+    expect(high).toContain("not at the product's bleed offsets");
+  });
+
+  test("refuses a hash-matched PDF/X report that names another PDF, records failure, or a non-PDF/X standard", () => {
+    const failing = (dir: string, r: Loose, body: string) => {
+      r.printer.colour.validator.reportPath = put(dir, "bad.txt", body);
+      r.printer.colour.validator.reportSha256 = sha256(body);
+    };
+    const failed = refusal(handback("printer-pdf", (r, dir) => failing(dir, r, "VALIDATION FAILED: 17 errors in other.pdf")));
+    expect(failed).toContain("does not name the handback PDF");
+    expect(failed).toContain("records a failure");
+    const named = refusal(handback("printer-pdf", (r, dir) => failing(dir, r, `${r.pdf.sha256}: Validation failed`)));
+    expect(named).toContain("records a failure");
+    expect(refusal(handback("printer-pdf", (r) => (r.printer.colour.validator.standard = "none")))).toContain("not a PDF/X standard");
   });
 
   test("refuses low link PPI without accepted exceptions, and unembedded fonts", () => {

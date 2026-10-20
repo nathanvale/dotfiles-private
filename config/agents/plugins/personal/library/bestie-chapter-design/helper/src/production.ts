@@ -1,4 +1,5 @@
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { basename } from "node:path";
 import {
   anyText,
   flag,
@@ -22,6 +23,7 @@ const CASES = ["G01", "G02", "G03", "G04", "G05", "G06", "G07", "G08"] as const;
 const CASE_STATES = ["failed", "open", "qualified"] as const;
 const ACCEPTANCE_STATES = ["pending", "accepted"] as const;
 const ROUTES = ["uxp", "existing-scripting", "book-panel", "third-party-mcp"] as const;
+const CLOCK_SKEW_MS = 1000;
 const QUALIFIABLE_ROUTES: readonly string[] = ["uxp", "existing-scripting"];
 
 export type Identity = { path: string; sha256: string };
@@ -53,8 +55,9 @@ function custodyIssues(root: JsonRecord, native: Identity, pdf: Identity, where:
   }
   if (flag(custody.dirty, `${where}.custody.dirty`)) issues.push("the native document has unsaved edits (dirty).");
   const checked = instant(custody.checkedAt, `${where}.custody.checkedAt`);
+  if (checked > Date.now() + CLOCK_SKEW_MS) issues.push("custody check is dated in the future.");
   for (const [label, file] of [["native", native], ["PDF", pdf]] as const) {
-    if (exists(file) && mtime(file.path) > checked) {
+    if (exists(file) && Math.floor(mtime(file.path)) > checked) {
       issues.push(`custody check predates the ${label} file; recheck the document and dirty state.`);
     }
   }
@@ -188,11 +191,15 @@ function boxIssues(printer: JsonRecord, pageCount: number, where: string): strin
   const spread = side("outside") + side("inside");
   const expectedMedia: Box = [0, 0, width + spread, height + side("top") + side("bottom")];
   if (!same(media, expectedMedia)) issues.push(`MediaBox ${media.join(" ")} is not the full bleed size ${expectedMedia.join(" ")}.`);
-  const inside = trimBox[2] - trimBox[0];
+  const wide = trimBox[2] - trimBox[0];
   const tall = trimBox[3] - trimBox[1];
-  if (Math.abs(inside - width) > EDGE || Math.abs(tall - height) > EDGE) {
+  if (Math.abs(wide - width) > EDGE || Math.abs(tall - height) > EDGE) {
     issues.push(`TrimBox ${trimBox.join(" ")} is not the full ${width} x ${height} trim.`);
   }
+  const lefts = [side("outside"), side("inside")];
+  const placed =
+    Math.abs(trimBox[1] - side("bottom")) <= EDGE && lefts.some((left) => Math.abs(trimBox[0] - left) <= EDGE);
+  if (!placed) issues.push(`TrimBox ${trimBox.join(" ")} is not at the product's bleed offsets inside the MediaBox.`);
   if (same(bleedBox, trimBox) && !same(trimBox, media)) {
     issues.push("BleedBox equals TrimBox; the export carries no bleed.");
   } else if (!same(bleedBox, media)) {
@@ -217,22 +224,37 @@ function productIssues(printer: JsonRecord, pageCount: number, where: string): s
   return [...issues, ...boxIssues(printer, pageCount, where)];
 }
 
-function validatorIssues(colour: JsonRecord, where: string): string[] {
+const REPORT_FAILURE = /validation failed|not (?:a )?valid|\b[1-9]\d* (?:errors?|failed)|errors?\s*[:=]\s*[1-9]/i;
+
+/** The report must name this PDF, say nothing of failure, and match its declared standard. */
+function reportIssues(validator: JsonRecord, pdf: Identity, where: string): string[] {
+  const report = text(validator.reportPath, `${where}.printer.colour.validator.reportPath`);
+  if (sha256File(report) === null) return [`PDF/X validator report ${report} is missing.`];
+  const issues: string[] = [];
+  if (sha256File(report) !== text(validator.reportSha256, `${where}.printer.colour.validator.reportSha256`)) {
+    issues.push("PDF/X validator report on disk differs from the recorded digest.");
+  }
+  const body = readFileSync(report, "utf8");
+  const named = body.toLowerCase().includes(pdf.sha256) || body.includes(basename(pdf.path));
+  if (!named) issues.push("the PDF/X report does not name the handback PDF by digest or file name.");
+  if (REPORT_FAILURE.test(body)) issues.push("the PDF/X report text records a failure.");
+  return issues;
+}
+
+function validatorIssues(colour: JsonRecord, pdf: Identity, where: string): string[] {
   const issues: string[] = [];
   text(colour.destinationProfile, `${where}.printer.colour.destinationProfile`);
   if (!flag(colour.outputIntent, `${where}.printer.colour.outputIntent`)) issues.push("the PDF has no output intent.");
   const validator = record(colour.validator, `${where}.printer.colour.validator`);
   text(validator.name, `${where}.printer.colour.validator.name`);
-  text(validator.standard, `${where}.printer.colour.validator.standard`);
-  const report = text(validator.reportPath, `${where}.printer.colour.validator.reportPath`);
-  const actual = sha256File(report);
-  if (actual === null) issues.push(`PDF/X validator report ${report} is missing.`);
-  else if (actual !== text(validator.reportSha256, `${where}.printer.colour.validator.reportSha256`)) {
-    issues.push("PDF/X validator report on disk differs from the recorded digest.");
+  if (!/^PDF\/X-\d/.test(text(validator.standard, `${where}.printer.colour.validator.standard`))) {
+    issues.push(`validator standard ${validator.standard} is not a PDF/X standard.`);
+  }
+  if (text(validator.pdfSha256, `${where}.printer.colour.validator.pdfSha256`) !== pdf.sha256) {
+    issues.push("the PDF/X report validated a different PDF than the handback.");
   }
   if (integer(validator.errors, `${where}.printer.colour.validator.errors`) !== 0) issues.push("PDF/X validator reports errors.");
-  if (!flag(validator.exactPdf, `${where}.printer.colour.validator.exactPdf`)) issues.push("the PDF/X report was not run on the handback PDF.");
-  return issues;
+  return [...issues, ...reportIssues(validator, pdf, where)];
 }
 
 function imageFontIssues(printer: JsonRecord, where: string): string[] {
@@ -252,11 +274,11 @@ function imageFontIssues(printer: JsonRecord, where: string): string[] {
   return issues;
 }
 
-function printerIssues(root: JsonRecord, pageCount: number, where: string): string[] {
+function printerIssues(root: JsonRecord, pdf: Identity, pageCount: number, where: string): string[] {
   const printer = record(root.printer, `${where}.printer`);
   return [
     ...productIssues(printer, pageCount, where),
-    ...validatorIssues(record(printer.colour, `${where}.printer.colour`), where),
+    ...validatorIssues(record(printer.colour, `${where}.printer.colour`), pdf, where),
     ...imageFontIssues(printer, where),
   ];
 }
@@ -303,7 +325,7 @@ export function productionIssues(root: JsonRecord, native: Identity, pdf: Identi
   const gate = oneOf(root.gate, GATES, `${where}.gate`);
   const cases = caseIssues(root, gate, where);
   const branch =
-    gate === "printer-pdf" ? printerIssues(root, pageCount, where) : gate === "accessible-digital-pdf" ? accessibleIssues(root, where) : [];
+    gate === "printer-pdf" ? printerIssues(root, pdf, pageCount, where) : gate === "accessible-digital-pdf" ? accessibleIssues(root, where) : [];
   const issues = [
     ...custodyIssues(root, native, pdf, where),
     ...reopenIssues(root, native, pageCount, where),
