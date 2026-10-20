@@ -51,6 +51,9 @@ herdr-projects models pi
 Use the selected provider in the readiness check. Only use model identifiers
 present in Pi's authenticated list. An empty list leaves model selection
 unqualified, even if a caller misparses its human-readable message.
+Listing a model does not prove the account can run it. Confirm a completed
+response, then save that verified choice with `/model` and `Ctrl+S`. Board workers
+started with `--worker.agent pi` inherit Pi's saved default.
 After sign-in, complete a harmless direct turn in a scratch directory:
 
 ```sh
