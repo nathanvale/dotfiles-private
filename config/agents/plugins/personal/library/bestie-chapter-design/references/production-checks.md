@@ -53,8 +53,9 @@ never says Print PASS.
   PDF digest, zero errors). The helper fails closed and reads the report as `key: value` lines: exactly one
   `Result:` and one `Error count:` line; every key that counts problems (errors,
   failures, violations) is zero; every verdict key (result, status, validation,
-  outcome, conformance, success) is a plain positive; free text has no count of
-  problems and no negating or rejecting word; this PDF's SHA256 appears and no
+  outcome, conformance, success) is a plain positive; free text pairs no problem word (error, failure,
+  violation, problem) with a non-zero number in either order and has no negating
+  or rejecting word; this PDF's SHA256 appears and no
   other. A report in another format leaves the case open; read the report
   yourself. A preset or marker is not a report.
 - Link PPI against the product requirement. Each link below it needs Nathan's

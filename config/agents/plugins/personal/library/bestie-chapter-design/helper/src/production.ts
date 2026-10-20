@@ -257,10 +257,13 @@ function pairIssue({ key, value }: Line): string | undefined {
   return undefined;
 }
 
-/** Free text may not state a count of problems or carry negating or rejecting words. */
+const PROBLEM_WORD = /\b(?:errors?|failures?|failed|violations?|problems?)\b/i;
+const STANDALONE_NUMBER = /(?<![\w./-])\d+(?![\w-])/g;
+
+/** Free text may not pair a problem word with a non-zero number in either order, nor negate. */
 function freeIssue(line: string): string | undefined {
-  const count = line.match(/\b(\d+)\s+(?:errors?|failures?|violations?|problems?)\b/i);
-  if (count && Number(count[1]) !== 0) return `"${line}" states a non-zero count.`;
+  const nonZero = (line.match(STANDALONE_NUMBER) ?? []).some((n) => Number(n) !== 0);
+  if (PROBLEM_WORD.test(line) && nonZero) return `"${line}" states a non-zero count.`;
   return NEGATION.test(line) ? `"${line}" carries a failure or negation.` : undefined;
 }
 

@@ -256,12 +256,16 @@ describe("handback printer-pdf gate", () => {
     const refused = (lines: (sha: string) => string) => refusal(handback("printer-pdf", withReport(lines)));
 
     test("accepts a plain pass with benign extra fields", () => {
-      expect(handback("printer-pdf", withReport((sha) => good(sha, "Warnings: 2\nErrors: 0\nValidation: passed"))).exitCode).toBe(0);
+      expect(handback("printer-pdf", withReport((sha) => good(sha, "Warnings: 2\nErrors: 0\nValidation: passed\nChecked 214 pages with profile PDF/X-4\nTotal errors 0"))).exitCode).toBe(0);
     });
 
     test.each([
       ["a contradicting error total", "Errors: 17", "\"errors\" is \"17\", not zero"],
       ["a count in prose", "17 errors found in total", "non-zero count"],
+      ["a count after the word", "Errors found 17", "non-zero count"],
+      ["a total after the word", "Total errors 17", "non-zero count"],
+      ["a count between words", "Found 3 failures in total", "non-zero count"],
+      ["a count before a problem word later", "17 of the checks produced problems", "non-zero count"],
       ["a rejected validation line", "PDF/X validation: rejected", "not a plain pass"],
       ["rejection prose", "The file was rejected by the validator", "failure or negation"],
       ["violations", "Violations: 3", "not zero"],
