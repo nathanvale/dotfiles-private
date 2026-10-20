@@ -261,9 +261,13 @@ describe("handback printer-pdf gate", () => {
     expect(other).toContain("names a different PDF digest");
     const mixed = refusal(handback("printer-pdf", bad((r) => `${sha(r)} ${sha256("old")}\nResult: PASS\nError count: 0`)));
     expect(mixed).toContain("names a different PDF digest");
-    for (const line of ["Result: not compliant", "Result: PASS\nValidation successful: false", "Result: PASS\nResult: FAIL", "Result: PASS but not valid"]) {
+    for (const line of ["Result: not compliant", "Result: PASS\nValidation successful: false", "Result: PASS\nResult: FAIL", "Result: PASS but not valid", "Result: PASS\nErrors: 17", "Result: PASS\n17 errors", "Result: PASS\nPDF/X validation: rejected", "Result: PASS\nValidation rejected"]) {
       expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\n${line}\nError count: 0`)))).toContain("PDF/X report");
     }
+    const numeric = refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nResult: PASS\nError count: 0\nErrors: 17`)));
+    expect(numeric).toContain("non-zero error count");
+    const rejected = refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nResult: PASS\nError count: 0\nPDF/X validation: rejected`)));
+    expect(rejected).toContain("failure or negation");
     expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nResult: PASS`)))).toContain("Error count: 0");
     expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nError count: 0`)))).toContain("plain pass");
     expect(refusal(handback("printer-pdf", (r) => (r.printer.colour.validator.standard = "none")))).toContain("not a PDF/X standard");

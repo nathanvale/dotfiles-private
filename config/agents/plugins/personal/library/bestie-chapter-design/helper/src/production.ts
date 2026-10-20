@@ -223,7 +223,7 @@ function productIssues(printer: JsonRecord, pageCount: number, where: string): s
   return [...issues, ...boxIssues(printer, pageCount, where)];
 }
 
-const REPORT_NEGATION = /\b(?:fail\w*|invalid|non-?compliant|not|no|false|unsuccessful|errors? found)\b/i;
+const REPORT_NEGATION = /\b(?:fail\w*|reject\w*|refus\w*|denied|invalid|non-?compliant|not|no|false|unsuccessful|errors? found)\b/i;
 const RESULT_PASS = /^(?:pass(?:ed)?|valid|compliant|conforms?)$/i;
 
 function lineValues(body: string, key: RegExp): string[] {
@@ -254,6 +254,8 @@ function reportIssues(validator: JsonRecord, pdf: Identity, where: string): stri
   }
   const counts = lineValues(body, /^\s*error count\s*[:=]\s*(.*)$/i);
   if (counts.length !== 1 || counts[0] !== "0") issues.push("the PDF/X report needs exactly one `Error count: 0` line.");
+  const stated = [...body.matchAll(/\berrors?\b\s*(?:count)?\s*[:=]\s*(\d+)|\b(\d+)\s+errors?\b/gi)].map((m) => Number(m[1] ?? m[2]));
+  if (stated.some((n) => n !== 0)) issues.push("the PDF/X report states a non-zero error count.");
   if (REPORT_NEGATION.test(body)) issues.push("the PDF/X report text contains a failure or negation.");
   return issues;
 }
