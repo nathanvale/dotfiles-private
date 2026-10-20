@@ -17,6 +17,7 @@ Scope, admission, and the edit rule:
 | [`skills.md`](skills.md) | Developing, installing, refreshing, or activating a personal plugin; or creating, reviewing, sourcing, migrating, or retiring a skill |
 | [`email.md`](email.md) | Answering a question about an accessible email |
 | [`browser-automation.md`](browser-automation.md) | Opening, reading, or acting on a web page, a signed-in portal, or a local page in a browser from Codex or Claude Code |
+| [`browser-authorization.md`](browser-authorization.md) | A connector, integration, or login needs browser consent, a provider-issued authorization link, or OAuth or device-code sign-in |
 | [`personal-bills.md`](personal-bills.md) | Advising or acting on a personal bill, payment notice, billing renewal, billing account, or bill-payment portal |
 | [`diagnostic-traps.md`](diagnostic-traps.md) | Running `/plugin`, or a command reports a confident result that other evidence denies |
 | [`issue-tracker.md`](issue-tracker.md) | Creating or publishing repository Specs or Tickets; creating, reading, labelling, or closing an issue |

@@ -22,8 +22,13 @@ stay where they are; a copied laptop handoff does not authenticate this route.
 "$CONNECTORS" schema notion --select account=personal
 ```
 
-Nathan completes login in his terminal and browser. `--no-browser` prints the
-consent URL there; `--reset` clears this account's cached grant before consent.
+The agent runs `auth login` in its own PTY and follows
+`$HOME/code/dotfiles/docs/agents/browser-authorization.md`: Nathan only opens the consent URL.
+`--no-browser` prints that URL; `--reset` clears this account's cached grant
+before consent. `SUCCESS_AUTH_LOGIN` is consent and grant storage only. Prove live access with
+an admitted read such as `notion-get-tool-access` or `notion-search` before
+resuming a task. A `schema-list-invalid` result is schema drift, reported
+separately; it does not show an expired grant and needs no second consent.
 Ordinary reads and schema use cached grants without opening a login browser.
 Status checks file presence only; a present index does not prove authentication.
 

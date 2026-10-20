@@ -19,7 +19,7 @@ Each command prints one JSON envelope on stdout. Read `result.outcome`, `result.
 ## Connect
 
 1. `"$CONNECTORS" auth status figma` reports whether MCPorter's vault exists. A present vault may hold no grant.
-2. Ask Nathan to run `"$CONNECTORS" auth login figma` in his own terminal (`--no-browser` when the host cannot open his browser; `--reset` for a fresh grant). An agent cannot complete browser consent.
+2. Run `"$CONNECTORS" auth login figma` in an agent-owned PTY (`--no-browser` when the host cannot open his browser; `--reset` for a fresh grant) and send Nathan the printed consent URL, following `$HOME/code/dotfiles/docs/agents/browser-authorization.md`. Only he can complete browser consent.
 3. `"$CONNECTORS" run figma whoami` names the principal and plans. Compare it with the intended account before the first design read or write.
 
 The registration identifies MCPorter to Figma as `Claude Code` because MCPorter's own name was refused. This is a local interoperability workaround, not approval of a Connectors client. `--reset` clears only the local grant.

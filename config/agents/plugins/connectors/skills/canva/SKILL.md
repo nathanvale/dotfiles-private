@@ -42,12 +42,13 @@ ask the operator. Never infer an account from a design link. Pass it as
   `legacySession`. It never reads the vault file; `grant: "unknown"` is not
   a live grant.
 - `auth login` is Attended Login through MCPorter's own `auth`; it opens the
-  system browser for Nathan to grant access. It needs his terminal, so a run
-  without one refuses with `DOMAIN_ATTENDED_REQUIRED`. When Nathan asks to
-  connect or reauthorize, give him the exact command to run himself.
-- `--no-browser` makes MCPorter print the consent URL in Nathan's terminal
-  instead of opening a browser. The URL never reaches the envelope or the
-  agent; never ask Nathan to paste it into chat.
+  system browser for Nathan to grant access. Run it from an agent-owned PTY
+  and follow `$HOME/code/dotfiles/docs/agents/browser-authorization.md`. A run with no terminal
+  refuses with `DOMAIN_ATTENDED_REQUIRED`; report that gap and give Nathan
+  the exact command to run himself.
+- `--no-browser` makes MCPorter print the consent URL on that terminal
+  instead of opening a browser. The URL never reaches the envelope; read it
+  from the PTY and send it to Nathan exactly as printed.
 - `--reset` clears only this account's local grant before consent; other
   accounts keep theirs. It does not revoke the grant at Canva.
 - `SUCCESS_AUTH_LOGIN` means MCPorter's `auth` exited cleanly, nothing more.
