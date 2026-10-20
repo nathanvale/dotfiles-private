@@ -4,6 +4,7 @@
 // front door supplies its MCPorter selection and its own internal-role
 // command for every invocation.
 import type { ExecutionCapabilities } from "../../../../bin/adapters/contract.ts";
+import { recordProviderFailure } from "../../../../bin/diagnostic-record.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, type RegisteredItems, TENANT_PATTERN } from "../custody/index.ts";
@@ -12,7 +13,7 @@ import { productFor, REST_SERVER } from "./contract.ts";
 import type { Dependencies, Transport, TransportFailure, TransportResult } from "./engine.ts";
 import { openJournal } from "./journal.ts";
 import { restReply, restSchema } from "./rest.ts";
-import { translateFailure } from "./translate.ts";
+import { type ObservedFailure, translateFailure } from "./translate.ts";
 
 const CALL_TIMEOUT_MS = "30000";
 
@@ -70,7 +71,7 @@ function inBandError(data: unknown): string | undefined {
 // failure, so a Provider refusal that ran under MCPorter would be flattened
 // into an offline transport failure; running --preflight here first keeps the
 // refusal and its fixed hint.
-function providerReadiness(env: Environment, tenant: string, binding: CredentialBinding, server: string, providerCommand: readonly string[]): TransportResult | null {
+function providerReadiness(env: Environment, tenant: string, binding: CredentialBinding, server: string, providerCommand: readonly string[], failure: (observed: ObservedFailure) => TransportResult): TransportResult | null {
 	const product = productFor(server);
 	if (!product) return { ok: false, ...translateFailure({ kind: "malformed", message: "unknown Provider route" }) };
 	const run = Bun.spawnSync([...providerCommand, "--preflight"], {
@@ -80,10 +81,10 @@ function providerReadiness(env: Environment, tenant: string, binding: Credential
 		stderr: "pipe",
 	});
 	if (run.exitCode !== 0) {
-		return { ok: false, ...translateFailure({ kind: "process", exitCode: run.exitCode, stderr: run.stderr.toString(), stdout: run.stdout.toString() }) };
+		return failure({ kind: "process", exitCode: run.exitCode, stderr: run.stderr.toString(), stdout: run.stdout.toString() });
 	}
 	if (run.stdout.length > 0 || run.stderr.length > 0) {
-		return { ok: false, ...translateFailure({ kind: "malformed", message: "Provider readiness emitted unexpected output" }) };
+		return failure({ kind: "malformed", message: "Provider readiness emitted unexpected output" });
 	}
 	return null;
 }
@@ -110,41 +111,100 @@ function restCall(command: readonly string[], env: Environment, tenant: string, 
 // MCPorter's JSON shapes are not fully documented; a result that is not JSON is
 // reported as malformed rather than guessed. This adapter is the only place
 // provider text is seen; it leaves here as a translated closed cause.
+//
+// Spec: SMSTX-574 E1 delivery-loop observability gap. A call that fails
+// through this normal, fully-classified path (never a throw) previously left
+// no retained trace once `translateFailure` discarded the raw stderr/stdout:
+// the outward envelope alone (`failed-unknown`, data: null) gave no way to
+// tell an unmatched-pattern failure apart from any other, short of a live
+// rerun. `recordProviderFailure` below retains only what this seam already
+// computed and already intended to be safe (the closed cause, exit code, and
+// text lengths) -- never the stderr/stdout content itself.
+//
+// Spec, second pass: a retained record an operator can only find by already
+// knowing to look is not correlation. The failure envelope's own JSON
+// contract (bin/connectors.ts's closed RESULT_KEYS) has no room for a new
+// field, and result.runId cannot be reused or re-timed for this (see the
+// diagnostic-record.ts header). The supported, documented, owned output
+// location that changes nothing about that contract is stderr: one fixed,
+// greppable line naming only the transportCallId already being retained. The
+// JSON envelope on stdout is completely unchanged; a caller that only reads
+// stdout sees nothing different, and one that also reads stderr (as the real
+// CLI-proof test does) can join it to the same id in `doctor`'s record.
+//
+// Scoped to exactly the unclassified ("failed-unknown") cause, not every
+// classified failure: an already-classified cause (auth, not-found,
+// transport, precondition) already carries a meaningful, actionable
+// repairAction in the envelope today, unchanged by any of this; only the
+// classifier's own unmatched default leaves an operator with nothing to act
+// on beyond "inspect provider diagnostics", which is the one gap this whole
+// repair exists to close. This also keeps the change bounded: dozens of
+// existing tests assert empty stderr for other, already-classified
+// provider-call failures (auth/not-found/transport/precondition); widening
+// this to all of them would touch that whole existing surface for no stated
+// requirement, which is exactly the kind of broader-authority expansion this
+// unit was told to avoid taking on by itself.
+const DIAGNOSTIC_STDERR_PREFIX = "connectors:diagnostic:transportCallId:";
 export function routeTransport(env: Environment, tenant: string, skillsRoot: string, capabilities: ExecutionCapabilities): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
-	const toResult = (run: { code: number; stdout: string; stderr: string }): TransportResult => {
-		if (run.code !== 0) return { ok: false, ...translateFailure({ kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout }) };
+	const failure = (server: string, operation: string, transportCallId: string, observed: ObservedFailure): TransportResult => {
+		const translated = translateFailure(observed);
+		const retention = recordProviderFailure({
+			connector: "atlassian",
+			tenant,
+			tool: operation,
+			server,
+			cause: translated.cause,
+			kind: observed.kind,
+			exitCode: observed.kind === "process" ? observed.exitCode : null,
+			stderrLength: observed.kind === "process" ? observed.stderr.length : 0,
+			stdoutLength: observed.kind === "process" ? observed.stdout.length : 0,
+			transportCallId,
+			env,
+			observedAt: new Date(),
+		});
+		if (translated.cause === "failed-unknown" && retention.kind === "retained") process.stderr.write(`${DIAGNOSTIC_STDERR_PREFIX}${transportCallId}\n`);
+		return { ok: false, ...translated };
+	};
+	const toResult = (run: { code: number; stdout: string; stderr: string }, server: string, operation: string, transportCallId: string): TransportResult => {
+		if (run.code !== 0) return failure(server, operation, transportCallId, { kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout });
 		const data = parseJson(run.stdout);
-		if (data === undefined) return { ok: false, ...translateFailure({ kind: "malformed", message: "MCPorter output was not JSON" }) };
+		if (data === undefined) return failure(server, operation, transportCallId, { kind: "malformed", message: "MCPorter output was not JSON" });
 		if (typeof data === "object" && data !== null && (data as { isError?: unknown }).isError === true) {
-			return { ok: false, ...translateFailure({ kind: "tool-error", message: JSON.stringify(data).slice(0, 2000) }) };
+			return failure(server, operation, transportCallId, { kind: "tool-error", message: JSON.stringify(data).slice(0, 2000) });
 		}
 		const inBand = inBandError(data);
-		if (inBand !== undefined) return { ok: false, ...translateFailure({ kind: "tool-error", message: inBand.slice(0, 2000) }) };
+		if (inBand !== undefined) return failure(server, operation, transportCallId, { kind: "tool-error", message: inBand.slice(0, 2000) });
 		return { ok: true, data };
 	};
 	const mcporter = packagedMcporter(capabilities);
 	const providerCommand = capabilities.internalCommand("provider");
 	const restProviderCommand = capabilities.internalCommand("rest-provider");
-	const request = async (binding: CredentialBinding, server: string, mcporterArgs: string[]): Promise<TransportResult> => {
+	// Freshly generated per request() attempt. This is NOT the outward
+	// envelope's result.runId (see the module header): that id does not exist
+	// yet at this point in the control flow, generated later and separately
+	// when bin/connectors.ts assembles the final envelope. transportCallId
+	// only has to distinguish this one attempt from a different one.
+	const request = async (binding: CredentialBinding, server: string, operation: string, mcporterArgs: string[]): Promise<TransportResult> => {
+		const transportCallId = `call-${crypto.randomUUID()}`;
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
-		const readiness = providerReadiness(env, tenant, binding, server, providerCommand);
+		const readiness = providerReadiness(env, tenant, binding, server, providerCommand, (observed) => failure(server, operation, transportCallId, observed));
 		if (readiness) return readiness;
 		const selected = await mcporter();
 		if (!selected.ok) return selected;
-		return toResult(spawnRoute(selected.binary, planned));
+		return toResult(spawnRoute(selected.binary, planned), server, operation, transportCallId);
 	};
 	return {
 		async listTools(binding, server) {
 			// The REST route's schema is owned, not live; the REST Provider refuses
 			// the same vocabulary itself.
 			if (server === REST_SERVER) return { ok: true, data: restSchema() };
-			return request(binding, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]);
+			return request(binding, server, "list", ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 		async call(binding, server, tool, args) {
 			if (server === REST_SERVER) return restCall(restProviderCommand, env, tenant, binding, tool, args);
-			return request(binding, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]);
+			return request(binding, server, tool, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 	};
 }

@@ -102,6 +102,9 @@
   paths, then edit only its returned candidate worktree. Never edit the
   canonical checkout directly; if the Steward route is unavailable, stop and
   report it. The skill and CLI own preview, apply, and recovery.
+- Connector or integration needing browser consent: read
+  `$HOME/code/dotfiles/docs/agents/browser-authorization.md` first, then run
+  the login yourself and follow its handoff flow.
 - Personal bill, payment notice, billing renewal, billing account, or
   bill-payment portal: read
   `$HOME/code/dotfiles/docs/agents/personal-bills.md` before advising or acting.
@@ -133,6 +136,13 @@
 - Use `ghh` for GitHub CLI work.
 - Managed project coordination or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
+- Home network or WireGuard access to the Mini, or cross-device previews of
+  local apps, Storybook or Herdr review pages: read
+  `$HOME/code/dotfiles/docs/agents/browser-automation.md#private-previews` before
+  selecting the route.
+- Herdr or Herdr Projects coordinator/worker startup, resume, or model change:
+  read `$HOME/code/dotfiles/docs/agents/model-selection.md` before selecting or
+  changing its model, provider, account or effort.
 - Prior shell activity: when recent terminal state may explain a task, use
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.
 - Accessible email question: read
