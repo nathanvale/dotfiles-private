@@ -261,6 +261,10 @@ describe("handback printer-pdf gate", () => {
 
     test.each([
       ["a contradicting error total", "Errors: 17", "\"errors\" is \"17\", not zero"],
+      ["an unknown key with a count", "Summary: 17 errors found", "non-zero count"],
+      ["an unknown key marking rejection", "Rejected: true", "failure or negation"],
+      ["an unknown key with a rejected value", "PDF/X: rejected", "failure or negation"],
+      ["a parenthesised key marking rejection", "Status (rejected): true", "failure or negation"],
       ["a count in prose", "17 errors found in total", "non-zero count"],
       ["a count after the word", "Errors found 17", "non-zero count"],
       ["a total after the word", "Total errors 17", "non-zero count"],

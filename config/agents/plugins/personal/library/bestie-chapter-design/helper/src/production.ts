@@ -230,15 +230,15 @@ const POSITIVE = new Set(["pass", "passed", "valid", "compliant", "conforms", "c
 
 type Line = { key: string; value: string };
 
-/** Splits a report into `key: value` lines and free text; keys are lower-cased. */
+/** Splits a report into `key: value` pairs (keys lower-cased) and every non-empty line, so unknown keys are screened as text. */
 function readReport(body: string): { pairs: Line[]; free: string[] } {
   const pairs: Line[] = [];
   const free: string[] = [];
   for (const raw of body.split(/\r?\n|\r/)) {
     const line = raw.trim();
+    if (line) free.push(line);
     const match = line.match(/^([^:=]+?)\s*[:=]\s*(.*)$/);
     if (match) pairs.push({ key: (match[1] as string).toLowerCase(), value: (match[2] as string).trim().replace(/\.$/, "") });
-    else if (line) free.push(line);
   }
   return { free, pairs };
 }
@@ -260,7 +260,7 @@ function pairIssue({ key, value }: Line): string | undefined {
 const PROBLEM_WORD = /\b(?:errors?|failures?|failed|violations?|problems?)\b/i;
 const STANDALONE_NUMBER = /(?<![\w./-])\d+(?![\w-])/g;
 
-/** Free text may not pair a problem word with a non-zero number in either order, nor negate. */
+/** Any report line, whatever its key, may not pair a problem word with a non-zero number in either order, nor negate. */
 function freeIssue(line: string): string | undefined {
   const nonZero = (line.match(STANDALONE_NUMBER) ?? []).some((n) => Number(n) !== 0);
   if (PROBLEM_WORD.test(line) && nonZero) return `"${line}" states a non-zero count.`;

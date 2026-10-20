@@ -79,6 +79,7 @@ export function sourceRepository(dir: string, note = "# Note\n"): { repository: 
   return { commit: git(repository, "rev-parse", "HEAD"), repository };
 }
 
+/** Independent oracle: the project gotcha identities, deliberately not imported from src. */
 const CASE_IDS = ["G01", "G02", "G03", "G04", "G05", "G06", "G07", "G08"];
 
 /** Production evidence for one gate that satisfies the handback check; tests override one part. */

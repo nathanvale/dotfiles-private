@@ -53,7 +53,7 @@ never says Print PASS.
   PDF digest, zero errors). The helper fails closed and reads the report as `key: value` lines: exactly one
   `Result:` and one `Error count:` line; every key that counts problems (errors,
   failures, violations) is zero; every verdict key (result, status, validation,
-  outcome, conformance, success) is a plain positive; free text pairs no problem word (error, failure,
+  outcome, conformance, success) is a plain positive; every line, whatever its key, pairs no problem word (error, failure,
   violation, problem) with a non-zero number in either order and has no negating
   or rejecting word; this PDF's SHA256 appears and no
   other. A report in another format leaves the case open; read the report
