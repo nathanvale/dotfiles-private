@@ -87,3 +87,28 @@ before and after readbacks; check page moves with `protected --pages`.
   (`question`, `answer`, `evidence`) and `open` (`question`), `ui`
   (`owner`, `released`), optional `preview` (`state` plus the `queuedAt`,
   `openedAt` or `viewedEvidence` that proves it) and `nextAction`.
+
+  Production fields, all required unless marked optional:
+  `gate` (`review-pdf`, `accessible-digital-pdf` or `printer-pdf`);
+  `custody` (`writer`, `soleWriter`, `documentPath` equal to `native.path`,
+  `dirty`, `checkedAt` no earlier than the native or PDF file time);
+  `reopen` (`nativeSha256`, `pageCount`, `overset` 0, `linksNormal`);
+  `render` as `[{ renderer, pagesViewed, pdfSha256 }]` with two renderers;
+  `sources` as `[{ owner, commit, sha256 }]`; `art` as `[{ id, path, sha256 }]`;
+  `acceptance` with `visual`, `privacy` and `nathan`, each `{ state, evidence }`
+  where state is `pending` or `accepted` and `nathan` also carries
+  `nativeSha256` and `pdfSha256`; `cases` as `[{ id, state, evidence }]` for
+  `G01` through `G08` with state `failed`, `open` or `qualified`;
+  optional `automation` as `[{ operation, route, state, probe, rollback,
+  checkpoint: { path, sha256 } }]`.
+  `accessible-digital-pdf` adds `accessibility` (`tagged`,
+  `readingOrderChecked`, `altTextChecked`, `title`, `language`, `checker`
+  with `name`, `reportPath`, `reportSha256`). `printer-pdf` adds `printer`:
+  `product` (`vendor` Blurb, `name`, `paper`, `pageMin`, `pageMax`, `trim`,
+  `bleed` by `top`, `bottom`, `outside`, `inside`, `specSource`), `boxes`
+  (`mediaBox`, `trimBox`, `bleedBox`, `pagesVerified`), `colour`
+  (`destinationProfile`, `outputIntent`, `validator` with `name`, `standard`,
+  `reportPath`, `reportSha256`, `errors`, `exactPdf`), `linkPpi` (`required`,
+  `minimumObserved`, `belowRequired` as `[{ id, ppi, acceptance }]`) and
+  `fonts` (`notEmbedded`). The result lists `cases` and always reports
+  `printAccepted: false`.

@@ -14,6 +14,7 @@ import {
   sha256Text,
   text,
 } from "./input.ts";
+import { productionIssues } from "./production.ts";
 import { findStory, nativeParagraphs, readStories } from "./story.ts";
 
 const PREVIEW_STATES = ["none", "queued", "opened", "viewed"] as const;
@@ -121,9 +122,17 @@ function extentIssues(root: JsonRecord, where: string, pageCount: number): strin
   });
 }
 
-function summary(root: JsonRecord, rows: Standing[], ui: JsonRecord, pageCount: number) {
+function summary(
+  root: JsonRecord,
+  rows: Standing[],
+  ui: JsonRecord,
+  pageCount: number,
+  production: { gate: string; cases: Record<string, string> },
+) {
   return {
+    cases: production.cases,
     chapter: root.chapter,
+    gate: production.gate,
     copy: rows.map((row) => ({
       manuscriptSha256: row.unit?.sha256 ?? null,
       manuscriptWords: row.unit?.words ?? null,
@@ -136,6 +145,7 @@ function summary(root: JsonRecord, rows: Standing[], ui: JsonRecord, pageCount: 
     nextAction: root.nextAction,
     pageCount,
     pdf: root.pdf,
+    printAccepted: false,
     revision: root.revision,
     ui,
   };
@@ -154,6 +164,7 @@ export function checkHandback(path: string): CheckResult {
   flag(ui.released, `${path}.ui.released`);
   const rows = copyStandings(root, path);
   const preview = optional(root.preview, (v) => record(v, `${path}.preview`)) ?? { state: "none" };
+  const production = productionIssues(root, native, pdf, pageCount, path);
   const issues = [
     ...hashIssues("native", native),
     ...hashIssues("PDF", pdf),
@@ -162,11 +173,12 @@ export function checkHandback(path: string): CheckResult {
     ...previewIssues(preview, path),
     ...beatIssues(record(root.writingBeats, `${path}.writingBeats`), path),
     ...extentIssues(root, path, pageCount),
+    ...production.issues,
   ];
   return verdict(
     issues,
-    summary(root, rows, ui, pageCount),
-    "Handback identities, page count and standings match the evidence.",
+    summary(root, rows, ui, pageCount, production),
+    "Handback identities, page count, gate evidence and standings match the evidence. This is not print acceptance.",
     "Handback claims exceed or contradict the evidence.",
     "Correct the handback to the standing the evidence proves, then rerun handback before reporting.",
   );

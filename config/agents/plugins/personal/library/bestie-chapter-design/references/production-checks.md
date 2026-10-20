@@ -8,10 +8,81 @@ and approval record, and the applicable production specification. Record their
 revisions in the handback. For a managed Herdr unit, also read the project's
 current native custody and InDesign gotchas through its memory index.
 
-Declare the output purpose: chapter review, accessible digital PDF or printer
-delivery. An unknown production setting remains an explicit qualification gap.
-A review may proceed with that gap disclosed. Printer delivery requires the
-selected product's verified settings and final-file acceptance.
+Declare the output gate. The three are distinct and one file never satisfies
+another:
+
+| Gate | Purpose | Passing it does not mean |
+| --- | --- | --- |
+| `review-pdf` | Chapter or book review; gaps may stay open and are disclosed | Accessibility, print or acceptance |
+| `accessible-digital-pdf` | Tagged PDF read on screen | Print or visual acceptance |
+| `printer-pdf` | File for the selected Blurb product | Upload, order or Nathan's acceptance unless recorded |
+
+An unknown production setting remains an explicit qualification gap. A review
+may proceed with that gap disclosed. Printer delivery requires the selected
+product's verified settings, every case below qualified, and acceptance of the
+exact final files. Passing `handback` is a structural check of the record; it
+never says Print PASS.
+
+## Evidence every gate needs
+
+- **Identities.** Exact native and PDF paths and SHA256, recomputed from disk.
+- **Bindings.** Source revision and owner for each source, and every used
+  artwork file by id, path and SHA256, rehashed from disk.
+- **Custody.** One sole native writer. Read the active document and its dirty
+  state fresh, after the last save or export; any later write voids the check.
+- **Saved and reopened readback.** Reopen the saved native from disk. Its
+  digest and page count equal the handback; overset is zero; links are Normal.
+- **Independent rendering.** At least two different renderers, each viewing
+  every page of the exact PDF.
+- **Human acceptance.** Visual and privacy acceptance, then Nathan's acceptance
+  naming the exact native and PDF SHA256. Record `pending` honestly. A
+  `printer-pdf` record needs all three accepted.
+
+## Printer PDF
+
+- Selected Blurb product and paper specification: name, paper, page minimum and
+  maximum, trim, per-side bleed, and the specification source. The paper's own
+  maximum governs. The old 140-page ceiling is superseded (Nathan, 16 October
+  2026); never apply it.
+- Page parity: an even count within the paper's range.
+- Full-size boxes on every page: TrimBox is the full trim, MediaBox and
+  BleedBox are the product's full bleed size. Equal Trim, Bleed and Media boxes
+  mean a trim-only export and fail.
+- Colour: destination profile, PDF output intent present, and a real PDF/X
+  validator report (name, standard, report path and digest, zero errors) run on
+  this exact PDF. A preset or marker is not a report.
+- Link PPI against the product requirement. Each link below it needs Nathan's
+  recorded acceptance. Every font embedded.
+
+## Cases G01 to G08
+
+Carry all eight in every handback as `failed`, `open` or `qualified` (a
+qualified case needs evidence). A review may leave them `open` or `failed`,
+disclosed. `printer-pdf` needs every one `qualified`.
+
+| Case | Question |
+| --- | --- |
+| G01 | Colour parity: do source, native and exported colours agree under the export profile in both renderers? |
+| G02 | Background bleed: does every edge-reaching background cover the bleed on each actual page side? |
+| G03 | Book panel control: are the Book panel's numbering and synchronization controls qualified? |
+| G04 | Export-profile control: can the PDF preset, profile and output intent be read back before export? |
+| G05 | Parity and count: even count within the selected paper? |
+| G06 | Resolution: link PPI against the product requirement, with exceptions accepted? |
+| G07 | PDF/X: a real validator report on the exact PDF? |
+| G08 | Fonts and glyphs: embedded, rendered and checked for emoji and Type 3 fonts? |
+
+## Automation qualification
+
+Automate an operation only when it needs it; by hand is the default. A route is
+`uxp` or `existing-scripting`, qualified in this order, and nothing else:
+
+1. Save a checkpoint copy of the native and record its path and SHA256.
+2. Probe on a duplicate document; record what ran and what it changed.
+3. Record the rollback (reopen the checkpoint).
+
+Record each qualified operation under `automation`. Book panel and third-party
+MCP routes stay unqualified here; using one fails the handback. Qualify nothing
+by reputation or by a tool's own claim.
 
 ## Native content and styles
 
@@ -125,6 +196,6 @@ unresolved qualifications. Keep creative acceptance, exact-source proof,
 accessible-PDF findings and print qualification distinct.
 
 The existing helper owns `baseline`, `copy`, `story`, `protected`, `dispatch`,
-`geometry` and `handback`. Reuse those commands with their documented inputs.
-This checklist adds evidence requirements; it adds no helper command, schema
-field or automated production/accessibility PASS.
+`geometry` and `handback`. `handback` also checks the gate evidence above; its
+record shape is in [check inputs](check-inputs.md#authored-records). It adds no
+command and never declares Print PASS or accessibility conformance.

@@ -102,7 +102,7 @@ Show Nathan the actual candidate and make focused revisions within his feedback.
 
 ## Hand back
 
-Write one current handback record and pass `handback`: native/PDF paths and digests, actual page count, manuscript-versus-native copy standing, source extents, UI owner and release, preview state and the next ready action. Carry selected Writing Beats answers with their evidence so settled choices are never asked again. Replace stale counts and pending-question snapshots rather than appending to them. Name the template actually exercised and the design-contract source (canonical revision, or snapshot hash and receipt). Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
+Write one current handback record per output file and pass `handback`: its `gate` (`review-pdf`, `accessible-digital-pdf` or `printer-pdf`, see [production checks](references/production-checks.md)), custody, reopen, render, acceptance and G01 to G08 evidence, native/PDF paths and digests, actual page count, manuscript-versus-native copy standing, source extents, UI owner and release, preview state and the next ready action. Carry selected Writing Beats answers with their evidence so settled choices are never asked again. Replace stale counts and pending-question snapshots rather than appending to them. Name the template actually exercised and the design-contract source (canonical revision, or snapshot hash and receipt). Keep raw receipts in the configured private runtime owner and record durable decisions through the vault's existing note-write route.
 
 When Nathan names a retro or review procedure, follow that procedure and deliver evidence-based patches when he asks for improvements.
 
