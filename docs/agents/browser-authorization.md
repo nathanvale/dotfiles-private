@@ -51,7 +51,7 @@ Report each state separately; each needs its own evidence.
 | State | Evidence |
 |---|---|
 | Consent | The login command's success result |
-| Grant stored | Connector auth status; file presence alone is not a usable grant |
+| Grant stored | The connector's login completion result or another explicit connector-owned storage receipt; auth status showing only a present index (`vaultIndex` present, grant unknown) is configuration evidence, not a stored grant |
 | Live authenticated | An admitted authenticated provider read succeeds; it need not name a principal |
 | Schema and tool access | Live schema or tool-access call; reported on its own |
 | Scoped resource access | A read of the named resource succeeds |
