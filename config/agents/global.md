@@ -102,9 +102,9 @@
   paths, then edit only its returned candidate worktree. Never edit the
   canonical checkout directly; if the Steward route is unavailable, stop and
   report it. The skill and CLI own preview, apply, and recovery.
-- Connector or integration needing browser consent: run the login yourself and
-  hand Nathan only the link; read
-  `$HOME/code/dotfiles/docs/agents/browser-authorization.md` first.
+- Connector or integration needing browser consent: read
+  `$HOME/code/dotfiles/docs/agents/browser-authorization.md` first, then run
+  the login yourself and follow its handoff flow.
 - Personal bill, payment notice, billing renewal, billing account, or
   bill-payment portal: read
   `$HOME/code/dotfiles/docs/agents/personal-bills.md` before advising or acting.
