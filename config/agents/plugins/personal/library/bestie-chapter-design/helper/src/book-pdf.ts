@@ -109,6 +109,12 @@ function skipNonToken(text: string, from: number): number {
 function* operatorTokens(text: string): Generator<string> {
   let i = 0;
   while (i < text.length) {
+    if (text[i] === "/") {
+      const end = endOfWord(text, i + 1);
+      yield `/${pdfName(text.slice(i + 1, end))}`;
+      i = end;
+      continue;
+    }
     const skipped = skipNonToken(text, i);
     if (skipped >= 0) {
       i = skipped;
@@ -137,17 +143,41 @@ const COLOUR_ARITY: Record<string, { space: keyof ContentColours; operands: numb
   rg: { operands: 3, space: "rgb" },
 };
 
+type ColourSpec = { space: keyof ContentColours; operands: number };
+type ColourState = { fill: ColourSpec | undefined; stroke: ColourSpec | undefined };
+const DEVICE_SPACES: Record<string, ColourSpec> = {
+  "/DeviceGray": { space: "gray", operands: 1 },
+  "/DeviceRGB": { space: "rgb", operands: 3 },
+  "/DeviceCMYK": { space: "cmyk", operands: 4 },
+};
+
+/** Direct operators also select the corresponding space for subsequent sc/SC. */
+function selectedColour(state: ColourState, token: string, operands: string[]): ColourSpec | undefined {
+  const channel = token === token.toUpperCase() ? "stroke" : "fill";
+  if (token === "cs" || token === "CS") {
+    state[channel] = DEVICE_SPACES[operands[0] ?? ""];
+    return undefined;
+  }
+  const direct = COLOUR_ARITY[token];
+  if (direct !== undefined) state[channel] = direct;
+  return direct ?? (["sc", "SC", "scn", "SCN"].includes(token) ? state[channel] : undefined);
+}
+
 function colourOperators(content: string): ContentColours {
   const found: ContentColours = { cmyk: 0, gray: 0, rgb: 0 };
-  let numbers = 0;
+  let state: ColourState = { fill: DEVICE_SPACES["/DeviceGray"], stroke: DEVICE_SPACES["/DeviceGray"] };
+  const stack: ColourState[] = [];
+  let operands: string[] = [];
   for (const token of operatorTokens(content)) {
-    if (isNumber(token)) {
-      numbers++;
+    if (isNumber(token) || token.startsWith("/")) {
+      operands.push(token);
       continue;
     }
-    const colour = COLOUR_ARITY[token];
-    if (colour !== undefined && numbers >= colour.operands) found[colour.space]++;
-    numbers = 0;
+    if (token === "q") stack.push({ ...state });
+    if (token === "Q") state = stack.pop() ?? state;
+    const colour = selectedColour(state, token, operands);
+    if (colour !== undefined && operands.length === colour.operands && operands.every(isNumber)) found[colour.space]++;
+    operands = [];
   }
   return found;
 }
@@ -459,11 +489,25 @@ function streamEnd(file: PdfFile, dictionary: Map<string, string>, start: number
   throw new InputError("PDF stream Length does not end at endstream and endobj; colour cannot be checked.");
 }
 
+/** Decode each eligible stream once; page programs may share stream references. */
+function contentPrograms(objects: DictionaryObject[], bodies: Map<string, string>, contentIds: Set<string>): Map<string, string> {
+  const decodedStreams = new Map<string, string>();
+  for (const object of objects) {
+    if (object.bytes === undefined) continue;
+    const content = contentIds.has(object.key) || pdfName(object.dictionary.get("Subtype") ?? "") === "/Form";
+    if (!content && nonContent(object.dictionary)) continue;
+    const decodedContent = decoded(object.dictionary, object.bytes, bodies, content);
+    if (decodedContent === undefined) continue;
+    decodedStreams.set(object.key, decodedContent);
+  }
+  return decodedStreams;
+}
+
 /**
  * Counts device colour operators in every content stream of the file.
  * Poppler lists only images, so text and vector ink would otherwise go unread.
  * Streams are cut at their declared length, so `endstream` inside a string or compressed bytes does not end one early.
- * The count is document-wide, not per page; ICC-based operators (sc, scn) are not resolved.
+ * The count is document-wide, not per page; resource-defined and ICC-based colour spaces are not resolved.
  */
 function readContentColours(path: string): ContentColours {
   const bytes = readFileSync(path);
@@ -472,16 +516,17 @@ function readContentColours(path: string): ContentColours {
   const objects = dictionaryObjects(file);
   const bodies = new Map(objects.map(object => [object.key, object.body]));
   if (objects.some((object) => pdfName(object.dictionary.get("Type") ?? "") === "/ObjStm")) throw new InputError("PDF object streams hide page Contents membership from this reader; colour cannot be checked.");
-  const contentIds = new Set(objects.filter((object) => pdfName(object.dictionary.get("Type") ?? "") === "/Page").flatMap((object) => contentReferences(object.dictionary.get("Contents") ?? "", bodies)));
+  const programs = objects.filter(object => pdfName(object.dictionary.get("Type") ?? "") === "/Page")
+    .map(object => contentReferences(object.dictionary.get("Contents") ?? "", bodies));
+  const contentIds = new Set(programs.flat());
   const streamIds = new Set(objects.filter(object => object.bytes !== undefined).map(object => object.key));
   for (const key of contentIds) if (!streamIds.has(key)) throw new InputError(`PDF page Contents ${key} R is unreadable; colour cannot be checked.`);
-  for (const object of objects) {
-    if (object.bytes === undefined) continue;
-    const content = contentIds.has(object.key) || pdfName(object.dictionary.get("Subtype") ?? "") === "/Form";
-    if (!content && nonContent(object.dictionary)) continue;
-    const decodedContent = decoded(object.dictionary, object.bytes, bodies, content);
-    if (decodedContent === undefined) continue;
-    const found = colourOperators(decodedContent);
+  const decodedStreams = contentPrograms(objects, bodies, contentIds);
+  // A page's Contents array is one ordered program, not independent operand/state scopes.
+  const contents = programs.map(keys => keys.map(key => decodedStreams.get(key) ?? "").join("\n"));
+  for (const [key, content] of decodedStreams) if (!contentIds.has(key)) contents.push(content);
+  for (const content of contents) {
+    const found = colourOperators(content);
     total.cmyk += found.cmyk;
     total.gray += found.gray;
     total.rgb += found.rgb;

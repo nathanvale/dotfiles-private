@@ -1,17 +1,10 @@
 import type { BookContract, BookReadback } from "./book-input.ts";
+import { copyParagraphs } from "./copy.ts";
 import { sha256Text } from "./input.ts";
-
-/** Source paragraphs as copy blocks are read: blank-line separated, each unwrapped to one line. */
-function sourceParagraphs(text: string): string[] {
-  return text
-    .split(/\n\s*\n/)
-    .map((block) => block.split("\n").map((line) => line.trim()).join(" ").trim())
-    .filter((block) => block.length > 0);
-}
 
 /** Paragraphs of each heading section; a heading line is a boundary, never part of a paragraph. */
 function sectionParagraphs(text: string): string[][] {
-  return text.split(/^#{1,6}\s.*$/m).map(sourceParagraphs);
+  return text.split(/^#{1,6}\s.*$/m).map(copyParagraphs);
 }
 
 function sourceAt(book: BookReadback, owner: string): string | null {

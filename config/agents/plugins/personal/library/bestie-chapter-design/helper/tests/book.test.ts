@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, run, scratch, sha256, sourceRepository } from "./fixtures.ts";
+import { placementUnits } from "../src/copy.ts";
 import { pdfFindings } from "../src/book-pdf-checks.ts";
 import { BLEED, book, type Fixture, fileSha, rewritePdf, TRIM, writePdfObjects } from "./book-fixtures.ts";
 
@@ -198,6 +199,17 @@ describe.skipIf(!poppler)("book: whole-book evidence", () => {
     refused(runBook(g), "owner absent.md is not in source revision");
   });
 
+  test("accepts the copy helper's exact continuation whitespace in bound source text", () => {
+    const f = book(scratch());
+    f.native.sourceRevision = sourceRepository(f.dir, "# Note\n\nH  \n  H\n");
+    const units = placementUnits({ chapter: "test", blocks: [{ owner: `${f.native.sourceRevision.repository}/note.md`, heading: "Note", paragraphs: [1, 1], role: "introduction", standing: "accepted", acceptance: { scope: "chapter", evidence: "test-owned" }, sha256: sha256("H   H"), supersedes: [] }] });
+    expect(units.map(unit => unit.text)).toEqual(["H   H"]);
+    Object.assign(f.native.stories[0], { expected: "H   H", text: "H   H" });
+    f.contract.stories[0].sha256 = sha256("H   H");
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, text: "H   H" } : p));
+    expect(runBook(f).exitCode).toBe(0);
+  });
+
   test("accepts a story that is a contiguous run of source paragraphs, unwrapped", () => {
     const f = book(scratch());
     f.native.sourceRevision = sourceRepository(f.dir, "# T\n\nfirst\nline\n\nsecond\n\nthird\n");
@@ -303,6 +315,68 @@ describe.skipIf(!poppler)("book: exported PDF evidence", () => {
     rewritePdf(f, f.pdfPages.map((p, i) => (i === 0 ? { ...p, colour: "0 0 0 1 k" } : p)));
     f.contract.pdf.colourSpaces = ["rgb"];
     refused(runBook(f), "1 cmyk colour operator(s)");
+  });
+
+  test("tracks selected device colour spaces, stroke state and graphics save/restore", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    const render = () => {
+      const out = Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+      expect(out.exitCode).toBe(0);
+      expect(out.stderr.toString()).toBe("");
+      expect(out.stdout.length).toBeGreaterThan(100);
+      return out.stdout;
+    };
+    for (const [direct, selected, count] of [
+      ["1 0 0 0 k 40 40 30 30 re f", "/DeviceCMYK cs 1 0 0 0 sc 40 40 30 30 re f", 1],
+      ["1 0 0 0 K 40 40 30 30 re S", "/DeviceCMYK CS 1 0 0 0 SC 40 40 30 30 re S", 1],
+      ["1 0 0 0 k 40 40 30 30 re f", "/DeviceCM#59K cs q /DeviceRGB cs Q 1 0 0 0 scn 40 40 30 30 re f", 1],
+      ["1 0 0 0 K 40 40 30 30 re S", "1 0 0 0 K 1 0 0 0 SCN 40 40 30 30 re S", 2],
+    ] as const) {
+      rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: direct } : p));
+      const control = render();
+      rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: selected } : p));
+      expect(render().equals(control)).toBe(true);
+      refused(runBook(f), `paint ${count} cmyk colour operator(s)`);
+    }
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "/DeviceRGB cs /DeviceCMYK CS 1 0 0 sc 40 40 30 30 re f" } : p));
+    expect(runBook(f).exitCode).toBe(0);
+    rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: "0.5 sc 40 40 30 30 re f" } : p));
+    refused(runBook(f), "paint 1 gray colour operator(s)");
+  });
+
+  test("reads page Contents as an ordered program across stream boundaries", () => {
+    const f = book(scratch());
+    f.contract.pdf.colourSpaces = ["rgb"];
+    for (const [first, second, space] of [["q 0.5 ", "g 20 20 80 80 re f Q", "gray"], ["q /DeviceCMYK cs ", "1 0 0 0 sc 20 20 80 80 re f Q", "cmyk"]] as const) {
+      rewritePdf(f, f.pdfPages.map((p, i) => i === 0 ? { ...p, colour: `${first}${second}` } : p));
+      const render = () => Bun.spawnSync(["pdftoppm", "-f", "1", "-singlefile", "-scale-to", "300", "-png", f.pdfPath], { stdout: "pipe", stderr: "pipe" });
+      const control = render();
+      expect(control.exitCode).toBe(0);
+      expect(control.stderr.toString()).toBe("");
+      const objects = [...readFileSync(f.pdfPath, "latin1").matchAll(/\d+ 0 obj\n([\s\S]*?)\nendobj\n/g)].map(m => m[1] ?? "");
+      const stream = (value: string) => `<< /Length ${value.length} >>\nstream\n${value}\nendstream`;
+      const ids = [objects.length + 1, objects.length + 2];
+      let changed = false;
+      const output = objects.map(body => {
+        if (changed || !body.startsWith("<< /Type /Page ")) return body;
+        changed = true;
+        return body.replace(/\/Contents (\d+ 0 R)/, `/Contents [$1 ${ids[0]} 0 R ${ids[1]} 0 R]`);
+      });
+      // Remove the original painting, preserving the page's text and image program.
+      const target = output.findIndex(body => body.includes(`${first}${second} BT`));
+      const body = (output[target] ?? "").replace(`${first}${second}`, "");
+      const data = /stream\n([\s\S]*)\nendstream/.exec(body)?.[1] ?? "";
+      output[target] = stream(data);
+      output.push(stream(first), stream(second));
+      writePdfObjects(f.pdfPath, output);
+      f.native.pdf.sha256 = fileSha(f.pdfPath);
+      const result = render();
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.toString()).toBe("");
+      expect(result.stdout.equals(control.stdout)).toBe(true);
+      refused(runBook(f), `paint 1 ${space} colour operator(s)`);
+    }
   });
 
   test("reads colour operators as PDF tokens: not inside text strings, and before comments", () => {
