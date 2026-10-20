@@ -133,6 +133,13 @@
 - Use `ghh` for GitHub CLI work.
 - Managed project coordination or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
+- Treat Herdr Projects as third-party software, not our maintenance responsibility.
+  Use supported precompiled releases and documented interfaces. Never modify its
+  source, build custom fixes, or open or submit pull requests for it.
+- Report Herdr Projects defects only through issues in its verified upstream
+  repository, backed by a reproducible failure, exact version and environment,
+  expected versus actual behavior, and sanitized evidence. Use a documented
+  workaround or report the blocker; keep our project focused on its delivery goal.
 - Prior shell activity: when recent terminal state may explain a task, use
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.
 - Accessible email question: read
