@@ -223,19 +223,51 @@ function productIssues(printer: JsonRecord, pageCount: number, where: string): s
   return [...issues, ...boxIssues(printer, pageCount, where)];
 }
 
-const REPORT_NEGATION = /\b(?:fail\w*|reject\w*|refus\w*|denied|invalid|non-?compliant|not|no|false|unsuccessful|errors? found)\b/i;
-const RESULT_PASS = /^(?:pass(?:ed)?|valid|compliant|conforms?)$/i;
+const NEGATION = /\b(?:fail\w*|reject\w*|refus\w*|denied|invalid|non-?compliant|not|no|false|unsuccessful)\b/i;
+const COUNT_KEYS = new Set(["error", "errors", "failure", "failures", "failed", "violation", "violations", "problem", "problems", "rejection", "rejections"]);
+const VERDICT_KEYS = new Set(["result", "status", "validation", "valid", "success", "successful", "compliant", "compliance", "conformance", "outcome", "verdict"]);
+const POSITIVE = new Set(["pass", "passed", "valid", "compliant", "conforms", "conformant", "accepted", "success", "successful", "ok", "true", "yes"]);
 
-function lineValues(body: string, key: RegExp): string[] {
-  return body.split(/\r?\n|\r/).flatMap((line) => {
-    const match = line.match(key);
-    return match ? [(match[1] ?? "").trim()] : [];
-  });
+type Line = { key: string; value: string };
+
+/** Splits a report into `key: value` lines and free text; keys are lower-cased. */
+function readReport(body: string): { pairs: Line[]; free: string[] } {
+  const pairs: Line[] = [];
+  const free: string[] = [];
+  for (const raw of body.split(/\r?\n|\r/)) {
+    const line = raw.trim();
+    const match = line.match(/^([^:=]+?)\s*[:=]\s*(.*)$/);
+    if (match) pairs.push({ key: (match[1] as string).toLowerCase(), value: (match[2] as string).trim().replace(/\.$/, "") });
+    else if (line) free.push(line);
+  }
+  return { free, pairs };
+}
+
+const words = (key: string) => key.split(/[^a-z]+/).filter(Boolean);
+
+/** A key that counts problems must be zero; a key that gives a verdict must be a plain positive. */
+function pairIssue({ key, value }: Line): string | undefined {
+  const tokens = words(key);
+  if (tokens.some((t) => COUNT_KEYS.has(t)) && !/^(?:0|none)$/i.test(value)) {
+    return `"${key}" is "${value}", not zero.`;
+  }
+  if (tokens.some((t) => VERDICT_KEYS.has(t)) && !POSITIVE.has(value.toLowerCase())) {
+    return `"${key}" is "${value}", not a plain pass.`;
+  }
+  return undefined;
+}
+
+/** Free text may not state a count of problems or carry negating or rejecting words. */
+function freeIssue(line: string): string | undefined {
+  const count = line.match(/\b(\d+)\s+(?:errors?|failures?|violations?|problems?)\b/i);
+  if (count && Number(count[1]) !== 0) return `"${line}" states a non-zero count.`;
+  return NEGATION.test(line) ? `"${line}" carries a failure or negation.` : undefined;
 }
 
 /**
- * Fail closed: one `Result:` line that is exactly a pass word, one `Error count:` line of 0,
- * this PDF's digest alone, and no negating word anywhere. Other report formats stay open.
+ * Fail closed. Read the report as `key: value` lines: every count-of-problems key must be zero,
+ * every verdict key a plain positive, free text free of negation, exactly one `Result:` and one
+ * `Error count: 0`, and this PDF's digest alone. Other report formats stay open.
  */
 function reportIssues(validator: JsonRecord, pdf: Identity, where: string): string[] {
   const report = text(validator.reportPath, `${where}.printer.colour.validator.reportPath`);
@@ -248,16 +280,11 @@ function reportIssues(validator: JsonRecord, pdf: Identity, where: string): stri
   const digests = (body.match(/\b[0-9a-f]{64}\b/gi) ?? []).map((d) => d.toLowerCase());
   if (!digests.includes(pdf.sha256)) issues.push("the PDF/X report does not carry the handback PDF's SHA256.");
   if (digests.some((d) => d !== pdf.sha256)) issues.push("the PDF/X report names a different PDF digest.");
-  const results = lineValues(body, /^\s*result\s*[:=]\s*(.*)$/i);
-  if (results.length !== 1 || !RESULT_PASS.test(results[0] as string)) {
-    issues.push("the PDF/X report needs exactly one `Result:` line that is a plain pass.");
-  }
-  const counts = lineValues(body, /^\s*error count\s*[:=]\s*(.*)$/i);
-  if (counts.length !== 1 || counts[0] !== "0") issues.push("the PDF/X report needs exactly one `Error count: 0` line.");
-  const stated = [...body.matchAll(/\berrors?\b\s*(?:count)?\s*[:=]\s*(\d+)|\b(\d+)\s+errors?\b/gi)].map((m) => Number(m[1] ?? m[2]));
-  if (stated.some((n) => n !== 0)) issues.push("the PDF/X report states a non-zero error count.");
-  if (REPORT_NEGATION.test(body)) issues.push("the PDF/X report text contains a failure or negation.");
-  return issues;
+  const { free, pairs } = readReport(body);
+  if (pairs.filter((p) => p.key === "result").length !== 1) issues.push("the PDF/X report needs exactly one `Result:` line.");
+  if (pairs.filter((p) => p.key === "error count").length !== 1) issues.push("the PDF/X report needs exactly one `Error count:` line.");
+  const found = [...pairs.map(pairIssue), ...free.map(freeIssue)].filter((m): m is string => m !== undefined);
+  return [...issues, ...found.map((m) => `PDF/X report: ${m}`)];
 }
 
 function validatorIssues(colour: JsonRecord, pdf: Identity, where: string): string[] {
