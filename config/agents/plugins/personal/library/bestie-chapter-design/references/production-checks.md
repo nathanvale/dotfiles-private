@@ -50,9 +50,10 @@ never says Print PASS.
   mean a trim-only export and fail.
 - Colour: destination profile, PDF output intent present, and a real PDF/X
   validator report (name, PDF/X standard, report path and digest, the validated
-  PDF digest, zero errors). The helper also requires the report text to carry
-  this PDF's SHA256 and no other, a pass marker, no failure word and error
-  count 0; read the report yourself. A preset or marker is not a report.
+  PDF digest, zero errors). The helper fails closed: the report text must carry
+  this PDF's SHA256 and no other, exactly one `Result:` line that is a plain
+  pass, exactly one `Error count: 0` line, and no negating word. A report in
+  another format leaves the case open; read the report yourself. A preset or marker is not a report.
 - Link PPI against the product requirement. Each link below it needs Nathan's
   recorded acceptance. Every font embedded.
 

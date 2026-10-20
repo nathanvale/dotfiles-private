@@ -223,11 +223,20 @@ function productIssues(printer: JsonRecord, pageCount: number, where: string): s
   return [...issues, ...boxIssues(printer, pageCount, where)];
 }
 
-const REPORT_FAILURE = /fail|invalid|non-?compliant|not (?:a )?valid|not conform/i;
-const REPORT_PASS = /\b(?:pass(?:ed)?|valid|compliant|conforms?)\b/i;
-const REPORT_COUNT = /\b(?:error count|errors?)\s*[:=]\s*(\d+)|\b(\d+)\s+errors?\b/gi;
+const REPORT_NEGATION = /\b(?:fail\w*|invalid|non-?compliant|not|no|false|unsuccessful|errors? found)\b/i;
+const RESULT_PASS = /^(?:pass(?:ed)?|valid|compliant|conforms?)$/i;
 
-/** The report must carry this PDF's digest alone, a pass marker, no failure word, and zero errors. */
+function lineValues(body: string, key: RegExp): string[] {
+  return body.split(/\r?\n|\r/).flatMap((line) => {
+    const match = line.match(key);
+    return match ? [(match[1] ?? "").trim()] : [];
+  });
+}
+
+/**
+ * Fail closed: one `Result:` line that is exactly a pass word, one `Error count:` line of 0,
+ * this PDF's digest alone, and no negating word anywhere. Other report formats stay open.
+ */
 function reportIssues(validator: JsonRecord, pdf: Identity, where: string): string[] {
   const report = text(validator.reportPath, `${where}.printer.colour.validator.reportPath`);
   if (sha256File(report) === null) return [`PDF/X validator report ${report} is missing.`];
@@ -239,11 +248,13 @@ function reportIssues(validator: JsonRecord, pdf: Identity, where: string): stri
   const digests = (body.match(/\b[0-9a-f]{64}\b/gi) ?? []).map((d) => d.toLowerCase());
   if (!digests.includes(pdf.sha256)) issues.push("the PDF/X report does not carry the handback PDF's SHA256.");
   if (digests.some((d) => d !== pdf.sha256)) issues.push("the PDF/X report names a different PDF digest.");
-  if (REPORT_FAILURE.test(body)) issues.push("the PDF/X report text records a failure.");
-  if (!REPORT_PASS.test(body)) issues.push("the PDF/X report states no passing result.");
-  const counts = [...body.matchAll(REPORT_COUNT)].map((m) => Number(m[1] ?? m[2]));
-  if (counts.length === 0) issues.push("the PDF/X report states no error count.");
-  if (counts.some((n) => n !== 0)) issues.push("the PDF/X report states errors.");
+  const results = lineValues(body, /^\s*result\s*[:=]\s*(.*)$/i);
+  if (results.length !== 1 || !RESULT_PASS.test(results[0] as string)) {
+    issues.push("the PDF/X report needs exactly one `Result:` line that is a plain pass.");
+  }
+  const counts = lineValues(body, /^\s*error count\s*[:=]\s*(.*)$/i);
+  if (counts.length !== 1 || counts[0] !== "0") issues.push("the PDF/X report needs exactly one `Error count: 0` line.");
+  if (REPORT_NEGATION.test(body)) issues.push("the PDF/X report text contains a failure or negation.");
   return issues;
 }
 

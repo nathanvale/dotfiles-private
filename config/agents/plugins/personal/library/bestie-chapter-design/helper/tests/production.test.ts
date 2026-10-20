@@ -254,15 +254,18 @@ describe("handback printer-pdf gate", () => {
       r.printer.colour.validator.reportSha256 = sha256(text);
     };
     const failed = refusal(handback("printer-pdf", bad((r) => `book.pdf ${sha(r)}\nResult: FAIL\nError count: 17`)));
-    expect(failed).toContain("records a failure");
-    expect(failed).toContain("states errors");
+    expect(failed).toContain("plain pass");
+    expect(failed).toContain("Error count: 0");
     const other = refusal(handback("printer-pdf", bad(() => `/old/export/book.pdf ${sha256("old")}\nResult: PASS\nError count: 0`)));
     expect(other).toContain("does not carry the handback PDF's SHA256");
     expect(other).toContain("names a different PDF digest");
-    const mixed = refusal(handback("printer-pdf", bad((r) => `${sha(r)} ${sha256("old")}\nResult: PASS\nErrors: 0`)));
+    const mixed = refusal(handback("printer-pdf", bad((r) => `${sha(r)} ${sha256("old")}\nResult: PASS\nError count: 0`)));
     expect(mixed).toContain("names a different PDF digest");
-    expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nResult: PASS`)))).toContain("states no error count");
-    expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\n3 errors`)))).toContain("states no passing result");
+    for (const line of ["Result: not compliant", "Result: PASS\nValidation successful: false", "Result: PASS\nResult: FAIL", "Result: PASS but not valid"]) {
+      expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\n${line}\nError count: 0`)))).toContain("PDF/X report");
+    }
+    expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nResult: PASS`)))).toContain("Error count: 0");
+    expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nError count: 0`)))).toContain("plain pass");
     expect(refusal(handback("printer-pdf", (r) => (r.printer.colour.validator.standard = "none")))).toContain("not a PDF/X standard");
   });
 
