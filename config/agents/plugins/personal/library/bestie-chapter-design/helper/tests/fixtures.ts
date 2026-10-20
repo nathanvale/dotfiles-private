@@ -94,7 +94,7 @@ export function production(
   const decision = (evidence: string) =>
     accepted ? { evidence, nativeSha256: native.sha256, pdfSha256: pdf.sha256, state: "accepted" } : { state: "pending" };
   const art = put(dir, "art.png", "art bytes");
-  const reportText = `PDF/X-4 report for ${pdf.sha256}: 0 errors`;
+  const reportText = `PDF/X-4 report\nSHA256: ${pdf.sha256}\nResult: PASS\nError count: 0`;
   const report = put(dir, "validator.txt", reportText);
   const a11y = put(dir, "a11y.txt", "checker report");
   const base: Record<string, unknown> = {

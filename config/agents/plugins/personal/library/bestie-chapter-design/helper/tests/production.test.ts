@@ -246,16 +246,23 @@ describe("handback printer-pdf gate", () => {
     expect(high).toContain("not at the product's bleed offsets");
   });
 
-  test("refuses a hash-matched PDF/X report that names another PDF, records failure, or a non-PDF/X standard", () => {
-    const failing = (dir: string, r: Loose, body: string) => {
-      r.printer.colour.validator.reportPath = put(dir, "bad.txt", body);
-      r.printer.colour.validator.reportSha256 = sha256(body);
+  test("refuses a hash-matched PDF/X report whose text contradicts a pass of this PDF", () => {
+    const sha = (r: Loose) => r.pdf.sha256;
+    const bad = (body: (r: Loose) => string) => (r: Loose, dir: string) => {
+      const text = body(r);
+      r.printer.colour.validator.reportPath = put(dir, "bad.txt", text);
+      r.printer.colour.validator.reportSha256 = sha256(text);
     };
-    const failed = refusal(handback("printer-pdf", (r, dir) => failing(dir, r, "VALIDATION FAILED: 17 errors in other.pdf")));
-    expect(failed).toContain("does not name the handback PDF");
+    const failed = refusal(handback("printer-pdf", bad((r) => `book.pdf ${sha(r)}\nResult: FAIL\nError count: 17`)));
     expect(failed).toContain("records a failure");
-    const named = refusal(handback("printer-pdf", (r, dir) => failing(dir, r, `${r.pdf.sha256}: Validation failed`)));
-    expect(named).toContain("records a failure");
+    expect(failed).toContain("states errors");
+    const other = refusal(handback("printer-pdf", bad((r) => `/old/export/book.pdf ${sha256("old")}\nResult: PASS\nError count: 0`)));
+    expect(other).toContain("does not carry the handback PDF's SHA256");
+    expect(other).toContain("names a different PDF digest");
+    const mixed = refusal(handback("printer-pdf", bad((r) => `${sha(r)} ${sha256("old")}\nResult: PASS\nErrors: 0`)));
+    expect(mixed).toContain("names a different PDF digest");
+    expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\nResult: PASS`)))).toContain("states no error count");
+    expect(refusal(handback("printer-pdf", bad((r) => `${sha(r)}\n3 errors`)))).toContain("states no passing result");
     expect(refusal(handback("printer-pdf", (r) => (r.printer.colour.validator.standard = "none")))).toContain("not a PDF/X standard");
   });
 

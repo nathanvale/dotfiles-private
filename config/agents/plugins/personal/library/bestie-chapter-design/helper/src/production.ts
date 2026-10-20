@@ -224,9 +224,11 @@ function productIssues(printer: JsonRecord, pageCount: number, where: string): s
   return [...issues, ...boxIssues(printer, pageCount, where)];
 }
 
-const REPORT_FAILURE = /validation failed|not (?:a )?valid|\b[1-9]\d* (?:errors?|failed)|errors?\s*[:=]\s*[1-9]/i;
+const REPORT_FAILURE = /fail|invalid|non-?compliant|not (?:a )?valid|not conform/i;
+const REPORT_PASS = /\b(?:pass(?:ed)?|valid|compliant|conforms?)\b/i;
+const REPORT_COUNT = /\b(?:error count|errors?)\s*[:=]\s*(\d+)|\b(\d+)\s+errors?\b/gi;
 
-/** The report must name this PDF, say nothing of failure, and match its declared standard. */
+/** The report must carry this PDF's digest alone, a pass marker, no failure word, and zero errors. */
 function reportIssues(validator: JsonRecord, pdf: Identity, where: string): string[] {
   const report = text(validator.reportPath, `${where}.printer.colour.validator.reportPath`);
   if (sha256File(report) === null) return [`PDF/X validator report ${report} is missing.`];
@@ -235,9 +237,14 @@ function reportIssues(validator: JsonRecord, pdf: Identity, where: string): stri
     issues.push("PDF/X validator report on disk differs from the recorded digest.");
   }
   const body = readFileSync(report, "utf8");
-  const named = body.toLowerCase().includes(pdf.sha256) || body.includes(basename(pdf.path));
-  if (!named) issues.push("the PDF/X report does not name the handback PDF by digest or file name.");
+  const digests = (body.match(/\b[0-9a-f]{64}\b/gi) ?? []).map((d) => d.toLowerCase());
+  if (!digests.includes(pdf.sha256)) issues.push("the PDF/X report does not carry the handback PDF's SHA256.");
+  if (digests.some((d) => d !== pdf.sha256)) issues.push("the PDF/X report names a different PDF digest.");
   if (REPORT_FAILURE.test(body)) issues.push("the PDF/X report text records a failure.");
+  if (!REPORT_PASS.test(body)) issues.push("the PDF/X report states no passing result.");
+  const counts = [...body.matchAll(REPORT_COUNT)].map((m) => Number(m[1] ?? m[2]));
+  if (counts.length === 0) issues.push("the PDF/X report states no error count.");
+  if (counts.some((n) => n !== 0)) issues.push("the PDF/X report states errors.");
   return issues;
 }
 
