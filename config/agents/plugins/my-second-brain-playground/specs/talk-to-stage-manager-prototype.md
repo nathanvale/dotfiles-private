@@ -35,40 +35,22 @@ Acceptance for this revision:
 The shared [Herdr route](../../../../../docs/agents/herdr-control.md) reaches the
 updated skill without adding always-loaded startup instructions.
 
-### Current live evidence
+### Native route qualification, 18 October 2026
 
-The source skill was exercised explicitly against Mac Mini, session `default`,
-project `bestie-book`, socket `/Users/server/.config/herdr/herdr.sock`.
-Herdr Projects 1.2.1 resolved the existing coordinator in pane `wB:p2`, native
-Codex session `01a14c24-380f-7c21-ae68-540b8b5dc039`.
+An explicit source-skill trial on the Mac Mini resolved the existing Bestie Book
+coordinator and submitted one tagged, read-only request through native `tell`.
+The native queue recorded one request. A fresh answer was correlated with the
+same coordinator's session trace. Later coordinator updates replaced the
+latest status answer before polling observed it, so queue acceptance alone was
+insufficient. The skill documents the bounded trace fallback and uses native
+task records for durable progress checks. The trial created no worker, schedule
+or Goal. Skill validation, link checks and whitespace checks passed.
 
-One plain native `tell` submitted `DESKTOP-ROUTE-20261018-7c42` while the
-coordinator was working. Public `where --json` recorded message
-`18d3f501-69b9-47bb-b7f2-9a30d1a3f825` once, then recorded `sentAt`. The
-coordinator's exact session trace contains the user request at
-`2026-10-18T00:04:57.448Z` and this assistant answer at
-`2026-10-18T00:05:00.505Z`:
-
-> DESKTOP-ROUTE-20261018-7c42. Project: bestie-book. Herdr session: default.
-
-The reply continued with a current book status. No `--delegate`, coordinator
-restart, new coordinator or worker prompt was used for the trial. The probe
-requested no new work; unrelated authorized book work continued.
-
-The response arrived in 3.057 seconds. Later book updates replaced it in native
-status's latest `said` before the status polls observed it. Queue acceptance
-and `sentAt` alone therefore did not pass the trial. A bounded marker search
-in the exact observed session trace supplied role and timestamp evidence for
-the fresh reply. The skill now documents that diagnostic fallback and uses
-native task records for durable progress checks.
-
-Skill validation, changed-document link checks and `git diff --check` passed.
-The discovery helper, invocation policy and reviewed third-party Herdr skill
-were not edited. The installed 0.17.5 skill remains the older revision; this
-trial proves explicit source use and a remote native round trip, not fresh-chat
-activation, automatic monitoring or plugin installation. The routing trial
-created no schedule or Goal. The private receipt is
-`/Users/nathanvale/.local/state/herdr-desktop-routing/trials/DESKTOP-ROUTE-20261018-7c42/receipt.json`.
+This qualified explicit source use and a native round trip. It did not qualify
+installed-skill discovery, automatic monitoring or live voice interruption.
+The private trial receipt remains with the routing trial's runtime state;
+[PR 196](https://github.com/nathanvale/dotfiles-private/pull/196) records the
+source review and integration history.
 
 ### Separate watcher and input parity revision
 
@@ -79,36 +61,19 @@ and spoken requests, pending-request recovery across mode changes, and explicit
 scheduler model selection. This changes branch-level guidance only; there is
 no additional always-loaded startup text or invocation-policy change.
 
-The automation `bestie-book-luna-low-watcher` was configured with those saved
-model, effort and cadence settings. Its first run, Desktop chat
-`01a14c66-2028-7e22-b208-ecbbdb384e68`, connected successfully and saved a private
-baseline. The watcher could not discover its own runtime settings. Foreground
-verification independently read that exact session's native `turn_context` at
-`2026-10-18T00:25:25.102Z`: model `gpt-6-luna`, effort `low`. The scheduler and
-native thread metadata agreed. The first turn completed in 27.817 seconds.
-This proves the requested model on that run, not an immutable model guarantee
-for all future runs. Nathan later paused the watcher when transferring the
-Bestie conversation to the fresh Desktop chat; its saved status was verified
-as `PAUSED`. The earlier first-run evidence remains historical qualification.
-A live voice interruption trial remains unqualified.
-Source edits remain on this candidate branch until normal plugin delivery and
-activation.
+The requested watcher was configured with its saved cadence, model and effort.
+Its first run connected and saved a private baseline. Foreground inspection of
+that run's native thread metadata confirmed `gpt-6-luna` with `low` effort;
+the watcher could not verify its own runtime settings. Nathan later paused it,
+and the saved state was checked. This is historical first-run proof, not a
+guarantee for later runs.
 
-Fresh Desktop chat `01a14c63-9c24-7f90-9b62-5b44a58f571a` explicitly loaded this
-candidate source and verified the existing Bestie Book native coordinator by
-read-only status on Mac Mini/default. The turn completed in 21.171 seconds.
-No coordinator message, model change, new worker or duplicate watcher was
-requested. This proves explicit source use in a fresh chat, separately from
-installed-skill discovery and live voice input.
-
-The same fresh chat subsequently sent one status question and Nathan's Premium
-Matte selection through the verified native project route. Public receipts
-`73aa04b9-0b44-4673-95e4-52424009c0d2` and
-`094c67b2-db20-465d-bd23-4c5995764dbb` identify the requests. Fresh coordinator
-answers returned the requested status and explicitly acknowledged Premium
-Matte, 148 gsm. No probe message, duplicate watcher or model change was needed.
-These typed exchanges extend the source trial; they do not qualify live voice
-interruption or installed-skill discovery.
+A fresh Desktop chat explicitly loaded the candidate source, verified the
+existing native coordinator and sent a status question and Nathan's material
+selection through the verified route. Fresh answers matched both requests.
+These typed exchanges qualified source behavior in a fresh chat; installed-skill
+discovery and live voice interruption remained unqualified. Private receipts
+for these trials stay with their runtime owner.
 
 ## Original prototype outcome
 
@@ -147,10 +112,10 @@ or activate a new plugin cache.
 | Fresh Desktop, unique `ADHD` selector | Selected the live ADHD Development Workflow coordinator, acted as a proxy, recommended Terra Low without claiming the current proxy setting, submitted once and returned the fresh answer. | Discovery 1.33 seconds; end to end about 22.8 seconds; one read-only destination shell block; zero duplicate submissions. |
 | Herdr coordinator pane | Detected self and did not message itself or recommend Terra Low. | Four model tool calls; discovery 1 second; 21 seconds total. |
 | Different pane in the same Herdr tab | Detected proxy, selected the coordinator rather than the helper, and recommended Terra Low. | Four model tool calls; discovery 1 second; 72 seconds total. |
-| Fresh Terra Low Desktop, ambiguous `1` selector | Returned five routes across the local machine and both saved remote profiles, then asked one clarification question. No message was sent. | Task `01a08a3d-c7d6-7ee3-92c8-6b60acc42646`; three model tool calls; discovery 0.50 seconds wall time and 1 second reported; 40.25 seconds total. |
+| Fresh Terra Low Desktop, ambiguous `1` selector | Returned five routes across the local machine and both saved remote profiles, then asked one clarification question. No message was sent. | Three model tool calls; discovery 0.50 seconds wall time and 1 second reported; 40.25 seconds total. |
 | Repeated request in one Desktop task | Revalidated the remembered coordinator directly, sent once, and returned a fresh answer without rerunning global discovery. | One shell block; about 30.3 seconds; zero duplicate submissions. |
 | Busy coordinator | Observed working state, waited for the earlier turn to settle, sent once, and correlated the new answer. | Discovery 1.24 seconds; coordinator wait 10.74 seconds; prompt to answer 25.03 seconds; 102.83 seconds end to end. |
-| Coordinator replacement in the same pane | Detected `replacement-coordinator-a` had become `replacement-coordinator-b` before any effect, reran discovery and retained the replacement. | Task `01a08a2e-487f-7b51-befe-2c8dc9c4558c`; one completed read-only shell block after one rejected attempt; recovery 4.366 seconds; no message sent. |
+| Coordinator replacement in the same pane | Detected `replacement-coordinator-a` had become `replacement-coordinator-b` before any effect, reran discovery and retained the replacement. | One completed read-only shell block after one rejected attempt; recovery 4.366 seconds; no message sent. |
 | Not found | Returned `not_found` with no matches. | Fifteen live tabs searched; retry safe; no side effects. |
 | Remote profiles unavailable | Returned `incomplete`, retained the local match and named each unreachable profile. | Two deliberately failed SSH profiles; retry safe; no side effects. |
 | Missing dependency | Returned structured `dependency_missing` for `jq` and `herdr`. | Exit 69; no side effects. |
@@ -165,11 +130,12 @@ or activate a new plugin cache.
 - The missing-`jq` error path initially required `jq`. It now emits its static
   error envelope without that dependency.
 
-## Delivery state
+## Delivery evidence at original qualification
 
-- Implemented, tested, committed and pushed on `codex/coordinator-discovery`.
-- Draft pull request: `#134`.
-- Not installed or activated in the live Codex plugin cache.
+- The original prototype was tested and reviewed in
+  [PR 134](https://github.com/nathanvale/dotfiles-private/pull/134).
+- That source qualification did not establish installation or activation in a
+  fresh Desktop chat.
 - Fresh `$` selector discovery and a post-install voice interruption test remain
   unqualified.
 - Remote discovery is exercised. Remote messaging is not exercised because no
@@ -178,13 +144,12 @@ or activate a new plugin cache.
 The playground package intentionally does not own a separate `bun run dev`
 lifecycle. My Second Brain development mode is the intended canonical plugin
 development path, and a user-scope production installation is valid input to
-that lifecycle. The current command is checkout-local: it reads its own
-`plugin.config.json`, runs its own build and stages its own `plugin/` payload. It
-has no external plugin-source argument, so it cannot yet target this dotfiles
-payload directly. This is a workbench portability gap, not plugin
+that lifecycle. At that qualification, the command was checkout-local: it read
+its own `plugin.config.json`, ran its own build and staged its own `plugin/`
+payload. It had no external plugin-source argument, so it could not target this
+dotfiles payload directly. This was a workbench portability gap, not plugin
 incompatibility. Do not bypass that direction with a playground-specific
-installer or direct Harness-cache edit. Live Codex plugin listing is also
-currently blocked by the separate stale `my-second-brain-dev` marketplace.
+installer or direct Harness-cache edit.
 
 ## Recommended next slice
 

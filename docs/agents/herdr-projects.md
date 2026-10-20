@@ -38,8 +38,9 @@ selected coordinator and qualify source, installation and activation separately.
 - Let supported automatic cleanup run. Check task details, effective settings
   and fresh pane state when a space remains. `workspace.cleanup = true` does
   not prove that setting applies to this task or that cleanup succeeded.
-- Preserve reused spaces, running commands, dirty work, unmerged branches and
-  native custody. A retained space is not permission to close it forcibly.
+- Preserve reused spaces, active or paused agents, running commands, dirty
+  buffers, recovery files, worktrees, unmerged branches and native custody. A
+  retained space is not permission to close it forcibly.
 - Investigate a stalled finish helper before any intervention. Identify its
   exact task, process, parent and outcome; act only within existing authority
   and preserve unrelated processes. Otherwise report the specific blocker.

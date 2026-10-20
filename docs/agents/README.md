@@ -33,6 +33,7 @@ Scope, admission, and the edit rule:
 | [`architecture-decisions.md`](architecture-decisions.md) | Proposing, accepting, rejecting, deprecating, or superseding an architecture decision |
 | [`determinism-and-steering.md`](determinism-and-steering.md) | Sorting a rule into gate, clause, or delete |
 | [`Shared CODING_STANDARDS.md`](../standards/CODING_STANDARDS.md) | Authoring, reviewing, running, repairing, or triaging code or tests |
+| [`coding-standards.md`](coding-standards.md) | Following an existing link to the legacy coding standards location; use its pointer to the shared standards |
 | [`tart-vm-qualification.md`](tart-vm-qualification.md) | Testing setup or toolchain ownership end to end on a clean macOS VM |
 | [`mac-storage.md`](mac-storage.md) | Investigating or cleaning up Mac storage |
 | [`fallow.md`](fallow.md) | Running or diagnosing the `quality:fallow` gate |

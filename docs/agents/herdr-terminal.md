@@ -29,9 +29,9 @@ Keep execution host, inference provider and transport distinct. A live pane
 proves neither provider access, computer-use permissions nor remote file
 availability. Verify the capability the next operation actually requires.
 
-For Foundry launches, use the installed `monash:monash-foundry` skill. Verify
-its caller requirements and selected provider/model route before dispatch;
-external Herdr CLI access alone does not prove that launcher works.
+For Foundry launches, use the selected provider's installed skill. Verify
+its caller requirements and model route before dispatch; external Herdr CLI
+access alone does not prove that launcher works.
 
 Use the skill's agent surface for direct terminal supervision and explicit
 legacy coordinator messaging; use [native project messaging](herdr-projects.md#desktop-conversations)
