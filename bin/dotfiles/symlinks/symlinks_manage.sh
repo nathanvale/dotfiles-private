@@ -72,6 +72,7 @@ common_symlinks=(
 
 	# Agent startup instructions
 	"${HOME}/.codex/AGENTS.md|${DOTFILES}/config/agents/AGENTS.md"
+	"${HOME}/.pi/agent/AGENTS.md|${DOTFILES}/config/agents/AGENTS.md"
 	"${HOME}/.codex/hooks.json|${DOTFILES}/config/agents/codex/hooks.json"
 	"${HOME}/.claude/CLAUDE.md|${DOTFILES}/config/agents/claude/CLAUDE.md"
 	"${HOME}/.claude/settings.json|${DOTFILES}/config/agents/claude/settings.json"
