@@ -39,11 +39,12 @@ skills. Their hooks and browser tools do not transfer either.
 ## Sign in and qualify
 
 Choose the provider and account before signing in. Start `pi` in a scratch
-directory and use `/login` for the chosen provider. Do not copy another harness's
-credentials. Check readiness without printing credentials:
+directory and use `/login` for the chosen provider. Set `PI_PROVIDER` in the same
+shell to that provider. Do not copy another harness's credentials. Check readiness
+without printing credentials:
 
 ```sh
-pi auth check --provider openai --json
+pi auth check --provider "$PI_PROVIDER" --json
 pi --list-models
 herdr-projects models pi
 ```
