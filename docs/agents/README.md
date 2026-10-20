@@ -11,12 +11,13 @@ Scope, admission, and the edit rule:
 |---|---|
 | [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) | Editing or reviewing repository files; running, repairing, or triaging code or tests; setup, profile, or package work |
 | [`herdr-control.md`](herdr-control.md) | Managed project coordination, addressing a coordinator by project/tab name, or inspecting/controlling Herdr from any app |
+| [`model-selection.md`](model-selection.md) | Starting, resuming or changing a coordinator or worker in Herdr or Herdr Projects; selecting its model, provider, account or effort |
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
 | [`work-placement.md`](work-placement.md) | Choosing or changing the owner of code, repositories, project packets, notes, plans, evidence, or runtime output |
 | [`skills.md`](skills.md) | Developing, installing, refreshing, or activating a personal plugin; or creating, reviewing, sourcing, migrating, or retiring a skill |
 | [`email.md`](email.md) | Answering a question about an accessible email |
-| [`browser-automation.md`](browser-automation.md) | Opening, reading, or acting on a web page, a signed-in portal, or a local page in a browser from Codex or Claude Code |
+| [`browser-automation.md`](browser-automation.md) | Opening, reading, or acting on a page in Codex or Claude Code; home network or WireGuard access to the Mini; starting or sharing local apps, Storybook or Herdr review pages across devices |
 | [`browser-authorization.md`](browser-authorization.md) | A connector, integration, or login needs browser consent, a provider-issued authorization link, or OAuth or device-code sign-in |
 | [`personal-bills.md`](personal-bills.md) | Advising or acting on a personal bill, payment notice, billing renewal, billing account, or bill-payment portal |
 | [`diagnostic-traps.md`](diagnostic-traps.md) | Running `/plugin`, or a command reports a confident result that other evidence denies |
