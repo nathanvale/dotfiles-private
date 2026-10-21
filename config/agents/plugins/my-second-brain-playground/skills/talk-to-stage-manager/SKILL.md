@@ -51,15 +51,28 @@ Run the installed launcher on the selected host with `HERDR_SOCKET_PATH` set to
 the socket observed for that Herdr session. Do not set `HERDR_ENV` to impersonate
 a pane. A saved machine's selected UI session does not retarget an SSH command.
 
+Use `socket_path`, `launcher` and `repo` from the verified route; retain the
+literal user text in `request` without interpolating it into shell source.
+
 ```sh
-HERDR_SOCKET_PATH='<verified-socket>' '<installed-launcher>' coordinator --project '<repo>' --json
-HERDR_SOCKET_PATH='<verified-socket>' '<installed-launcher>' coordinator --project '<repo>' tell '<request>'
-HERDR_SOCKET_PATH='<verified-socket>' '<installed-launcher>' coordinator --project '<repo>' where --json
+HERDR_SOCKET_PATH="$socket_path" "$launcher" coordinator --project "$repo" --json
+HERDR_SOCKET_PATH="$socket_path" "$launcher" coordinator --project "$repo" tell "$request"
+HERDR_SOCKET_PATH="$socket_path" "$launcher" coordinator --project "$repo" where --json
 ```
 
-For a remote host, execute the same command through SSH to its verified target.
-Quote each argument for the remote shell, preserve literal request text and
-redirect SSH stdin from `/dev/null` when it must not consume caller input.
+For SSH, require local Python 3 with `shlex.join` and a verified POSIX-compatible
+remote login shell. Stop without sending if either prerequisite is unavailable.
+Serialize the argv locally, then send one command to the verified `ssh_target`:
+
+```sh
+remote_command=$(python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' \
+  env "HERDR_SOCKET_PATH=$socket_path" "$launcher" coordinator --project "$repo" \
+  tell "$request") || exit
+ssh "$ssh_target" "$remote_command" </dev/null
+```
+
+For status and receipt reads, serialize `--json` or `where --json` in place of
+`tell "$request"`.
 Inspect public JSON, not private state files, for routine message handling.
 
 - Read a baseline status and latest reply before sending. Submit the request

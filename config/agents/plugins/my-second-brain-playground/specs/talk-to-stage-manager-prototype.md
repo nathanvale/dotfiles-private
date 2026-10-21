@@ -132,8 +132,8 @@ or activate a new plugin cache.
 
 ## Delivery evidence at original qualification
 
-- The original prototype was tested and reviewed in
-  [PR 134](https://github.com/nathanvale/dotfiles-private/pull/134).
+- The [live qualification table](#live-qualification) records the original
+  prototype's observed results.
 - That source qualification did not establish installation or activation in a
   fresh Desktop chat.
 - Fresh `$` selector discovery and a post-install voice interruption test remain

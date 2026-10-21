@@ -5,6 +5,9 @@ Projects, read [model selection](model-selection.md) before choosing the route.
 
 Choose the owner for the request before acting:
 
+Use the explicit Stage Manager or Cast route when requested; otherwise route a
+named project-coordinator request through Project conversation.
+
 | Request | Read |
 | --- | --- |
 | Desktop typed or spoken request to a named project coordinator | [Project conversation](herdr-projects.md#desktop-conversations) |
