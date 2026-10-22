@@ -77,26 +77,87 @@ export async function collectSpawnResult(
 	return { exitCode, stdout: stdoutText, stderr: stderrText }
 }
 
-export async function runCommand(
-	argv: string[],
-	options: { cwd: string; env?: Record<string, string> },
-): Promise<CommandResult> {
-	const proc = Bun.spawn(argv, {
+function spawnCommand(argv: string[], options: Parameters<typeof runCommand>[1], detached = false) {
+	return Bun.spawn(argv, {
 		cwd: options.cwd,
+		detached,
 		stdout: 'pipe',
 		stderr: 'pipe',
 		env: options.env ? { ...process.env, ...options.env } : process.env,
 	})
+}
+
+export async function runCommand(argv: string[], options: { cwd: string; env?: Record<string, string> }): Promise<CommandResult> {
+	const proc = spawnCommand(argv, options)
 	return collectSpawnResult(proc.exited, proc.stdout, proc.stderr)
 }
 
-async function runGit(cwd: string, args: string[]): Promise<CommandResult> {
-	return runCommand(['git', '-C', cwd, ...args], { cwd })
+/** Owns POSIX command groups until their process and inherited output pipes have closed. */
+export function createCommandScope() {
+	const pending = new Map<number, Promise<CommandResult>>()
+	let cancelled = false
+	return {
+		get cancelled() { return cancelled },
+		async run(argv: string[], options: Parameters<typeof runCommand>[1]): Promise<CommandResult> {
+			if (cancelled) throw new Error('Command scope was cancelled')
+			const proc = spawnCommand(argv, options, true)
+			const result = collectSpawnResult(proc.exited, proc.stdout, proc.stderr)
+			pending.set(proc.pid, result)
+			try {
+				const collected = await result
+				if (cancelled) throw new Error('Command scope was cancelled')
+				return collected
+			} finally {
+				pending.delete(proc.pid)
+			}
+		},
+		async cancel(): Promise<void> {
+			cancelled = true
+			if (process.platform === 'win32') throw new Error('Command group cleanup requires POSIX signals')
+			const commands = [...pending]
+			for (const [pid] of commands) signalCommandGroup(pid, 'SIGTERM')
+			// Fallow handles SIGTERM and shuts down its detached type-aware group.
+			// Give that protocol a bounded grace before forcing unresponsive launchers.
+			const results = commands.map(([, result]) => result)
+			if (await drainCommands(results, 1000)) return
+			for (const [pid] of commands) {
+				if (pending.has(pid)) signalCommandGroup(pid, 'SIGKILL')
+			}
+			if (!(await drainCommands(results, 1000))) {
+				throw new Error('Owned command output did not close after forced termination')
+			}
+		},
+	}
 }
 
-export async function resolveRepoRoot(cwd: string): Promise<string | null> {
+/** Negative PIDs address only the detached command groups created above. */
+function signalCommandGroup(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void {
 	try {
-		const { exitCode, stdout } = await runGit(cwd, ['rev-parse', '--show-toplevel'])
+		process.kill(-pid, signal)
+	} catch (error) {
+		if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error
+	}
+}
+
+async function drainCommands(results: Promise<CommandResult>[], ms: number): Promise<boolean> {
+	let timer: ReturnType<typeof setTimeout> | undefined
+	try {
+		return await Promise.race([
+			Promise.allSettled(results).then(() => true),
+			new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms) }),
+		])
+	} finally {
+		clearTimeout(timer)
+	}
+}
+
+async function runGit(cwd: string, args: string[], execute = runCommand): Promise<CommandResult> {
+	return execute(['git', '-C', cwd, ...args], { cwd })
+}
+
+export async function resolveRepoRoot(cwd: string, execute = runCommand): Promise<string | null> {
+	try {
+		const { exitCode, stdout } = await runGit(cwd, ['rev-parse', '--show-toplevel'], execute)
 		if (exitCode !== 0) return null
 		return stdout.trim() || null
 	} catch {

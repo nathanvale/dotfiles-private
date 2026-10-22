@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
 	blockWithEnvelope,
+	createCommandScope,
 	type CommandResult,
 	type FailureEntry,
 	type Harness,
@@ -20,9 +21,11 @@ import {
 	readHookInput,
 	resolveCwd,
 	resolveRepoRoot,
-	runCommand,
 	summariseFailure,
 } from './common.ts'
+
+const commandScope = createCommandScope()
+const runCommand = commandScope.run
 
 const FALLOW_MARKERS = ['.fallowrc.json']
 const PINNED_LAUNCHERS = new Set(['pnpm', 'npx', 'bunx'])
@@ -82,7 +85,8 @@ function collectFindings(report: FallowAuditReport): FailureEntry[] {
 
 /** Activate when the marker exists in the working tree, index or committed HEAD. */
 async function resolveFallowRepo(input: HookInput): Promise<string | null> {
-	const repoRoot = await resolveRepoRoot(resolveCwd(input))
+	const repoRoot = await resolveRepoRoot(resolveCwd(input), runCommand)
+	if (commandScope.cancelled) throw new Error('Command scope was cancelled')
 	if (!repoRoot) return null
 	if (FALLOW_MARKERS.some((marker) => existsSync(join(repoRoot, marker)))) return repoRoot
 	const markers = await Promise.all([
@@ -405,8 +409,14 @@ async function runStop(input: HookInput, harness: Harness): Promise<never> {
 
 /** Preserve fail-open budgets while emitting a parseable Codex Stop pass and an explicit skip. */
 function armFallowTimeout(event: string, harness: Harness, ms: number): void {
-	const timer = setTimeout(() => {
-		reportSkip(event, 'timeout', `Fallow did not finish within ${ms}ms; no audit verdict was qualified.`)
+	const timer = setTimeout(async () => {
+		let cleanupError = ''
+		try {
+			await commandScope.cancel()
+		} catch (error) {
+			cleanupError = ` Cleanup failed: ${error instanceof Error ? error.message : String(error)}`
+		}
+		reportSkip(event, 'timeout', `Fallow did not finish within ${ms}ms; no audit verdict was qualified.${cleanupError}`)
 		if (event === 'Stop') passStop(harness)
 		process.exit(0)
 	}, ms)
@@ -428,6 +438,7 @@ async function main(): Promise<void> {
 			return
 		}
 	} catch (error) {
+		if (commandScope.cancelled) return
 		reportSkip(input.hook_event_name ?? 'unknown', 'operational', error instanceof Error ? error.message : 'Hook execution failed')
 		if (input.hook_event_name === 'Stop') passStop(harness)
 	}

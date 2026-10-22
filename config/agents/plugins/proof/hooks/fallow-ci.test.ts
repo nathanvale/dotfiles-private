@@ -7,6 +7,7 @@ import {
 	initRepo,
 	installFakeBinary,
 	makeTempDir,
+	processTreeFixture,
 	runHook,
 	wasInvoked,
 } from './test-support.ts'
@@ -603,16 +604,27 @@ describe('fallow-ci branch ratchet', () => {
 		test(`${event} retains its real fail-open timeout with explicit unqualified output`, async () => {
 			const {dir} = await branchRepo('https://github.com/example/proof-fixture.git')
 			const ms = event === 'Stop' ? 48_000 : 24_000
-			installFakeBinary(dir, 'fallow', `exec sleep ${event === 'Stop' ? 49 : 25}`)
+			const tree = processTreeFixture(await makeTempDir('proof-fallow-process-'), false, event === 'Stop')
+			const sentinel = Bun.spawn([process.execPath, '-e', 'setInterval(() => {}, 1000)'], { stdout: 'ignore', stderr: 'ignore' })
+			const command = tree.argv.map((argument) => `'${argument.replaceAll("'", "'\\''")}'`).join(' ')
+			installFakeBinary(dir, 'fallow', `exec ${command}`)
 			const started = Date.now()
-			const run = await runFallowHook({hook_event_name: event, cwd: dir, tool_name: 'Bash', tool_input: {command: 'git commit -m next'}}, ['--harness=codex'])
-			expect(run.exitCode).toBe(0)
-			expect(run.stdout).toBe(event === 'Stop' ? '{}' : '')
-			expect(JSON.parse(run.stderr).reason).toBe('timeout')
-			expect(JSON.parse(run.stderr).excerpt).toContain(`${ms}ms`)
-			expect(Date.now() - started).toBeGreaterThanOrEqual(ms - 1000)
-			// The disposable sleeper terminates itself; do not leave a live fixture runner.
-			await Bun.sleep(1500)
+			try {
+				const run = await runFallowHook({hook_event_name: event, cwd: dir, tool_name: 'Bash', tool_input: {command: 'git commit -m next'}}, ['--harness=codex'])
+				expect(tree.pids()).toHaveLength(3)
+				expect(run.exitCode).toBe(0)
+				expect(run.stdout).toBe(event === 'Stop' ? '{}' : '')
+				expect(JSON.parse(run.stderr)).toEqual({ tool: 'fallow-ci', event, status: 'skipped', reason: 'timeout', excerpt: `Fallow did not finish within ${ms}ms; no audit verdict was qualified.` })
+				expect(Date.now() - started).toBeGreaterThanOrEqual(ms - 1000)
+				expect(Date.now() - started).toBeLessThan(ms + 4000)
+				expect(tree.alive()).toEqual([])
+				expect(sentinel.exitCode).toBeNull()
+				expect(process.kill(sentinel.pid, 0)).toBe(true)
+			} finally {
+				tree.cleanup()
+				sentinel.kill('SIGKILL')
+				await sentinel.exited
+			}
 		}, 60_000)
 	}
 
