@@ -102,7 +102,33 @@ function withConfig(f: Fixture, payload: string): Record<string, string> {
 	return {}
 }
 
+function advanceRemote(f: Fixture): string {
+	const remote = join(f.root, "remote.git")
+	const base = git(remote, "rev-parse", "main")
+	const tree = git(remote, "rev-parse", "main^{tree}")
+	const commit = git(remote, "-c", "user.name=Remote", "-c", "user.email=remote@example.invalid", "commit-tree", tree, "-p", base, "-m", "remote advances")
+	git(remote, "update-ref", "refs/heads/main", commit, base)
+	return commit
+}
+
+function rejectPublication(f: Fixture): void {
+	write(join(f.root, "remote.git"), "hooks/pre-receive", "#!/bin/sh\nexit 1\n")
+	chmodSync(join(f.root, "remote.git", "hooks/pre-receive"), 0o755)
+}
+
 const scenarios: Scenario[] = [
+	{ name: "begin dirty sync", run: () => { const f = fixture(); write(f.vault, "owned.md", "owned\n"); return run(f, ["begin", "--vault", f.vault, "--path", "a.md"]) }, cause: "DOMAIN_CANONICAL_NOT_READY", exit: 3, nextAction: BEGIN },
+	{ name: "begin divergent remote", run: () => { const f = fixture(); advanceRemote(f); write(f.vault, "local.md", "local\n"); git(f.vault, "add", "--", "local.md"); git(f.vault, "commit", "-m", "local"); return run(f, ["begin", "--vault", f.vault, "--path", "a.md"]) }, cause: "DOMAIN_MAIN_DIVERGED", exit: 3, handoffOwner: "human" },
+	{ name: "begin sync busy", run: () => { const f = fixture(); advanceRemote(f); holdLock(f); return run(f, ["begin", "--vault", f.vault, "--path", "a.md"]) }, cause: "TRANSIENT_INTEGRATION_BUSY", exit: 75, nextAction: BEGIN },
+	{ name: "begin sync read-back unknown", run: () => { const f = fixture(); advanceRemote(f); return run(f, ["begin", "--vault", f.vault, "--path", "a.md"], { VAULT_STEWARD_FAULT: "git-failure#3=rev-parse HEAD" }) }, cause: "INTERNAL_GIT_FAILED_UNKNOWN", exit: 1, handoffOwner: "operator", transaction: "unknown" },
+	{ name: "preview dirty sync", run: () => { const f = fixture(); const worktree = beginCandidate(f); write(f.vault, "owned.md", "owned\n"); return run(f, ["finish", "--preview", "--worktree", worktree, "--message", "docs: note"]) }, cause: "DOMAIN_CANONICAL_NOT_READY", exit: 3, nextAction: PREVIEW },
+	{ name: "preview sync busy", run: () => { const f = fixture(); const worktree = beginCandidate(f); advanceRemote(f); holdLock(f); return run(f, ["finish", "--preview", "--worktree", worktree, "--message", "docs: note"]) }, cause: "TRANSIENT_INTEGRATION_BUSY", exit: 75, nextAction: PREVIEW },
+	{ name: "preview refusal after main sync", run: () => { const f = fixture(); const worktree = beginCandidate(f); advanceRemote(f); write(worktree, "unexpected.md", "unexpected\n"); return run(f, ["finish", "--preview", "--worktree", worktree, "--message", "docs: note"]) }, cause: "INTERNAL_GIT_FAILED_PARTIAL", exit: 1, handoffOwner: "operator", transaction: "partially-completed" },
+	{ name: "apply remote divergence", run: () => { const f = fixture(); const worktree = beginCandidate(f); const id = previewCandidate(f, worktree); advanceRemote(f); write(f.vault, "local.md", "local\n"); git(f.vault, "add", "--", "local.md"); git(f.vault, "commit", "-m", "local"); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree]) }, cause: "DOMAIN_MAIN_DIVERGED", exit: 3, handoffOwner: "human" },
+	{ name: "apply publication rejected", run: () => { const f = fixture(); const worktree = beginCandidate(f); const id = previewCandidate(f, worktree); rejectPublication(f); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree]) }, cause: "INTERNAL_GIT_FAILED_PARTIAL", exit: 1, handoffOwner: "operator", transaction: "partially-completed" },
+	{ name: "recover publication rejected", run: () => { const f = fixture(); const worktree = crashedAfterFastForward(f); rejectPublication(f); return run(f, ["recover", "--worktree", worktree]) }, cause: "INTERNAL_GIT_FAILED_PARTIAL", exit: 1, handoffOwner: "operator", transaction: "partially-completed" },
+	{ name: "recover publication unknown", run: () => { const f = fixture(); const worktree = crashedAfterFastForward(f); return run(f, ["recover", "--worktree", worktree], { VAULT_STEWARD_FAULT: "git-failure#2=fetch" }) }, cause: "INTERNAL_GIT_FAILED_UNKNOWN", exit: 1, handoffOwner: "operator", transaction: "unknown" },
+
 	// Built-ins and dispatch
 	{ name: "help json", run: () => run(fixture(), ["--help"]), cause: "SUCCESS_UNCHANGED", exit: 0, nextAction: "vault-steward.discovery" },
 	{ name: "help with stray option", run: () => run(fixture(), ["--help", "--bogus"]), cause: "USAGE_INVALID_INVOCATION", exit: 2, nextAction: HELP },
@@ -188,7 +214,7 @@ const scenarios: Scenario[] = [
 	{ name: "apply integration unproved", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w], { VAULT_STEWARD_FAULT: "git-failure=merge --ff-only" }) }, cause: "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED", exit: 1, nextAction: PREVIEW, transaction: "unchanged" },
 	{ name: "apply completion record failed", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w], { VAULT_STEWARD_FAULT: "git-failure=update-ref" }) }, cause: "INTERNAL_COMPLETION_RECORD_FAILED", exit: 1, nextAction: RECOVER, transaction: "partially-completed" },
 	{ name: "apply git failed before consume", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w], { VAULT_STEWARD_FAULT: "git-failure=branch --show-current" }) }, cause: "INTERNAL_GIT_FAILED_UNCHANGED", exit: 1, handoffOwner: "operator" },
-	{ name: "apply git failed at read-back", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w], { VAULT_STEWARD_FAULT: "git-failure#4=rev-parse HEAD" }) }, cause: "INTERNAL_GIT_FAILED_UNKNOWN", exit: 1, handoffOwner: "operator", transaction: "unknown" },
+	{ name: "apply git failed at read-back", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w], { VAULT_STEWARD_FAULT: "git-failure#5=rev-parse HEAD" }) }, cause: "INTERNAL_GIT_FAILED_UNKNOWN", exit: 1, handoffOwner: "operator", transaction: "unknown" },
 	{ name: "apply unexpected after consume", run: () => { const f = fixture(); const { worktree, previewId } = rebasePlan(f); return run(f, ["finish", "--apply", "--preview-id", previewId, "--worktree", worktree], { VAULT_STEWARD_FAULT: "unexpected=rebase --onto" }) }, cause: "INTERNAL_UNEXPECTED_UNKNOWN", exit: 1, handoffOwner: "operator", transaction: "unknown" },
 	{ name: "apply unexpected before consume", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w], { VAULT_STEWARD_FAULT: "unexpected=branch --show-current" }) }, cause: "INTERNAL_UNEXPECTED_UNCHANGED", exit: 1, handoffOwner: "operator" },
 	// inspect

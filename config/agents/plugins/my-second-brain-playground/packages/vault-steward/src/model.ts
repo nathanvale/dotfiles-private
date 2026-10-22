@@ -133,7 +133,7 @@ export function productCause(reason: RefusalReason, transaction: TransactionStat
 }
 
 // Effect identities of the 2.0 inventories (CONTRACT.md 3.4; the candidate rebase is a published exclusion).
-export type EffectId = "candidate.manifest" | "candidate.worktree" | "candidate.commit" | "preview.record" | "main.fast-forward" | "completion.ref" | "completion.receipt"
+export type EffectId = "candidate.manifest" | "candidate.worktree" | "candidate.commit" | "preview.record" | "main.fast-forward" | "completion.ref" | "completion.receipt" | "remote.push"
 
 export interface PreviewPlan {
 	kind: "integrate" | "no-changes"

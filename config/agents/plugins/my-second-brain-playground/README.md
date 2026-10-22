@@ -63,8 +63,12 @@ and activation are Ticket #52 evidence, not claims here). The
 route.
 
 The legacy checkpoint contract (`hooks/recovery-checkpoint`, the Python
-checkpoint owner, schema-v2 checkpoints) is provenance under Spec #57: kept
-byte-identical, registered by no manifest, never read by the registered hook.
+checkpoint owner, schema-v2 checkpoints) is provenance under Spec #57,
+registered by no manifest and never read by the registered hook. The launcher
+remains byte-identical; the Python reader additionally expands a leading `~/`
+in vault configuration for portable machine setup. The pinned original reader
+baseline (SHA256 `9c8ed0b3af16ad6eeba9d50106bbc2c5b95d903bedd29059cf1df77a68c15aa4`)
+and the compatibility reader hash remain recorded in the checkpoint tests.
 [Spec #120](https://github.com/nathanvale/dotfiles-private/issues/120) retired
 the unregistered `hooks/recover-context` launcher and the Python hook mode. The
 checkpoint launcher remains a manual route whose help owns its syntax, and

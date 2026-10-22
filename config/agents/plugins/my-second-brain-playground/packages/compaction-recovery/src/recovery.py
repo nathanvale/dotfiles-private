@@ -252,7 +252,7 @@ def configured_vault(home: Path) -> Path:
     raw_vault = config["vault"]
     if not isinstance(raw_vault, str) or len(raw_vault) > 2048 or any(c in raw_vault for c in "\x00\r\n"):
         reject()
-    candidate = Path(raw_vault)
+    candidate = home / raw_vault[2:] if raw_vault.startswith("~/") else Path(raw_vault)
     if not candidate.is_absolute():
         reject()
     try:
