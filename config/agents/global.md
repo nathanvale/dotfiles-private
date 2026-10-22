@@ -134,8 +134,9 @@
   exists.
 
 - Use `ghh` for GitHub CLI work.
-- Managed project coordination or Herdr work: read
-  `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
+- Desktop typed or spoken requests to a project coordinator; Herdr Projects
+  tasks, completion or settings; or Herdr sessions, workspaces, tabs, panes or
+  agents: read `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
 - Treat Herdr Projects as third-party software, not our maintenance responsibility.
   Use supported precompiled releases and documented interfaces. Never modify its
   source, build custom fixes, or open or submit pull requests for it.
@@ -170,7 +171,7 @@
 - Sorting a rule into gate, clause, or delete: read
   `$HOME/code/dotfiles/docs/agents/determinism-and-steering.md` first.
 - Code or test authoring, review, execution, coverage, repair or triage: read
-  `$HOME/code/dotfiles/docs/agents/coding-standards.md`. A package's own
+  `$HOME/code/dotfiles/docs/standards/CODING_STANDARDS.md`. A package's own
   `CODING_STANDARDS.md` extends it; neither restates the other.
 - New tool or capability: search current dependencies and existing products
   for an owner before design. Record why reuse does not fit before custom
