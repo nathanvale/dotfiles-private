@@ -10,6 +10,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"./$(git rev-parse --show-cdup 2>/dev/null)\" && \"$HOME\"/.codex/hooks/fallow-gate.sh"
+          }
+        ]
       }
     ],
     "SessionStart": [
