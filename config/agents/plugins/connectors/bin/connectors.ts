@@ -28,6 +28,7 @@ import { loginKeychain, storeServiceToken } from "./setup/keychain.ts";
 import { stateRoot } from "./private-state.ts";
 import { observeEvidence } from "./evidence-state.ts";
 import { retainFixtureObservation, retainObservation } from "./evidence-record.ts";
+import { doctorFailureView, readProviderFailure } from "./diagnostic-record.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -278,7 +279,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements", usage: "config validate [connector]", input: [...words("config", "validate"), connectorAt(2, false)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
 	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse", usage: "config show <connector> --resolved --json [--select name=value ...]", input: [...words("config", "show"), connectorAt(2), option(3, "--resolved", null, true), option(3, "--json", null, true), selectAt(3)], reaches: "plugin-state", stations: [...LOCAL_INSPECTION, ...CUSTODY_REFUSALS] },
 	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report each connector's eight evidence states from this invocation's local checks; never contacts a Provider, reads a credential, or promotes a fixture or local check to a live state", usage: STATUS_USAGE, input: [word(0, "status"), connectorAt(1, false), selectAt(2)], reaches: "plugin-state", stations: LOCAL_INSPECTION },
-	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness report for one connector", usage: "doctor <connector>", input: [word(0, "doctor"), connectorAt(1)], reaches: "plugin-state", stations: LOCAL_INSPECTION },
+	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness report for one connector, plus its retained last-provider-failure for an optionally selected tenant", usage: "doctor <connector> [--select tenant=value]", input: [word(0, "doctor"), connectorAt(1), selectAt(2)], reaches: "plugin-state", stations: LOCAL_INSPECTION },
 	{
 		commandIdentity: "connectors.schema",
 		route: ["schema"],
@@ -1165,7 +1166,8 @@ function helpText(): string {
 		"  config show <connector> --resolved --json       Show resolved nonsecret configuration and provenance",
 		"                                                  Repeated --select names must carry identical values",
 		"  status [connector [--select name=value ...]]    Report eight evidence states from local checks and retained hosted reads",
-		"  doctor <connector>                              Report one connector's locally observed evidence",
+		"  doctor <connector> [--select tenant=value]      Report one connector's locally observed evidence, plus its retained",
+		"                                                  last-provider-failure when a tenant is selected",
 		"  schema <connector> [--select name=value ...]     Fetch live schema; a credentialed connector reads through its adapter",
 		"  deps status [tool]                               Report required and selected dependency versions; changes nothing",
 		"  deps repair <tool> --preview                     Record the exact repair of one dependency; installs nothing",
@@ -1907,12 +1909,18 @@ function handleStatus(args: readonly string[]): void {
 // locally observed evidence as status. It never exercises a connector's
 // adapter, contacts a Provider, or reads a credential, so its success never
 // stands for custody, authentication, or live proof.
+const DOCTOR_USAGE = "doctor <connector> [--select tenant=value]";
 function handleDoctor(args: readonly string[]): void {
-	if (args.length !== 1) {
-		usageMalformed("connectors.doctor", "doctor <connector>");
+	if (args.length === 0 || (args[0] ?? "").startsWith("--")) {
+		usageMalformed("connectors.doctor", DOCTOR_USAGE);
 		return;
 	}
 	const id = args[0] ?? "";
+	const given = new Map<string, string>();
+	if (consumeSelections(args.slice(1), given) !== args.length - 1) {
+		usageMalformed("connectors.doctor", DOCTOR_USAGE);
+		return;
+	}
 	let manifest: ConnectorManifest;
 	try {
 		manifest = loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
@@ -1924,11 +1932,20 @@ function handleDoctor(args: readonly string[]): void {
 		}
 		throw error;
 	}
-	// doctor takes no selection, and packaged defaults always resolve, so a
-	// selector problem cannot arise here.
+	// The connector's own local evidence still takes no selection, and
+	// packaged defaults always resolve, so a selector problem cannot arise
+	// here regardless of whether --select tenant was given for lastFailure.
 	const row = evidenceRow(manifest, new Map(), new Date().toISOString());
 	const evidence = "problem" in row ? {} : row.evidence;
-	emitSuccess("connectors.doctor", `${id} declared configuration validated; evidence reports local readiness`, { connector: id, ...evidence }, "connectors.status");
+	// Reads only the local diagnostics file this connector's own transport may
+	// have already written on a prior failure (see diagnostic-record.ts): no
+	// Provider start, no credential read, no network call. Present only when
+	// an optional tenant selector was given AND a record exists for exactly
+	// that connector-tenant pair -- never guessed, never another tenant's.
+	const tenant = given.get("tenant");
+	const lastFailure = tenant === undefined ? null : readProviderFailure(id, tenant, process.env);
+	const data = { connector: id, ...evidence, ...(lastFailure ? { lastFailure: doctorFailureView(lastFailure) } : {}) };
+	emitSuccess("connectors.doctor", `${id} declared configuration validated; evidence reports local readiness`, data, "connectors.status");
 }
 
 // The only command that exercises a packaged adapter's auth-shaped

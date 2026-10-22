@@ -35,6 +35,73 @@ Browser Use are retired by
 - The Harness owns attachment. Never copy, enumerate, or attach to a Chrome
   profile directory yourself.
 
+## Native capture density
+
+- For genuine DPR 2 proof, use qualified native window sizing and default
+  density. On 20 October 2026, the supported viewport override changed observed
+  DPR from 2 to 1 on both laptop and Mini. Keep that override unqualified for
+  this proof until revalidated after tool updates.
+- Measure CSS viewport, `devicePixelRatio` and `visualViewport.scale` before and
+  after any viewport change.
+- Accept a capture only when the required CSS size, DPR, visual scale and
+  original encoded image pixel-to-CSS correspondence all match.
+- On mismatch, restore owned prior state and report the gap. Keep originals;
+  do not upscale, emulate density or relabel a 1x capture as genuine 2x.
+
+## Private previews
+
+- Start with the existing authorized private VPN route. Resolve the execution host,
+  app command/version, port and process owner. Verify the viewing device's route,
+  DNS and firewall access. VPN membership does not authorize employer data on
+  personal devices.
+- Treat `localhost` as the viewing device itself. Keep app backends on loopback
+  behind an existing proxy bound to the intended private interface, or qualify an
+  explicitly authorized direct listener and firewall scope. Discover the existing
+  owner before proposing setup. Do not widen listeners to all interfaces or add
+  web-app WAN port forwarding automatically.
+- Choose HTTP or HTTPS for the app's requirements. Use HTTPS for secure-context
+  or authentication requirements. Verify its certificate name and device trust.
+  A VPN provides neither HTTP proxying nor certificate issuance. Keep certificate
+  installation and trust changes under their separate authority.
+- Prefer one owned port at `/` per app. Qualify subpaths through the app's
+  base-path support. Check assets, deep links, API/auth URLs and live-reload
+  WebSocket from the viewing device. Use the installed app version's
+  [Vite](https://vite.dev/config/server-options) or
+  [Storybook](https://storybook.js.org/docs/api/main-config/main-config-core)
+  settings; retain exact host/origin validation.
+- Reuse Herdr Projects' native review/board owner and access gate. Resolve its
+  host, executable and version. Native local/Tailscale links do not establish
+  WireGuard integration. Qualify a VPN/proxy compatibility route, including
+  absolute links, before reporting it working.
+- Use [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) only
+  when that authorized route is selected. Inspect installed help, prerequisites
+  and existing mappings; preserve other owners' routes. Stop at consent or
+  uncertain outcomes and inspect before retrying. Funnel/public exposure and
+  access-policy changes require separate explicit authority.
+- Report the verified URL and owned process/proxy custody. Follow the global Mac
+  awake rule. Retain the preview only when requested; otherwise stop only owned
+  processes and remove only exact owned mappings after readback. Recheck other
+  routes. Follow the browser route above to open the link.
+
+### Nathan's home route
+
+Nathan already uses WireGuard on his UniFi home router. Its
+[VPN server settings](https://192.168.1.1/network/default/settings/vpn/server)
+are the existing configuration owner.
+
+- Home-LAN access may not need a VPN. For remote access, use an existing
+  authorized client route on the device making the connection, including the
+  execution host when needed. Verify routing, DNS and firewall access to the
+  actual Mini/app; do not infer addresses or client configuration. VPN access
+  does not expose loopback listeners.
+- Inspect router settings read-only through native Chrome in the current
+  personal profile. Hand login to Nathan.
+- Keep network effects in the foreground session. Obtain appropriate
+  authority before creating or importing peers, changing router rules or
+  certificate trust, replacing a VPN, or starting sharing. Preserve other Mini
+  apps. Keep keys, configuration files, QR codes and credentials out of source
+  and receipts.
+
 ## Generic tooling
 
 Agent Browser, Playwright, MCPorter, and the `chrome-devtools` MCPorter entry

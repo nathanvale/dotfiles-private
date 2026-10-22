@@ -4,13 +4,14 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, test } from 'bun:test'
 import {
 	changedFiles,
+	createCommandScope,
 	parseHarness,
 	resolveCwd,
 	resolveRepoRoot,
 	resolveRepoTool,
 	summariseFailure,
 } from './common.ts'
-import { cleanupTempDirs, git, initRepo, makeTempDir } from './test-support.ts'
+import { cleanupTempDirs, git, initRepo, makeTempDir, processTreeFixture } from './test-support.ts'
 
 afterAll(() => {
 	cleanupTempDirs()
@@ -149,5 +150,39 @@ describe('dependency-free constraint', () => {
 		const manifestPath = join(import.meta.dir, '..', 'package.json')
 		const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
 		expect(manifest.dependencies).toBeUndefined()
+	})
+})
+
+
+describe('owned command scope', () => {
+	for (const [parentExits, detachedChild] of [[false, false], [true, false], [false, true]]) {
+		test(`cancels real descendants and inherited pipes, parentExits=${parentExits}, detachedChild=${detachedChild}`, async () => {
+			const dir = await makeTempDir('proof-command-tree-')
+			const tree = processTreeFixture(dir, parentExits, detachedChild)
+			const sentinel = Bun.spawn([process.execPath, '-e', 'setInterval(() => {}, 1000)'], { stdout: 'ignore', stderr: 'ignore' })
+			const scope = createCommandScope()
+			const result = scope.run(tree.argv, { cwd: dir }).catch((error: Error) => error.message)
+			try {
+				await tree.ready()
+				if (parentExits) await Bun.sleep(100)
+				expect(await Promise.race([scope.cancel().then(() => 'cancelled'), Bun.sleep(1500).then(() => 'still running')])).toBe('cancelled')
+				expect(await result).toBe('Command scope was cancelled')
+				expect(tree.alive()).toEqual([])
+				expect(sentinel.exitCode).toBeNull()
+				expect(process.kill(sentinel.pid, 0)).toBe(true)
+				await expect(scope.run(tree.argv, { cwd: dir })).rejects.toThrow('Command scope was cancelled')
+			} finally {
+				tree.cleanup()
+				sentinel.kill('SIGKILL')
+				await sentinel.exited
+				await result
+			}
+		})
+	}
+
+	test('retains ordinary command exit status and fully drained streams', async () => {
+		const scope = createCommandScope()
+		expect(await scope.run([process.execPath, '-e', 'process.stdout.write("out"); process.stderr.write("err"); process.exit(7)'], { cwd: process.cwd() })).toEqual({ exitCode: 7, stdout: 'out', stderr: 'err' })
+		await scope.cancel()
 	})
 })

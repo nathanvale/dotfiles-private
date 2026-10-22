@@ -43,6 +43,9 @@ Supports `--resume` to pick up where it left off and `--start-phase N` to skip a
 The Brewfile owns desktop applications, not the Claude Code or Codex CLIs.
 After setup, run `claude` and `codex` once to complete interactive sign-in.
 
+Pi is an optional harness installed separately with its vendor installer.
+See [Pi setup](docs/pi.md) for installation, sign-in, and Herdr integration.
+
 ## Features
 
 - **HyperFlow**: Hyper key (Right Cmd) orchestration for app switching and keyboard shortcuts

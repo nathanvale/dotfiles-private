@@ -14,7 +14,7 @@
     },
     {
       "name": "proof",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "source": {
         "source": "local",
         "path": "./proof"
@@ -22,7 +22,7 @@
     },
     {
       "name": "personal",
-      "version": "0.4.20",
+      "version": "0.4.41",
       "source": {
         "source": "local",
         "path": "./personal"
@@ -35,7 +35,7 @@
     },
     {
       "name": "connectors",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "source": {
         "source": "local",
         "path": "./connectors"

@@ -10,6 +10,19 @@ export type ObservedFailure = { kind: "process"; exitCode: number; stderr: strin
 
 export type ProviderFailureCause = Extract<CauseCode, "refused-precondition" | "refused-auth" | "not-found" | "capability-unavailable" | "failed-transport" | "failed-unknown">;
 
+// Runtime admission for retained records shares the translator's closed type.
+const PROVIDER_FAILURE_CAUSES = {
+	"refused-precondition": true,
+	"refused-auth": true,
+	"not-found": true,
+	"capability-unavailable": true,
+	"failed-transport": true,
+	"failed-unknown": true,
+} satisfies Record<ProviderFailureCause, true>;
+export function isProviderFailureCause(value: unknown): value is ProviderFailureCause {
+	return typeof value === "string" && Object.hasOwn(PROVIDER_FAILURE_CAUSES, value);
+}
+
 // What dispatch policy receives. `hint` is fixed text from the table below or
 // null; it is never derived from the observed message.
 export interface ProviderFailure {

@@ -912,7 +912,12 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		fresh();
 		fixture.canned(product, providerTool, canned);
 		const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, operation, "--input", JSON.stringify(input)]);
-		expect([result.code, result.stderr]).toEqual([3, ""]);
+		expect(result.code).toBe(3);
+		// Only the unclassified ("failed-unknown"/UNKNOWN_REPAIR) row now also
+		// carries the diagnostic transportCallId line on stderr (runtime.ts):
+		// already-classified causes (auth, here) keep empty stderr, unchanged.
+		if (repair === UNKNOWN_REPAIR) expect(result.stderr).toMatch(/^connectors:diagnostic:transportCallId:call-[0-9a-f-]{36}\n$/);
+		else expect(result.stderr).toBe("");
 		const envelope = parse(result.stdout).result;
 		expect<unknown[]>([...runStation(envelope), envelope.repairAction, envelope.data]).toEqual([...tuple, repair, data]);
 		// The one read call did reach the Provider; nothing else was sent.
@@ -924,6 +929,109 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		rmSync(path.join(fixture.root, "canned"), { recursive: true, force: true });
 		expectNoSecret(fixture, [result.stdout, result.stderr], fileFragments);
 	}, 90_000);
+
+	// R1 (post-5f97596a review): a retained diagnostic record an operator can
+	// only find by already knowing to look is not correlation. This proves the
+	// actual join a real operator would make: two separate real compiled
+	// bin/connectors invocations (never a manually seeded record substituting
+	// for the failure-side execution), reading the id from the failing
+	// command's own stderr and the tenant-scoped doctor command's own stdout,
+	// and asserting they are the exact same value.
+	test("a real failed command's own stderr carries the transportCallId that the real doctor command, run separately, retains under the same tenant", async () => {
+		fresh();
+		const sentinel = "join-proof-sentinel-9c41";
+		fixture.canned("jira", "jira_get_issue", { error: `unmatched provider fault ${sentinel}` });
+		const failed = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}']);
+		expect(failed.code).toBe(3);
+		const failedEnvelope = parse(failed.stdout).result;
+		expect([failedEnvelope.commandIdentity, failedEnvelope.causeCode, failedEnvelope.repairAction]).toEqual(["connectors.run", "DOMAIN_PROVIDER_CALL_FAILED", UNKNOWN_REPAIR]);
+		const fromFailure = failed.stderr.match(/^connectors:diagnostic:transportCallId:(call-[0-9a-f-]{36})\n$/);
+		expect(fromFailure).not.toBeNull();
+
+		const doctor = await fixture.frontDoor(["doctor", "atlassian", "--select", "tenant=example"]);
+		expect([doctor.code, doctor.stderr]).toEqual([0, ""]);
+		const doctorEnvelope = parse(doctor.stdout).result as { data: { lastFailure?: Record<string, unknown> } };
+		const lastFailure = doctorEnvelope.data.lastFailure;
+		expect(lastFailure).toBeDefined();
+		expect(lastFailure?.transportCallId).toBe(fromFailure?.[1]);
+		expect(lastFailure?.cause).toBe("failed-unknown");
+		expect(lastFailure?.reasonKnown).toBe(false);
+		expect((lastFailure?.limit as string | undefined)?.includes("not a causal diagnosis")).toBe(true);
+
+		// The in-band provider text never reaches either command's own output.
+		for (const stream of [failed.stdout, failed.stderr, doctor.stdout, doctor.stderr]) {
+			expect(stream).not.toContain(sentinel);
+			expect(stream).not.toContain("unmatched provider fault");
+		}
+		expectNoSecret(fixture, [failed.stdout, failed.stderr, doctor.stdout, doctor.stderr]);
+	}, 90_000);
+
+	// R1 RED/GREEN control: the reference-propagation line itself, not just the
+	// record it points at. RED is proven by temporarily removing the one
+	// conditional write in runtime.ts (git stash, see the handback for the
+	// exact transcript); this test is the GREEN half, kept permanently.
+	test("the diagnostic stderr line is present only for the unclassified cause, and absent for an already-classified one", async () => {
+		fresh();
+		fixture.canned("jira", "jira_get_issue", { toolErrorText: "Issue EX-404 does not exist" });
+		const classified = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-404"}']);
+		expect(classified.code).toBe(3);
+		expect(parse(classified.stdout).result.causeCode).toBe("DOMAIN_PROVIDER_CALL_FAILED");
+		expect(classified.stderr).toBe("");
+
+		fixture.canned("jira", "jira_get_issue", { error: "unmatched fault, no known pattern" });
+		const unclassified = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}']);
+		expect(unclassified.code).toBe(3);
+		expect(parse(unclassified.stdout).result.causeCode).toBe("DOMAIN_PROVIDER_CALL_FAILED");
+		expect(unclassified.stderr).toMatch(/^connectors:diagnostic:transportCallId:call-[0-9a-f-]{36}\n$/);
+	}, 90_000);
+
+	// R2: tenant isolation. Two tenants sharing the connector must never
+	// overwrite or leak into each other's retained record.
+	describe("tenant-scoped retained failures never cross tenants", () => {
+		const OTHER_TENANT = "other";
+		test("two tenants failing the same connector get two separate records, neither visible under the other tenant's doctor selector", async () => {
+			fresh();
+			fixture.writeRegistration(registrationLiteral(OTHER_TENANT, JIRA_ITEM_ID, CONFLUENCE_ITEM_ID), OTHER_TENANT);
+			fixture.canned("jira", "jira_get_issue", { error: "tenant-a unmatched fault" });
+			const exampleFailed = await fixture.frontDoor(["run", "atlassian", "--select", "tenant=example", "issue.get", "--input", '{"issueKey":"EX-1"}']);
+			expect(exampleFailed.code).toBe(3);
+			const exampleId = exampleFailed.stderr.match(/^connectors:diagnostic:transportCallId:(call-[0-9a-f-]{36})\n$/)?.[1];
+			expect(exampleId).toBeDefined();
+
+			fixture.canned("jira", "jira_get_issue", { error: "tenant-b unmatched fault" });
+			const otherFailed = await fixture.frontDoor(["run", "atlassian", "--select", `tenant=${OTHER_TENANT}`, "issue.get", "--input", '{"issueKey":"EX-2"}']);
+			expect(otherFailed.code).toBe(3);
+			const otherId = otherFailed.stderr.match(/^connectors:diagnostic:transportCallId:(call-[0-9a-f-]{36})\n$/)?.[1];
+			expect(otherId).toBeDefined();
+			expect(otherId).not.toBe(exampleId);
+
+			const exampleDoctor = await fixture.frontDoor(["doctor", "atlassian", "--select", "tenant=example"]);
+			const exampleView = (parse(exampleDoctor.stdout).result as { data: { lastFailure?: Record<string, unknown> } }).data.lastFailure;
+			expect(exampleView?.transportCallId).toBe(exampleId);
+			expect(exampleView?.tenant).toBe("example");
+
+			const otherDoctor = await fixture.frontDoor(["doctor", "atlassian", "--select", `tenant=${OTHER_TENANT}`]);
+			const otherView = (parse(otherDoctor.stdout).result as { data: { lastFailure?: Record<string, unknown> } }).data.lastFailure;
+			expect(otherView?.transportCallId).toBe(otherId);
+			expect(otherView?.tenant).toBe(OTHER_TENANT);
+
+			// Neither tenant's record shows the other's exitCode/id: isolation, not
+			// a shared "latest" ambiguous across tenants.
+			expect(exampleView?.transportCallId).not.toBe(otherView?.transportCallId);
+		}, 90_000);
+
+		test("doctor with no tenant selector shows no lastFailure at all, never guessing which tenant's record to show (unchanged, backward-compatible default)", async () => {
+			fresh();
+			fixture.canned("jira", "jira_get_issue", { error: "unmatched fault for no-selector proof" });
+			const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}']);
+			expect(result.code).toBe(3);
+
+			const noSelector = await fixture.frontDoor(["doctor", "atlassian"]);
+			expect([noSelector.code, noSelector.stderr]).toEqual([0, ""]);
+			const data = (parse(noSelector.stdout).result as { data: Record<string, unknown> }).data;
+			expect(data).not.toHaveProperty("lastFailure");
+		}, 90_000);
+	});
 
 	// Journaled writes (U2). The oracle for every Provider write is the fake's
 	// effects.jsonl, never an envelope. A comment binds no revision, so its
@@ -1005,7 +1113,12 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		const previewed = await write("issue.update", input, ["--preview"]);
 		expect([previewed.code, parse(previewed.stdout).result.causeCode]).toEqual([0, "SUCCESS_RUN_RECORDED"]);
 		const apply = await write("issue.update", input, ["--apply", record(parse(previewed.stdout).result).previewId]);
-		expect([apply.code, apply.stderr]).toEqual([3, ""]);
+		expect(apply.code).toBe(3);
+		// This apply's cause is the unclassified "failed-unknown" (asserted just
+		// below), so it now also carries the diagnostic transportCallId line
+		// (runtime.ts); see the PROVIDER_ROWS test above for the classified-vs-
+		// unclassified distinction this is scoped to.
+		expect(apply.stderr).toMatch(/^connectors:diagnostic:transportCallId:call-[0-9a-f-]{36}\n$/);
 		const failed = parse(apply.stdout).result;
 		expect([...station(failed), failed.nextAction, failed.data?.connectorCause]).toEqual(["connectors.run.apply", "failed", "DOMAIN_RUN_FAILED_RECORDED", "repository-local", "completed", ["write-receipt"], [], "connectors.recover", "failed-unknown"]);
 		expect([record(failed).status, record(failed).send]).toEqual(["unchanged", "possible"]);
