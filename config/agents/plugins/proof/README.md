@@ -6,7 +6,7 @@ quality hooks for Claude Code and Codex: `biome-ci`, `fallow-ci`, and
 matching tool locally, so the plugin can be enabled globally without breaking
 a repository that has no Biome, Fallow, or TypeScript installed.
 
-The package identity is `proof` at version `0.2.0`. Keep that identity and
+The package identity is `proof` at version `0.2.1`. Keep that identity and
 version aligned across `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
 `package.json`, and the `personal` marketplace entries in
 `config/agents/plugins/.claude-plugin/marketplace.json` and
@@ -20,7 +20,7 @@ Claude Code with Sonnet 5 via Foundry and Codex with gpt-6-astra. Adding an
 unused export blocked `Stop` with the plugin's `fallow-ci` envelope. The
 plugin's `biome-ci` fired alongside the old repository Biome hook before those
 hooks were removed. Codex recorded five trusted hook entries,
-`proof@personal:hooks.json:*`, in `~/.codex/config.toml`. This change removes
+`proof@personal:hooks.json:*`, in `~/.codex/config.toml`. That release removed
 the superseded repository Biome hooks.
 
 ## Plugin root
@@ -35,34 +35,107 @@ checkout, that is `config/agents/plugins/proof/`.
   just edited and only informs (the write already happened, so it cannot
   block). `Stop` lints the full changed-file delta and blocks with exit 2.
 - `fallow-ci`: `PreToolUse` on `Bash` runs `fallow audit` before a `git commit`
-  or `git push` and blocks only on a `fail` verdict for introduced findings,
-  the official Fallow gate pattern. `Stop` runs the same audit against the
-  working-tree delta. A `pass` or `warn` verdict means the change introduced
-  no gating finding; it never means the repository's inherited backlog is
-  clean.
+  or `git push` and blocks on a `fail` verdict for introduced findings,
+  the official Fallow gate pattern. The [persisted content guard](#persisted-content-guard)
+  also blocks mismatched Git content and unsupported commands. `Stop` audits committed branch changes
+  plus staged, unstaged, and untracked changes, including source deletions.
+  A `pass` or `warn` verdict means the change introduced no gating finding;
+  it never means the repository's inherited backlog is clean.
 - `typecheck-ci`: `Stop` only. `tsc` is whole-program, so gating it on every
   edit would produce false errors from mid-edit, multi-file states. Blocks
   only on diagnostics inside the changed-file set; an error in an untouched
   file surfaces as `suppressedCount` context, never a block, unless it is a
   global (file-less) error and a `tsconfig*.json` itself changed.
 
+### Comparison base and the new-only ratchet
+
+The hook always passes `--gate new-only`. It does not require inherited findings
+at the comparison baseline to be cleaned up. It resolves an immutable local Git
+merge-base for both `PreToolUse` and `Stop`, in this order:
+
+1. `FALLOW_AUDIT_BASE`, when explicitly set to a local commit or ref.
+2. `git config workflow.baseBranch`, preferring that branch's upstream, then
+   `origin/<declared-name>`, then the declared local ref.
+3. The locally recorded `origin/HEAD` remote-default ref.
+
+For example, a repository integrating into `staging` can declare
+`git config workflow.baseBranch staging`; a fork can use
+`FALLOW_AUDIT_BASE=upstream/develop`. These are Git references, with no GitHub,
+Bitbucket, API, authentication, or network dependency. References must already
+exist locally. The hook never fetches. The current feature branch's upstream is
+not an implicit baseline: after pushing, it could equal `HEAD` and erase the
+branch delta. A clean working tree therefore does not erase committed findings.
+
+Without any declared or remote-default base, an existing repository retains the
+working-tree comparison against `HEAD`. It emits a `branch-base-unavailable`
+skip diagnostic to state that committed branch changes remain unqualified.
+An invalid explicit/declared ref, unrelated history, or repository without an
+initial commit emits an operational skip. None of these is a passing branch
+qualification. Configure the intended base rather than treating that skip as
+proof. All Git paths reach the delta check. Native Fallow owns supported file
+formats, so Proof does not maintain a separate suffix filter.
+
+### Persisted content guard
+
+Fallow analyzes files in the working tree. A commit writes the staged index,
+and a push publishes committed content. Before a literal commit, Proof blocks
+when any tracked or untracked file differs from the index.
+Before a push, it requires that content to match HEAD. Stop performs the same
+HEAD comparison whenever the branch has committed changes, before its
+working-tree delta shortcut. An unstaged revert therefore cannot conceal
+committed branch findings.
+
+This is a conservative block with `reason: snapshot-mismatch`, not a Fallow
+finding or operational skip. It also blocks legitimate partial staging and
+unrelated documentation dirt. Align tracked and untracked files with the
+candidate before retrying; Proof does not create an index snapshot or change
+Git content on your behalf.
+
+The publication gate supports a single direct `git commit` with message/amend
+flags, and `git push` for the current HEAD. It blocks compound shell commands,
+Git prefix options, alternate commit content modes such as `-a` or `--only`,
+and pushes selecting another ref with `reason: unsupported-command`. Run staging
+in a separate tool call, then use a supported publication command. Configured
+multi-ref push selection requires an explicit `HEAD:<branch>` refspec.
+
 ### Known limits
 
 - Codex's `apply_patch` tool input carries no `file_path`, so `biome-ci`'s
   `PostToolUse` finds no edited file to lint there and is a silent no-op on
   Codex; only its `Stop` path lints Codex-driven edits.
-- Codex's acceptance of empty stdout on a passing `PreToolUse` and
-  `PostToolUse` exit 0 is unverified until the first Codex install; only the
-  documented `Stop` contract (JSON required on exit 0) has a cited source.
+- Live firing, cache refresh, and per-hook trust approval require a fresh
+  harness canary. Historical trust records do not prove today's activation.
+
+The pre-command matcher recognizes literal shell `git commit` and `git push`
+commands. It cannot inspect an opaque Python driver, nested process, shell alias,
+or a command targeting another repository. The configured branch-delta Stop
+check is the backstop for this session repository, not subprocess introspection.
+Both current [Codex hook docs](https://developers.openai.com/codex/hooks) and
+[Claude hook docs](https://code.claude.com/docs/en/hooks) document normalized
+`Bash` payloads with `tool_input.command`. That documentation and source tests do
+not prove a live session fired the installed hook. Keep the `Bash` matcher until
+an actual payload supports a routing change.
+
+Fallow operational failures remain fail-open. Unparseable output, an unknown
+verdict, a nonzero exit without a qualified verdict, or a runner that cannot
+start now emits a `status: skipped` diagnostic. A parsed `fail` verdict on exit
+0 or 1 blocks; `pass` and `warn` never gate inherited debt. The existing 24-second
+PreToolUse and 48-second Stop budgets are unchanged. A timeout emits an explicit
+unqualified `timeout` diagnostic and exits 0; Codex Stop also receives `{}`.
+Timeout is not audit acceptance. Descendant process-tree cancellation is not
+qualified by this repair.
 
 ### Self-disable marker
 
-Every hook resolves the repository root, then requires both a repo-local
-`node_modules/.bin/<tool>` binary and a marker config file (`biome.json` or
-`biome.jsonc` for Biome, `.fallowrc.json` for Fallow, `tsconfig.json` for
-TypeScript). A missing marker exits 0 silently: no error, no block, no
-stderr. This is what lets the plugin stay enabled across every repository
-Nathan works in.
+Every hook resolves the repository root. Biome and TypeScript require both a
+repo-local `node_modules/.bin/<tool>` binary and a working-tree marker config
+file (`biome.json` or `biome.jsonc` for Biome, `tsconfig.json` for TypeScript).
+Fallow checks for `.fallowrc.json` in the working tree, staged index and HEAD,
+so deleting only its working copy cannot bypass the persisted content guard.
+When its marker is absent from all three states, Fallow exits 0 silently.
+Biome and TypeScript exit 0 silently when their working-tree marker is absent.
+These skips produce no error, block or stderr, allowing the plugin to stay
+enabled across repositories.
 
 Fallow has one more runner. When `.fallowrc.json` exists but
 `node_modules/.bin/fallow` does not, `fallow-ci` reuses the repository's own
