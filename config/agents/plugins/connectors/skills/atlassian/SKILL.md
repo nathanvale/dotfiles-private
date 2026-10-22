@@ -192,11 +192,20 @@ completed apply answers `SUCCESS_RUN_APPLIED`; its receipt, with `runId` and
 
 ### Jira comment formatting and mentions
 
-- Put Markdown in the `body` of `issue.comment` or `issue.comment.update`.
+- Put Markdown in the `body` of a new `issue.comment`.
   Bold, italics, inline code, bullets, and a bare issue key rendered on the
   disposable Jira test issue. Read the stored comment back; inspect it in Jira
   when presentation matters. This proof does not cover every Markdown construct
   or Confluence comments.
+- Keep Jira comments append-only. Create a new `issue.comment` (or
+  `issue.comment.media` when attaching images) for every progress, status,
+  verification, acceptance, proof, or correction update. State the claim,
+  link or attach evidence, name its scope and limits, and say what remains
+  open. Read the new comment back to verify it. Preserve existing comments;
+  never invoke `issue.comment.update` or `issue.comment.media.update`.
+- When new evidence changes an earlier claim, add a comment that states the
+  correction, links the earlier comment when possible, and includes the new
+  evidence and its limits.
 - For a Jira mention, use `@[Display Name](accountid:<verified-account-id>)`.
   Obtain the account ID from a trusted Jira read, not a guessed email or name.
   If no trusted read yields it, ask for a verified account ID before posting
@@ -237,11 +246,7 @@ fallback: a Community operation that fails stays failed.
 - The preview binds the wiki body and the attachment ids; an attachment
   replaced under a new id between preview and apply refuses the apply
   (`refused-preview`). Read-back proves an `<img>` per bound attachment in
-  the comment's rendered HTML; the update form also needs the comment's
-  `updated` to move.
-- `issue.comment.media.update` edits only a comment the tenant principal
-  authored (`input-invalid` otherwise) and replaces the whole body. Read the
-  current text first and carry it over.
+  the comment's rendered HTML.
 - Proof state: live-write-proven for create and edit through the dispatcher
   (SMSTX-364, 28 September 2026, the coordinator's run recorded on PR #145:
   create, edit, and the author-guard refusal completed with receipt-bound
@@ -278,9 +283,8 @@ comments replaced, and nothing else; it is never a fallback.
   was read. `result.data.referenceCheck` reports how many comments were read
   against the issue total; an issue with more comments than the guard reads
   (100) refuses with `capability-unavailable` rather than clear the
-  attachment. Edit or remove the referencing comment first, for the
-  principal's own comments with `issue.comment.media.update` or
-  `issue.comment.update`.
+  attachment. Preserve the comment as history and create a new comment if
+  replacement evidence or an explanation is needed.
 - Jira answers the delete with no body, so the reply never settles it: apply
   completes only when the issue's attachment list, read back through the same
   route, no longer carries the id. A list that still carries it settles
@@ -292,11 +296,12 @@ comments replaced, and nothing else; it is never a fallback.
   uploaded on a ticket the operator names.
 
 Check authorization before `--apply`. An explicit request for one named create,
-update, comment, attachment, or delete authorizes that operation. For an
-inferred target, ambiguous content, or a batch, show the preview envelope and
-wait for confirmation. Apply a delete only to an object the operator named.
-The front door cannot make this authorization decision for the agent. Never
-retry a write or re-shape it for another tool.
+issue-field update, new comment, attachment, or delete authorizes that
+operation. Comment updates always create a new comment under the append-only
+rule above. For an inferred target, ambiguous content, or a batch, show the
+preview envelope and wait for confirmation. Apply a delete only to an object
+the operator named. The front door cannot make this authorization decision
+for the agent. Never retry a write or re-shape it for another tool.
 
 ### Enforced write behavior
 
@@ -415,8 +420,9 @@ flows this route does not expose.
   `issue.get` on each candidate, `issue.update` for `assignee` or `priority`,
   `issue.comment` with the decision.
 - Work an issue: `issue.get`, `issue.assign`, `issue.transitions` then
-  `issue.transition` to move it, `issue.comment` or `issue.comment.update`,
-  `issue.attach` for evidence files, `issue.attachment.delete` for a
+  `issue.transition` to move it, `issue.comment` for a new progress or proof
+  update or correction, `issue.attach` for evidence files,
+  `issue.attachment.delete` for a
   superseded one of your own, `issue.update` for other fields.
 - Document: `page.search` to find the parent and check the title is free,
   `page.create` with `parentId`, `page.update` for revisions, `page.comment`,

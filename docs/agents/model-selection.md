@@ -19,6 +19,40 @@ in its owning plugin, reached through the installed skill.
 
 ## Establish availability
 
+Run the shared preflight on the execution host before selecting a route:
+
+```sh
+model-selection-preflight --agent claude --model claude-opus-5-5 --effort high --json
+```
+
+The source is `bin/model-selection-preflight` in Dotfiles. Default provider
+scope is `any`: inspect the current native personal subscription login and
+the installed employer catalogue independently. Earlier employer usage does
+not make a later model-only request employer-exclusive. Use `--provider monash`
+or `--provider personal` only for an explicit provider constraint.
+
+Exit 3 means discovery is incomplete, including an authenticated account whose
+requested model remains unchecked. Report the unchecked route and next action;
+do not turn it into overall unavailability. A failed or stale provider query
+stays unknown. The command deliberately never claims global unavailability.
+
+For one bounded, tool-free personal Claude first turn, add `--verify-personal`.
+It uses subscription allowance, runs outside the project, disables hooks and
+session persistence, checks the returned model and stable account identity,
+and records effort from explicit native argv. Exit 0 identifies a candidate;
+the actual worker still needs its own launch identity and first-turn proof.
+Codex discovery reports its local catalogue as unchecked until the selected
+worker completes that proof. This command checks each harness's canonical
+current login; additional saved personal profiles need their own qualification.
+
+For a retained launch receipt, pass `--observed PATH --expected-account ID`.
+Required fields are `agent`, `provider` (`personal` or `monash`), `account`,
+`model`, `effort`, `completed_first_turn: true` and `evidence_path`.
+Exit 4 rejects identity differences. Matching supplied fields do not establish
+receipt provenance, fresh execution or authorization to cross providers.
+
+Run the public-process regressions with `bun run test:model-selection`.
+
 - Use the provider plugin's canonical discovery route for employer models.
   Compare its catalogue with the full live Azure deployment inventory on the
   configured resources when a requested model is missing. Read only deployment
