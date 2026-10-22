@@ -404,6 +404,7 @@ describe('fallow-ci branch ratchet', () => {
 		expect(existsSync(argsFile)).toBe(false)
 	})
 
+	// Two sequential 48s Stop audits, each with bounded cleanup, plus fixture setup.
 	test('the real local Fallow passes inherited debt and blocks a new committed export despite gate all config', async () => {
 		const dir = await makeTempDir('proof-fallow-native-')
 		initRepo(dir)
@@ -429,7 +430,7 @@ describe('fallow-ci branch ratchet', () => {
 		expect(introduced.exitCode).toBe(2)
 		expect(introduced.stderr).toContain('newlyUnused')
 		expect(introduced.stderr).not.toContain('[dead_code.unused_exports] inheritedUnused')
-	})
+	}, 110_000)
 
 	test('explicit FALLOW_AUDIT_BASE wins over an invalid declared base', async () => {
 		const {dir, baseline, argsFile} = await branchRepo('https://github.com/example/proof-fixture.git')
