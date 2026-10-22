@@ -43,11 +43,12 @@ Codex re-approval step, not a file change.
 
 - Existing non-plugin hook scripts: `config/agents/claude/hooks/`.
 - Hook declarations: Claude gates live in `config/agents/claude/settings.json`; reserve `config/agents/claude/hooks.json` for `InstructionsLoaded`; Codex uses `config/agents/codex/hooks.json`.
-- Biome, Fallow, and TypeScript quality gates come only from
-  `config/agents/plugins/proof/hooks/`, with its own `hooks/claude/hooks.json`
-  and `hooks/codex/hooks.json` per harness.
-  Activation is `enabledPlugins` in `config/agents/claude/settings.json`, not
-  a `settings.json` hook declaration. The scripts run from the installed
-  plugin cache, so a source change takes effect only through a plugin
-  release: `claude plugin marketplace update personal` on Claude Code, and a
-  Codex per-hook trust re-approval (see above) on Codex.
+- Biome and TypeScript quality gates come from
+  `config/agents/plugins/proof/hooks/`, with separate Claude and Codex declarations.
+  Refresh the native plugin after a source release and verify it in a fresh session.
+- Fallow owns its native PreToolUse hooks. Install through the pinned Fallow CLI's
+  `hooks install --target agent --agent claude --user` and equivalent `codex`
+  command. Preview with `--dry-run`; preserve unrelated hook declarations.
+  Follow repository policy for the comparison base. Native warnings remain advisory.
+- Codex hook installation does not prove trust or activation. Review the hook in
+  `/hooks` and verify a fresh-session canary before claiming it is active.
