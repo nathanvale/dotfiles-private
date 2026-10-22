@@ -755,6 +755,42 @@ describe('fallow-ci persisted content guard', () => {
 		})
 	}
 
+	async function literalWordRepo() {
+		const dir = await snapshotRepo()
+		rmSync(join(dir, 'node_modules/.bin/fallow'))
+		installFakeBinary(dir, 'fallow', `echo '{"verdict":"pass"}'`)
+		return dir
+	}
+
+	for (const harness of ['claude', 'codex']) {
+		for (const [command, configured] of [['git push origin"HEAD"', true], ['git push "origin"HEAD', true], ['git push # HEAD', true], ['git push origin\nHEAD', true], ['git push *', false], ['git push ?', false], ['git push [ab]', false], ['git push ~', false]] as const) {
+			test(`literal shell words reject unaudited push selection (${harness}): ${command}`, async () => {
+				const dir = await literalWordRepo()
+				if (configured) {
+					git(dir, 'config', 'remote.origin.push', 'other-branch:other-branch')
+					git(dir, 'config', 'remote.originHEAD.push', 'other-branch:other-branch')
+				}
+				const run = await runFallowHook({ hook_event_name: 'PreToolUse', cwd: dir, tool_name: 'Bash', tool_input: { command } }, harness === 'codex' ? ['--harness=codex'] : [])
+				expect(run.exitCode).toBe(2)
+				expect(run.stdout).toBe('')
+				expect(JSON.parse(run.stderr).reason).toBe('unsupported-command')
+				expect(wasInvoked(dir, 'fallow')).toBe(false)
+			})
+		}
+
+		for (const command of ['git commit --message="two words"', 'git commit --message=two" words"', 'git commit --message="literal # * ? [x] ~"', 'git push origin H"E"AD']) {
+			test(`literal shell words preserve quoted publication arguments (${harness}): ${command}`, async () => {
+				const dir = await literalWordRepo()
+				git(dir, 'config', 'remote.origin.push', 'other-branch:other-branch')
+				const run = await runFallowHook({ hook_event_name: 'PreToolUse', cwd: dir, tool_name: 'Bash', tool_input: { command } }, harness === 'codex' ? ['--harness=codex'] : [])
+				expect(run.exitCode).toBe(0)
+				expect(run.stdout).toBe('')
+				expect(run.stderr).toBe('')
+				expect(wasInvoked(dir, 'fallow')).toBe(true)
+			})
+		}
+	}
+
 	for (const command of ['git log --grep=commit', 'git show HEAD:docs/push.md', 'git --no-pager log --grep=push', 'git -C . log --grep=commit', 'git log --grep=commit && git show HEAD:docs/push.md', "echo 'git commit'; git log --grep=push"]) {
 		test(`read-only publication words do not activate the gate: ${command}`, async () => {
 			const dir = await snapshotRepo()

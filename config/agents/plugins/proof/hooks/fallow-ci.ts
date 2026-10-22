@@ -237,10 +237,11 @@ async function requireMatchingCandidate(repoRoot: string, event: string, scope: 
 
 /** Accept literal tokens only. Shell composition and substitutions can change the candidate after this hook. */
 function literalCommandTokens(command: string): string[] | null {
-	const pattern = /'[^'\n]*'|"[^"$`\\\n]*"|[^\s'"\\;&|<>$`(){}]+/g
+	const pattern = /(?:'[^'\r\n]*'|"[^"$`\\\r\n]*"|[^ \t'"\\;&|<>$`(){}#*?[\]~\r\n])+/g
 	const tokens = command.match(pattern) ?? []
-	if (command.replace(pattern, '').trim()) return null
-	return tokens.map((token) => /^["']/.test(token) ? token.slice(1, -1) : token)
+	if (command.replace(pattern, '').replace(/[ \t]/g, '')) return null
+	return tokens.map((token) => token.replace(/'([^']*)'|"([^"]*)"/g,
+		(_fragment, single: string | undefined, double: string | undefined) => single ?? double ?? ''))
 }
 
 function supportedCommitArgs(args: string[]): boolean {
