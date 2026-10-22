@@ -122,8 +122,12 @@ start now emits a `status: skipped` diagnostic. A parsed `fail` verdict on exit
 0 or 1 blocks; `pass` and `warn` never gate inherited debt. The existing 24-second
 PreToolUse and 48-second Stop budgets are unchanged. A timeout emits an explicit
 unqualified `timeout` diagnostic and exits 0; Codex Stop also receives `{}`.
-Timeout is not audit acceptance. Descendant process-tree cancellation is not
-qualified by this repair.
+Timeout is not audit acceptance. On POSIX, cancellation sends SIGTERM to owned
+command groups and allows a bounded drain before forced termination. Fallow
+3.34.1 relies on its native SIGTERM shutdown to stop the detached type-aware
+helper and its children. Process-level controls qualify that lifecycle; Windows
+and arbitrary detached daemons without that shutdown protocol remain outside
+the qualified scope.
 
 ### Self-disable marker
 
