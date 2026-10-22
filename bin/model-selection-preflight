@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Read native and employer discovery independently; never turn missing proof into absence."""
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import shutil
+import signal
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def run_command(argv, timeout, environment):
+    """Keep raw provider output private: it can contain account identifiers or credentials."""
+    try:
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, env=environment, stdin=subprocess.DEVNULL,
+                                   cwd=Path.home(), start_new_session=True)
+    except OSError:
+        return "", "", "probe_failed"
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        return "", "", "probe_timeout"
+    return stdout, stderr, None if process.returncode == 0 else "probe_nonzero"
+
+
+def run_json(argv, timeout, environment):
+    stdout, _, error = run_command(argv, timeout, environment)
+    if error in ("probe_failed", "probe_timeout"):
+        return None, error
+    try:
+        return json.loads(stdout), error
+    except (ValueError, TypeError):
+        return None, "invalid_probe_output"
+
+
+def personal_environment():
+    environment = dict(os.environ)
+    for key in list(environment):
+        if key.startswith(("ANTHROPIC_", "AZURE_", "OPENAI_", "CLAUDE_CODE_USE_")):
+            del environment[key]
+    environment.pop("CLAUDE_CONFIG_DIR", None)
+    environment["CODEX_HOME"] = str(Path.home() / ".codex")
+    return environment
+
+
+def account_identity(data):
+    identity = data.get("email") or data.get("accountId")
+    return hashlib.sha256(identity.encode()).hexdigest() if isinstance(identity, str) else None
+
+
+def personal_claude(args, environment):
+    executable = shutil.which("claude")
+    row = {"provider": "personal", "state": "unknown", "reason": "native_cli_missing"}
+    if not executable:
+        return row
+    data, error = run_json([executable, "auth", "status", "--json"], args.timeout, environment)
+    if error or not isinstance(data, dict):
+        row["reason"] = error or "invalid_auth_shape"
+        return row
+    if data.get("loggedIn") is False:
+        row.update(state="unauthenticated", reason="native_login_required")
+        return row
+    if data.get("loggedIn") is not True or data.get("authMethod") != "claude.ai" or data.get("apiProvider") != "firstParty":
+        row["reason"] = "personal_subscription_not_observed"
+        return row
+    row.update(state="unchecked_model", reason="authenticated_model_not_qualified",
+               account=account_identity(data), authenticated=True)
+    if not args.verify_personal:
+        return row
+    # A bounded native first turn: no tools, no saved conversation, no source prompt.
+    result, error = run_json([
+        executable, "--print", "Reply exactly PREFLIGHT_OK.", "--model", args.model,
+        "--effort", args.effort, "--tools", "", "--no-session-persistence",
+        "--output-format", "json", "--settings", '{"disableAllHooks":true}',
+    ], args.timeout, environment)
+    if error or not isinstance(result, dict) or result.get("is_error") is not False:
+        row.update(state="unknown", reason="native_first_turn_failed")
+        return row
+    usage = result.get("modelUsage")
+    if not isinstance(usage, dict) or list(usage) != [args.model]:
+        row.update(state="identity_mismatch", reason="observed_model_differs")
+        return row
+    after, error = run_json([executable, "auth", "status", "--json"], args.timeout, environment)
+    if error or not isinstance(after, dict) or after.get("loggedIn") is not True or not row["account"] or account_identity(after) != row["account"] or after.get("authMethod") != "claude.ai" or after.get("apiProvider") != "firstParty":
+        row.update(state="identity_mismatch", reason="account_identity_not_stable")
+        return row
+    row.update(state="available", reason="native_first_turn_passed", model=args.model,
+               effort=args.effort, effort_evidence="explicit_native_argv")
+    return row
+
+
+def catalogue_rows(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("models", "data"):
+            if isinstance(data.get(key), list):
+                return data[key]
+    return None
+
+
+def personal_codex(args, environment):
+    row = {"provider": "personal", "state": "unknown", "reason": "native_cli_missing"}
+    executable = shutil.which("codex")
+    if not executable:
+        return row
+    stdout, stderr, error = run_command([executable, "-c", 'model_provider="openai"', "login", "status"], args.timeout, environment)
+    if error or "chatgpt" not in (stdout + stderr).lower():
+        row["reason"] = error or "chatgpt_login_not_observed"
+        return row
+    data, error = run_json([executable, "-c", 'model_provider="openai"', "debug", "models"], args.timeout, environment)
+    models = catalogue_rows(data)
+    if error or models is None:
+        row["reason"] = error or "invalid_catalogue_shape"
+        return row
+    matches = [m for m in models if isinstance(m, dict) and (m.get("slug") or m.get("id")) == args.model]
+    # debug models can be a cached catalogue, so absence is never live denial.
+    row.update(authenticated=True, state="unchecked_model", reason="catalogue_match_requires_native_first_turn" if matches else "model_not_in_local_catalogue")
+    return row
+
+
+def monash(args):
+    row = {"provider": "monash", "state": "unknown", "reason": "provider_cli_missing"}
+    executable = shutil.which("monash")
+    if not executable:
+        return row
+    data, error = run_json([executable, "models", "--refresh", "--json"], args.timeout, dict(os.environ))
+    if error or not isinstance(data, dict):
+        row["reason"] = error or "invalid_catalogue_shape"
+        return row
+    if data.get("state") != "fresh":
+        row["reason"] = "refreshed_catalogue_not_fresh"
+        return row
+    models = catalogue_rows(data)
+    if models is None:
+        row["reason"] = "invalid_catalogue_shape"
+        return row
+    matches = [m for m in models if isinstance(m, dict) and
+               (m.get("id") == args.model or any(isinstance(b, dict) and b.get("deployment") == args.model
+                for b in (m.get("bindings") if isinstance(m.get("bindings"), list) else [])))]
+    # A provider snapshot is a candidate, not a successful native launch.
+    row.update(state="unchecked_model" if matches else "not_listed",
+               reason="deployment_requires_native_qualification" if matches else "model_not_in_refreshed_catalogue")
+    return row
+
+
+def validate_receipt(args, rows):
+    if not args.observed:
+        return None
+    try:
+        receipt = json.loads(Path(args.observed).read_text())
+    except (OSError, ValueError):
+        return {"state": "invalid", "reason": "receipt_unreadable"}
+    if not isinstance(receipt, dict):
+        return {"state": "invalid", "reason": "receipt_shape"}
+    expected = {"agent": args.agent, "model": args.model, "effort": args.effort,
+                "account": args.expected_account}
+    allowed = {row["provider"] for row in rows}
+    if receipt.get("provider") not in allowed or not args.expected_account:
+        return {"state": "mismatch", "reason": "provider_or_expected_account_missing"}
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        return {"state": "mismatch", "reason": "launch_identity_differs"}
+    if receipt.get("completed_first_turn") is not True or not receipt.get("evidence_path"):
+        return {"state": "invalid", "reason": "first_turn_evidence_required"}
+    # This validates supplied evidence, not its provenance or a new live launch.
+    return {"state": "matches", "reason": "supplied_receipt_matches_request"}
+
+
+def report(args):
+    rows = []
+    if args.provider != "monash":
+        environment = personal_environment()
+        rows.append(personal_claude(args, environment) if args.agent == "claude" else personal_codex(args, environment))
+    if args.provider != "personal":
+        rows.append(monash(args))
+    receipt = validate_receipt(args, rows)
+    if receipt and receipt["state"] != "matches":
+        status, exit_code = "identity_mismatch", 4
+    elif any(row["state"] == "identity_mismatch" for row in rows):
+        status, exit_code = "identity_mismatch", 4
+    elif any(row["state"] == "available" for row in rows):
+        status, exit_code = "candidate_available", 0
+    else:
+        status, exit_code = "discovery_incomplete", 3
+    return {"schema_version": 1, "status": status,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "request": {"agent": args.agent, "model": args.model, "effort": args.effort,
+                        "provider": args.provider},
+            "routes": rows, "receipt_check": receipt,
+            "next_action": "qualify_selected_route_before_dispatch" if exit_code == 0 else "resolve_unchecked_routes_or_identity",
+            "unavailability_proven": False}, exit_code
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--agent", choices=("claude", "codex"), required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--effort", required=True)
+    parser.add_argument("--provider", choices=("any", "personal", "monash"), default="any")
+    parser.add_argument("--timeout", type=float, default=30)
+    parser.add_argument("--verify-personal", action="store_true", help="Run one tool-free native Claude first turn; may use subscription allowance")
+    parser.add_argument("--observed", help="Validate a supplied launch receipt, without asserting its provenance")
+    parser.add_argument("--expected-account", help="Exact expected account identity in the supplied receipt")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    if not args.model.strip() or not args.effort.strip() or not math.isfinite(args.timeout) or args.timeout <= 0 or args.timeout > 120:
+        parser.error("model and effort must be nonempty; timeout must be within 0 to 120 seconds")
+    if args.verify_personal and (args.agent != "claude" or args.provider == "monash"):
+        parser.error("--verify-personal requires a personal Claude route")
+    result, code = report(args)
+    if args.json:
+        print(json.dumps(result))
+    else:
+        print(f"{result['status']}: {args.agent}/{args.model}, effort {args.effort}")
+        for row in result["routes"]:
+            print(f"  {row['provider']}: {row['state']} ({row['reason']})")
+        print(f"Next: {result['next_action']}")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
