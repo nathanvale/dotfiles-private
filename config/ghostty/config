@@ -88,3 +88,6 @@ window-decoration = client
 window-save-state = never
 
 # Split navigation handled by tmux instead
+
+# Send left Option as Alt for terminal shortcuts such as Herdr Option+C.
+macos-option-as-alt = left

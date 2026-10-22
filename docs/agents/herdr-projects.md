@@ -22,9 +22,16 @@ selected coordinator and qualify source, installation and activation separately.
 - Write short outcome titles and descriptions containing requirements,
   exclusions and acceptance evidence. Keep model, review, attempts, limits and
   merge choices in supported settings rather than operational prose.
-- Let the board own its workers, worktrees, checks and reviews. Inspect its
-  state before intervening through Herdr, Git or the forge. Global authority
-  still governs external writes and approvals.
+- For native delegated tasks, let the board own its workers, worktrees, checks
+  and reviews. Inspect its state before intervening through Herdr, Git or the
+  forge. Verify the supported lifecycle fits the task's source, path and
+  authority requirements before delegation. Global authority still governs
+  external writes and approvals.
+- For coordinator-managed direct workers, record the assignment and handback
+  on the owning task and follow [terminal checkout ownership](herdr-terminal.md#coordinator-managed-worktrees).
+  A tracking row does not attach a worker or supply the board's native check,
+  review or completion lifecycle. Keep execution with the coordinator unless
+  a supported adoption route is verified for the installed version.
 - When adding or delegating an authorized board task whose only output is a
   report, use the documented research-only route. Keep its result in the
   task's report folder, not the product repository.
