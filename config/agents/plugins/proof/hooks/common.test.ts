@@ -186,3 +186,15 @@ describe('owned command scope', () => {
 		await scope.cancel()
 	})
 })
+
+
+test('fixture PID records require complete positive decimal integers before any signals', async () => {
+	const dir = await makeTempDir('proof-pid-records-')
+	const tree = processTreeFixture(dir)
+	for (const content of ['', ' ', '0', '-1', '123bad', '1.5', 'NaN', 'Infinity', '1e2', '+123', ' 123 ', '9007199254740992']) {
+		writeFileSync(join(dir, 'pid-0'), content)
+		expect(tree.pids()).toEqual([])
+	}
+	writeFileSync(join(dir, 'pid-0'), String(process.pid))
+	expect(tree.pids()).toEqual([process.pid])
+})
