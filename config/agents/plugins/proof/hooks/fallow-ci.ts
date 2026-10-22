@@ -329,9 +329,11 @@ function evaluate(event: string, scope: string, result: CommandResult): 'pass' |
 
 /** Identify Git's subcommand, never publication words in a read-only command's arguments. */
 function publicationAction(tokens: string[]): 'commit' | 'push' | null {
-	if (tokens[0] !== 'git') return null
+	let start = 0
+	while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[start] ?? '')) start += 1
+	if (tokens[start] !== 'git') return null
 	const withValue = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
-	let index = 1
+	let index = start + 1
 	while (tokens[index]?.startsWith('-')) {
 		const option = tokens[index++] ?? ''
 		if (option === '--') break
@@ -371,9 +373,9 @@ async function runPreToolUse(input: HookInput): Promise<void> {
 		process.exit(0)
 	}
 
-	const base = await comparisonBase(repoRoot)
 	await requireSupportedCommand(repoRoot, command, action)
 	await requireMatchingCandidate(repoRoot, 'PreToolUse', action, action === 'push' ? 'HEAD' : undefined)
+	const base = await comparisonBase(repoRoot)
 	const result = await runFallowAudit(runner, repoRoot, ['--base', base.commit])
 	if (evaluate('PreToolUse', action, result) === 'pass')
 		reportUnqualifiedBase('PreToolUse', base)
@@ -386,7 +388,6 @@ async function runStop(input: HookInput, harness: Harness): Promise<never> {
 	const repoRoot = await resolveFallowRepo(input)
 	if (!repoRoot) passStop(harness)
 
-	const base = await comparisonBase(repoRoot)
 	const runner = resolveFallowRunner(repoRoot)
 	if (!runner) {
 		reportSkip('Stop', 'no-runner', NO_RUNNER_EXCERPT)
@@ -396,6 +397,7 @@ async function runStop(input: HookInput, harness: Harness): Promise<never> {
 		await requireMatchingCandidate(repoRoot, 'Stop', 'branch-delta')
 		await requireMatchingCandidate(repoRoot, 'Stop', 'branch-delta', 'HEAD')
 	}
+	const base = await comparisonBase(repoRoot)
 	await guardCommittedBranch(repoRoot, base)
 	if (!(await hasFallowChanges(repoRoot, base))) {
 		reportUnqualifiedBase('Stop', base)

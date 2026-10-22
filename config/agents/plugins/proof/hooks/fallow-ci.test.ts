@@ -792,6 +792,66 @@ describe('fallow-ci persisted content guard', () => {
 		}
 	}
 
+	describe('base-independent publication guards', () => {
+		for (const harness of ['claude', 'codex']) {
+			for (const command of ['GIT_AUTHOR_NAME=x git commit -m next', 'A="two words" B=x git push origin HEAD', 'A=x git -C . commit -m next']) {
+				test(`review guards reject assignment-prefixed publication (${harness}): ${command}`, async () => {
+					const dir = await literalWordRepo()
+					const run = await runFallowHook({hook_event_name: 'PreToolUse', cwd: dir, tool_name: 'Bash', tool_input: {command}}, harness === 'codex' ? ['--harness=codex'] : [])
+					expect(run.exitCode).toBe(2)
+					expect(run.stdout).toBe('')
+					expect(JSON.parse(run.stderr).reason).toBe('unsupported-command')
+					expect(wasInvoked(dir, 'fallow')).toBe(false)
+				})
+			}
+			for (const action of ['commit', 'push']) {
+				for (const setting of ['declared', 'override']) {
+					test(`review guards reject candidate mismatch before invalid ${setting} base (${harness}/${action})`, async () => {
+						const dir = await literalWordRepo()
+						git(dir, 'config', 'workflow.baseBranch', 'missing-base')
+						writeFileSync(join(dir, 'api.js'), 'dirty content\n')
+						const command = action === 'commit' ? 'git commit -m next' : 'git push origin HEAD'
+						const run = await runFallowHook({hook_event_name: 'PreToolUse', cwd: dir, tool_name: 'Bash', tool_input: {command}}, harness === 'codex' ? ['--harness=codex'] : [], setting === 'override' ? {FALLOW_AUDIT_BASE:'missing-override'} : {})
+						expect(run.exitCode).toBe(2)
+						expect(run.stdout).toBe('')
+						expect(JSON.parse(run.stderr).reason).toBe('snapshot-mismatch')
+						expect(run.stderr).toContain('api.js')
+						expect(wasInvoked(dir, 'fallow')).toBe(false)
+					})
+				}
+			}
+			test(`review guards reject unsupported commands before an invalid base (${harness})`, async () => {
+				const dir = await literalWordRepo()
+				git(dir, 'config', 'workflow.baseBranch', 'missing-base')
+				const run = await runFallowHook({hook_event_name: 'PreToolUse', cwd: dir, tool_name: 'Bash', tool_input: {command:'git commit -am next'}}, harness === 'codex' ? ['--harness=codex'] : [])
+				expect(run.exitCode).toBe(2)
+				expect(JSON.parse(run.stderr).reason).toBe('unsupported-command')
+				expect(wasInvoked(dir, 'fallow')).toBe(false)
+			})
+			test(`review guards reject a missing working marker before an invalid Stop base (${harness})`, async () => {
+				const dir = await literalWordRepo()
+				git(dir, 'config', 'workflow.baseBranch', 'missing-base')
+				rmSync(join(dir, '.fallowrc.json'))
+				const run = await runFallowHook({hook_event_name:'Stop',cwd:dir}, harness === 'codex' ? ['--harness=codex'] : [])
+				expect(run.exitCode).toBe(2)
+				expect(JSON.parse(run.stderr).reason).toBe('snapshot-mismatch')
+				expect(run.stderr).toContain('.fallowrc.json')
+				expect(wasInvoked(dir, 'fallow')).toBe(false)
+			})
+			for (const event of ['PreToolUse', 'Stop']) {
+				test(`review guards retain no-runner skip before invalid base (${harness}/${event})`, async () => {
+					const dir = await literalWordRepo()
+					git(dir, 'config', 'workflow.baseBranch', 'missing-base')
+					rmSync(join(dir, 'node_modules/.bin/fallow'))
+					const run = await runFallowHook({hook_event_name:event,cwd:dir,tool_name:'Bash',tool_input:{command:'git commit -am next'}}, harness === 'codex' ? ['--harness=codex'] : [])
+					expect(run.exitCode).toBe(0)
+					expect(run.stdout).toBe(event === 'Stop' && harness === 'codex' ? '{}' : '')
+					expect(JSON.parse(run.stderr).reason).toBe('no-runner')
+				})
+			}
+		}
+	})
+
 	for (const command of ['git log --grep=commit', 'git show HEAD:docs/push.md', 'git --no-pager log --grep=push', 'git -C . log --grep=commit', 'git log --grep=commit && git show HEAD:docs/push.md', "echo 'git commit'; git log --grep=push"]) {
 		test(`read-only publication words do not activate the gate: ${command}`, async () => {
 			const dir = await snapshotRepo()

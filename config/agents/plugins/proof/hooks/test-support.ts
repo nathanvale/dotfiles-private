@@ -106,7 +106,10 @@ if (depth === 0) { console.log('owned stdout'); console.error('owned stderr'); }
 `)
 	const pids = () => [0, 1, 2].flatMap((depth) => {
 		const file = join(dir, `pid-${depth}`)
-		return existsSync(file) ? [Number(readFileSync(file, 'utf8'))] : []
+		if (!existsSync(file)) return []
+		const text = readFileSync(file, 'utf8')
+		const pid = Number(text)
+		return /^[0-9]+$/.test(text) && Number.isSafeInteger(pid) && pid > 0 ? [pid] : []
 	})
 	return {
 		argv: [node, script, dir, '0', String(parentExits), String(detachedChild)],
