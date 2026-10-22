@@ -64,6 +64,7 @@
     "maxCrap": 0
   },
   "entry": [
+    "bin/model-selection-preflight",
     "bin/teams/teams-scraper.ts",
     "config/agents/claude/hooks/**/*.ts",
     "config/agents/plugins/personal/library/ci-testbed/scripts/ci-repro.ts",
