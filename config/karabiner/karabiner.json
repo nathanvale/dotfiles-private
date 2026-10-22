@@ -5,6 +5,67 @@
             "complex_modifications": {
                 "rules": [
                     {
+                        "description": "Raycast Window Management: Hyper+H/J/K/L/M/C/R",
+                        "manipulators": [
+                            {
+                                "from": {
+                                    "key_code": "h",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/left-half'" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "j",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/bottom-half'" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "k",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/top-half'" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "l",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/right-half'" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "m",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/maximize'" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "c",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/center'" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "r",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/reasonable-size'" }],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
                         "description": "Disable Command+M accidental window minimization",
                         "manipulators": [
                             {
@@ -44,32 +105,9 @@
                         ]
                     },
                     {
-                        "description": "Change Hyper + j/k/l to Arrows and Hyper + [ to Escape",
+                        "description": "Hyper + [ to Escape and Hyper + Backslash to Control + Backslash",
+                        "enabled": false,
                         "manipulators": [
-                            {
-                                "from": {
-                                    "key_code": "j",
-                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
-                                },
-                                "to": [{ "key_code": "down_arrow" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "k",
-                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
-                                },
-                                "to": [{ "key_code": "up_arrow" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "l",
-                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
-                                },
-                                "to": [{ "key_code": "right_arrow" }],
-                                "type": "basic"
-                            },
                             {
                                 "from": {
                                     "key_code": "open_bracket",
@@ -95,6 +133,7 @@
                     },
                     {
                         "description": "Change Control + h/j/k/l to Arrows",
+                        "enabled": false,
                         "manipulators": [
                             {
                                 "from": {
@@ -152,7 +191,7 @@
                         ]
                     },
                     {
-                        "description": "HyperFlow - Control+1-7 (primary apps) and Hyper+3-5,S,F,E,C (secondary apps)",
+                        "description": "HyperFlow - Control+1-7 (primary apps) and Hyper+3-5,S,F,E (secondary apps)",
                         "manipulators": [
                             {
                                 "from": {
@@ -244,14 +283,6 @@
                             },
                             {
                                 "from": {
-                                    "key_code": "c",
-                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
-                                },
-                                "to": [{ "shell_command": "~/code/dotfiles/bin/hyperflow C" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
                                     "key_code": "s",
                                     "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
                                 },
@@ -286,6 +317,7 @@
                     },
                     {
                         "description": "SuperWhisper Daily Note: Right Shift + Option + Space",
+                        "enabled": false,
                         "manipulators": [
                             {
                                 "from": {
@@ -299,6 +331,7 @@
                     },
                     {
                         "description": "SuperWhisper Agent Prompt: Right Shift + Option + A",
+                        "enabled": false,
                         "manipulators": [
                             {
                                 "from": {
@@ -312,6 +345,7 @@
                     },
                     {
                         "description": "Stream Deck Pedal F13 -> Right Option for Superwhisper Push-to-Talk",
+                        "enabled": false,
                         "manipulators": [
                             {
                                 "from": { "key_code": "f13" },
@@ -322,6 +356,7 @@
                     },
                     {
                         "description": "Additional shortcuts: Ctrl+Cmd+M Messages, Ctrl+Cmd+C Claude Code, Ctrl+Cmd+D Docker, Ctrl+Cmd+P Podcasts, Ctrl+Cmd+RShift+C ChatGPT",
+                        "enabled": false,
                         "manipulators": [
                             {
                                 "from": {
@@ -361,67 +396,6 @@
                                     "modifiers": { "mandatory": ["control", "command", "right_shift"] }
                                 },
                                 "to": [{ "shell_command": "~/code/dotfiles/bin/hyperflow G" }],
-                                "type": "basic"
-                            }
-                        ]
-                    },
-                    {
-                        "description": "Raycast Window Management: Option+H/J/K/L/M/C/R → deeplinks",
-                        "manipulators": [
-                            {
-                                "from": {
-                                    "key_code": "h",
-                                    "modifiers": { "mandatory": ["option"] }
-                                },
-                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/left-half'" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "j",
-                                    "modifiers": { "mandatory": ["option"] }
-                                },
-                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/bottom-half'" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "k",
-                                    "modifiers": { "mandatory": ["option"] }
-                                },
-                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/top-half'" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "l",
-                                    "modifiers": { "mandatory": ["option"] }
-                                },
-                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/right-half'" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "m",
-                                    "modifiers": { "mandatory": ["option"] }
-                                },
-                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/maximize'" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "c",
-                                    "modifiers": { "mandatory": ["option"] }
-                                },
-                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/center'" }],
-                                "type": "basic"
-                            },
-                            {
-                                "from": {
-                                    "key_code": "r",
-                                    "modifiers": { "mandatory": ["option"] }
-                                },
-                                "to": [{ "shell_command": "open -g 'raycast://extensions/raycast/window-management/reasonable-size'" }],
                                 "type": "basic"
                             }
                         ]

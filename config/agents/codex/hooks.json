@@ -2,23 +2,32 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "spawn_agent|collaborationspawn_agent",
         "hooks": [
           {
-            "type": "command",
             "command": "bash \"$HOME/.claude/hooks/codex/worker-history-gate.sh\"",
-            "timeout": 5
+            "timeout": 5,
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "spawn_agent|collaborationspawn_agent"
       }
     ],
     "SessionStart": [
       {
         "hooks": [
           {
-            "type": "command",
             "command": "bash \"$HOME/.codex/herdr-agent-state.sh\" session",
-            "timeout": 10
+            "timeout": 10,
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash '/Users/nathanvale/.codex/herdr-agent-state.sh' session",
+            "timeout": 10,
+            "type": "command"
           }
         ]
       }
