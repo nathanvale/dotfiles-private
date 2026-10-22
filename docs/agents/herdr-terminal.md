@@ -23,6 +23,24 @@ reviewed payload intact. Board operations use [their own route](herdr-projects.m
   explicit pane or live agent target, without changing focus. On other routes,
   preserve background focus and switch only when Nathan asks to open it.
 
+## Coordinator-managed worktrees
+
+- For direct workers managed by a coordinator, make Herdr the sole checkout
+  creator. Use `worktree create` with explicit `--cwd`, `--base` at the
+  admitted commit SHA, and `--path <repo>/.worktrees/<name>`. Reopen a retained
+  checkout with `worktree open`, supplying both `--cwd` and `--path`.
+- Record Herdr's returned workspace and pane identities, then verify the
+  actual checkout path, branch, HEAD and dirty state before worker writes.
+  Start or continue the worker in that checkout; do not request subsequent
+  Claude worktree isolation for the same assignment. Keep the Claude worktree
+  hook for Claude-managed isolation outside this route.
+- Keep source admission, repository bootstrap, independent review, evidence,
+  finite host-operation grants and publication with their declared owners.
+  Checkout creation proves none of those requirements complete. Preserve
+  existing assignments and retained candidates through their handback.
+- Use [Projects ownership](herdr-projects.md#tasks-and-settings) for native
+  delegated tasks and board records of coordinator-managed workers.
+
 ## Capability and recovery
 
 Keep execution host, inference provider and transport distinct. A live pane
