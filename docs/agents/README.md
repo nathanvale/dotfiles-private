@@ -10,7 +10,10 @@ Scope, admission, and the edit rule:
 | Read this | When |
 |---|---|
 | [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) | Editing or reviewing repository files; running, repairing, or triaging code or tests; setup, profile, or package work |
-| [`herdr-control.md`](herdr-control.md) | Managed project coordination, addressing a coordinator by project/tab name, or inspecting/controlling Herdr from any app |
+| [`herdr-control.md`](herdr-control.md) | Desktop typed or spoken requests to a project coordinator, Herdr Projects tasks, or Herdr terminal control |
+| [`herdr-projects.md`](herdr-projects.md) | Desktop coordinator conversations; board tasks, settings, completion, cleanup or archiving |
+| [`herdr-terminal.md`](herdr-terminal.md) | Sessions, panes, agents, remote targeting or terminal recovery |
+| [`herdr-cast.md`](herdr-cast.md) | Explicit Stage Manager or Cast workflow |
 | [`model-selection.md`](model-selection.md) | Starting, resuming or changing a coordinator or worker in Herdr or Herdr Projects; selecting its model, provider, account or effort |
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
@@ -29,7 +32,8 @@ Scope, admission, and the edit rule:
 | [`startup-prompt-budget.md`](startup-prompt-budget.md) | Trimming startup context, or setting a `disable*` key in `settings.json` |
 | [`architecture-decisions.md`](architecture-decisions.md) | Proposing, accepting, rejecting, deprecating, or superseding an architecture decision |
 | [`determinism-and-steering.md`](determinism-and-steering.md) | Sorting a rule into gate, clause, or delete |
-| [`coding-standards.md`](coding-standards.md) | Authoring, reviewing, running, repairing, or triaging code or tests |
+| [`Shared CODING_STANDARDS.md`](../standards/CODING_STANDARDS.md) | Authoring, reviewing, running, repairing, or triaging code or tests |
+| [`coding-standards.md`](coding-standards.md) | Following an existing link to the legacy coding standards location; use its pointer to the shared standards |
 | [`tart-vm-qualification.md`](tart-vm-qualification.md) | Testing setup or toolchain ownership end to end on a clean macOS VM |
 | [`mac-storage.md`](mac-storage.md) | Investigating or cleaning up Mac storage |
 | [`fallow.md`](fallow.md) | Running or diagnosing the `quality:fallow` gate |
