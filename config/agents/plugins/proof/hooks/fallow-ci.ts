@@ -25,7 +25,6 @@ import {
 } from './common.ts'
 
 const FALLOW_MARKERS = ['.fallowrc.json']
-const GIT_COMMIT_OR_PUSH = /(^\s*|[;&|\n]\s*)git\b[^;&|\n]*?\b(commit|push)\b/
 const PINNED_LAUNCHERS = new Set(['pnpm', 'npx', 'bunx'])
 const EXACT_FALLOW_PIN = /^fallow@\d+\.\d+\.\d+$/
 const TYPE_AWARE_ARGS = ['--type-aware', '--type-aware-require', 'best-effort']
@@ -323,12 +322,31 @@ function evaluate(event: string, scope: string, result: CommandResult): 'pass' |
 	})
 }
 
+/** Identify Git's subcommand, never publication words in a read-only command's arguments. */
+function publicationAction(tokens: string[]): 'commit' | 'push' | null {
+	if (tokens[0] !== 'git') return null
+	const withValue = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+	let index = 1
+	while (tokens[index]?.startsWith('-')) {
+		const option = tokens[index++] ?? ''
+		if (option === '--') break
+		if (withValue.has(option)) index += 1
+	}
+	const action = tokens[index]
+	return action === 'commit' || action === 'push' ? action : null
+}
+
 function matchCommitOrPush(command: string): 'commit' | 'push' | null {
-	const tokens = literalCommandTokens(command)
-	if (tokens?.[0] === 'git' && (tokens[1] === 'commit' || tokens[1] === 'push')) return tokens[1]
-	const match = GIT_COMMIT_OR_PUSH.exec(command)
-	if (!match) return null
-	return match[2] === 'push' ? 'push' : 'commit'
+	// Split shell clauses without splitting quoted arguments. This is detection,
+	// not execution: actual publication still requires the strict literal policy.
+	const clauses = command.match(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^;&|\n])+/g) ?? []
+	for (const clause of clauses) {
+		const words = clause.match(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^\s'"\\])+/g) ?? []
+		const tokens = words.map((word) => literalCommandTokens(word)?.join('') ?? word)
+		const action = publicationAction(tokens)
+		if (action) return action
+	}
+	return null
 }
 
 async function runPreToolUse(input: HookInput): Promise<void> {

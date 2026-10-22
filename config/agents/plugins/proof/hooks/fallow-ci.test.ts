@@ -733,7 +733,28 @@ describe('fallow-ci persisted content guard', () => {
 		})
 	}
 
-	for (const command of ['git commit -am next', 'git commit --only api.js -m next', 'git add api.js && git commit -m next', 'git commit -m next; git push', 'git push --all', 'git push origin other-branch']) {
+	for (const command of ["git 'commit' -m next", "'git' push", 'git "push"']) {
+		test(`quoted publication tokens still activate the content guard: ${command}`, async () => {
+			const dir = await snapshotRepo()
+			writeFileSync(join(dir, 'api.js'), 'dirty working content\n')
+			const run = await preCommand(dir, command)
+			expect(run.exitCode).toBe(2)
+			expect(run.stderr).toContain('snapshot-mismatch')
+		})
+	}
+
+	for (const command of ['git log --grep=commit', 'git show HEAD:docs/push.md', 'git --no-pager log --grep=push', 'git -C . log --grep=commit', 'git log --grep=commit && git show HEAD:docs/push.md', "echo 'git commit'; git log --grep=push"]) {
+		test(`read-only publication words do not activate the gate: ${command}`, async () => {
+			const dir = await snapshotRepo()
+			writeFileSync(join(dir, 'api.js'), 'dirty working content\n')
+			const run = await preCommand(dir, command)
+			expect(run.exitCode).toBe(0)
+			expect(run.stdout).toBe('')
+			expect(run.stderr).toBe('')
+		})
+	}
+
+	for (const command of ['git commit -am next', 'git commit --only api.js -m next', 'git add api.js && git commit -m next', 'git commit -m next; git push', 'git push --all', 'git push origin other-branch', 'git -C . commit -m next', 'git --no-pager push', 'git -C"some path" commit -m next', 'git -cfoo="two words" commit -m next', 'git -Csome\\ path commit -m next', 'git log --grep=commit && git commit -am next']) {
 		test(`blocks unaudited publication content selected by ${command}`, async () => {
 			const dir = await snapshotRepo()
 			const run = await preCommand(dir, command)
