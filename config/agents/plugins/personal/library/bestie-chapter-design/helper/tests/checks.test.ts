@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, put, run, scratch, sha256, sourceRepository } from "./fixtures.ts";
+import { cleanup, production, put, run, scratch, sha256, sourceRepository } from "./fixtures.ts";
 
 afterEach(cleanup);
 
@@ -689,16 +689,19 @@ describe("handback: one current revision whose claims match evidence", () => {
       chapter: "The Big Bad Phone",
     });
     const stories = put(dir, "stories.json", { stories: [{ label: "locked-introduction", ranges: [{ text: nativeIntro }], text: nativeIntro }] });
-    const record = (overrides: Record<string, unknown>) =>
-      put(dir, "handback.json", {
+    const record = (overrides: Record<string, unknown>) => {
+      const native = { path: put(dir, "r16.indd", "indd bytes"), sha256: sha256("indd bytes") };
+      const pdf = { path: put(dir, "r16.pdf", PDF), sha256: sha256(PDF) };
+      return put(dir, "handback.json", {
+        ...production(dir, "review-pdf", native, pdf, 2),
         chapter: "The Big Bad Phone",
         copy: [{ role: "introduction", standing: "pending-placement", storyLabel: "locked-introduction" }],
         copyResolution: resolution,
         nativeStories: stories,
-        native: { path: put(dir, "r16.indd", "indd bytes"), sha256: sha256("indd bytes") },
+        native,
         nextAction: "Nathan reviews page 2 at useful scale.",
         pageCount: 2,
-        pdf: { path: put(dir, "r16.pdf", PDF), sha256: sha256(PDF) },
+        pdf,
         preview: { queuedAt: "2026-10-11T22:10:00+11:00", state: "queued" },
         revision: "r16",
         sourceExtents: [{ extent: "excerpt", key: "example_message_001", page: 2 }],
@@ -706,6 +709,7 @@ describe("handback: one current revision whose claims match evidence", () => {
         writingBeats: { open: [], selected: [{ answer: "option 1", evidence: "i meant 1 not 2", question: "Q9 teaser" }] },
         ...overrides,
       });
+    };
     return { record };
   }
 

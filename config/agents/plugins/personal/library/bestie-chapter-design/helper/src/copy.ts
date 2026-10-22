@@ -139,11 +139,15 @@ function sectionParagraphs(owner: string, heading: string, section?: string): st
     if (/^#{1,6}\s/.test(line)) break;
     body.push(line.trimEnd());
   }
-  return body
-    .join("\n")
+  return copyParagraphs(body.join("\n"));
+}
+
+/** Copy placement normalization: preserve continuation indentation, discard line-end whitespace. */
+export function copyParagraphs(text: string): string[] {
+  return text.split("\n").map(line => line.trimEnd()).join("\n")
     .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim().split("\n").join(" "))
-    .filter((paragraph) => paragraph.length > 0);
+    .map(paragraph => paragraph.trim().split("\n").join(" "))
+    .filter(paragraph => paragraph.length > 0);
 }
 
 function addressedParagraphs(item: BlockAddress): string[] {

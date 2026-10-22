@@ -87,3 +87,77 @@ before and after readbacks; check page moves with `protected --pages`.
   (`question`, `answer`, `evidence`) and `open` (`question`), `ui`
   (`owner`, `released`), optional `preview` (`state` plus the `queuedAt`,
   `openedAt` or `viewedEvidence` that proves it) and `nextAction`.
+
+  Production fields, all required unless marked optional:
+  `gate` (`review-pdf`, `accessible-digital-pdf` or `printer-pdf`);
+  `custody` (`writer`, `soleWriter`, `documentPath` equal to `native.path`,
+  `dirty`, `checkedAt` no earlier than the native or PDF file time and not in the future);
+  `reopen` (`nativeSha256`, `pageCount`, `overset` 0, `linksNormal`);
+  `render` as `[{ renderer, pagesViewed, pdfSha256 }]` with two renderers;
+  `sources` as `[{ owner, commit, sha256 }]`; `art` as `[{ id, path, sha256 }]`;
+  `acceptance` with `visual`, `privacy` and `nathan`, each `{ state, evidence }`
+  where state is `pending` or `accepted` and `nathan` also carries
+  `nativeSha256` and `pdfSha256`; `cases` as `[{ id, state, evidence }]` for
+  `G01` through `G08` (identities from the Bestie InDesign gotchas) with state `failed`, `open` or `qualified`;
+  optional `automation` as `[{ operation, route, state, probe, rollback,
+  checkpoint: { path, sha256 } }]`.
+  `accessible-digital-pdf` adds `accessibility` (`tagged`,
+  `readingOrderChecked`, `altTextChecked`, `title`, `language`, `checker`
+  with `name`, `reportPath`, `reportSha256`). `printer-pdf` adds `printer`:
+  `product` (`vendor` Blurb, `name`, `paper`, `pageMin`, `pageMax`, `trim`,
+  `bleed` by `top`, `bottom`, `outside`, `inside`, `specSource`), `boxes`
+  (`mediaBox`, `trimBox`, `bleedBox`, `pagesVerified`), `colour`
+  (`destinationProfile`, `outputIntent`, `validator` with `name`, `standard`,
+  `reportPath`, `reportSha256`, `pdfSha256`, `errors`), `linkPpi` (`required`,
+  `minimumObserved`, `belowRequired` as `[{ id, ppi, acceptance }]`) and
+  `fonts` (`notEmbedded`). The result lists `cases` and always reports
+  `printAccepted: false`.
+
+## Whole-book readback and contract
+
+`book --native` takes one page-indexed readback from the reopened native
+file; `--contract` takes the production contract values. Paths are absolute.
+
+- Readback: `book`, `revision`, `native` and `pdf` (`path`, `sha256`),
+  `pageCount`, `sourceRevision` (`repository`, `commit`), `art` as
+  `[{ id, path, sha256 }]`, `preflight` (`profile`, `enabled`, `scope`),
+  `styles` (`paragraph`, `character`, `object`, `parent` names in the document),
+  `exportSettings` (name to value, as read back), `fonts` as
+  `[{ name, installed }]`, and `unicode` as
+  `[{ codepoints, font, method, rendered }]` (`method` as in
+  [ink provenance](#ink-provenance)).
+- `template`: `{ path, sha256 }` of the template file the book was built from.
+- `pages`: one per page, `{ page, side, family, parent: { name, transform },
+  margins, columns: { count, gutter }, fields,
+  bleed: { top, bottom, outside, inside }, items }`. `family` is the layout
+  family name, or `exception` for a declared special page; `margins` has the
+  same four edges as `bleed`. `transform` is the six
+  numbers of the parent item's matrix; `fields` maps field name to its value;
+  `items` are `{ label, kind, style, bounds, overrides }` (`bounds` page-relative
+  `[top, left, bottom, right]`) with each local override
+  `{ scope, property, value, style }`.
+- `stories`: `{ key, pages, text, expected, oversetText, hidden }`. `text` is
+  the whole story including overset; `expected` is the selected source text, compared exactly;
+  `hidden` lists reasons text is hidden (opaque field, off page, hidden layer).
+  `oversetText` is required: `""` records an observed zero overset, and an omitted field is refused.
+  `fields` and export-setting values must be strings or finite numbers; `null` and objects are refused.
+  `sourceRevision.commit` must be a hexadecimal commit id.
+- `links`: `{ id, page, path, sha256, expectedSha256, status, effectivePpi,
+  profile }`; `path` is hashed on disk and must equal `expectedSha256`, which
+  must equal the bound `art` entry with the same `id`.
+- Contract: `stories` as `[{ key, pages, owner, sha256 }]` (the full story inventory;
+  `owner` is the repository-relative source file at the bound commit and
+  `sha256` the digest of the expected text, paragraphs joined by `\r`), `template` (`path`, pinned `sha256`), `families` as
+  `[{ name, margins, columns, frames: [{ label, bounds }] }]`, `pageFamilies` as
+  `[{ page, family }]` and `exceptions` as `[{ page, reason }]` (every page
+  exactly once), `pageCount`, `firstPageSide`, `tolerance`, `styles`,
+  `allowedOverrides` (`scope`, `property`, optional `value`), `parents`
+  (`name`, `side`, `transform`), `requiredFields`, `fieldExemptPages`, `bleed`,
+  `links` (`minPpi`, `profiles`, `status`), `requiredFonts`,
+  `preflightProfile`, and `pdf` (`trim` as `[width, height]`, `colourSpaces`
+  as poppler spells them, optional `minImagePpi`, `exportSettings`).
+
+On a pass, `data` is the page-indexed manifest (bindings, per-page parent,
+fields, links and PDF boxes, fonts and images), per-section finding counts,
+the open human reviews and the qualifications not granted. A failure lists
+each finding as `[section] message`.

@@ -145,8 +145,6 @@ config/bead-me-up-scotty/config.json
 config/bead-me-up-scotty/config.json
 
 # Personal plugin executable payloads, built from root-owned workspaces.
-!config/agents/plugins/personal/library/bitbucket/dist/
-!config/agents/plugins/personal/library/bitbucket/dist/*.js
 !config/agents/plugins/personal/library/classic-cinema/dist/
 !config/agents/plugins/personal/library/classic-cinema/dist/*.js
 !config/agents/plugins/personal/library/session-recovery/dist/
