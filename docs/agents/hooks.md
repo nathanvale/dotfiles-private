@@ -56,3 +56,19 @@ Codex re-approval step, not a file change.
   print a notice and allow the command; CI remains the required quality gate.
 - Codex hook installation does not prove trust or activation. Review the hook in
   `/hooks` and verify a fresh-session canary before claiming it is active.
+
+## Codex directory limit and Git enforcement
+
+Codex's Bash hook input omits a shell call's separate `workdir`; its `cwd`
+identifies the session. The native agent gate can therefore audit the session
+checkout instead of the checkout receiving a commit. See
+[the upstream report](https://github.com/openai/codex/issues/33986).
+Use an explicit `git -C /absolute/worktree ...` command for cross-worktree
+publication so the native script can see its target.
+
+Keep native Fallow auditing in each repository's Git hook and CI. Dotfiles runs
+its pinned local audit after lint-staged in `.husky/pre-commit`, using
+`origin/main`. The SDK uses its own pinned audit with `origin/staging` and the
+PR's recorded destination commit in Bitbucket CI. Git runs its hook in the
+actual checkout, independently of the agent session. Agent hooks remain a
+feedback layer; they do not replace these enforcement points.
