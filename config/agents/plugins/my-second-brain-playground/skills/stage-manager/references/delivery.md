@@ -22,6 +22,10 @@ Use the project's adopted task, knowledge and execution owners.
 - On accepting a Handback, advance it to review, Repair or authorized
   integration. If work must wait, record the next owner and the condition that
   lets it resume in the existing task.
+- At dispatch, reassignment and Handback, keep the worker visibly associated
+  with its current project and assignment in the existing execution labels
+  and owning task. Refresh assignment names when work changes; leave status
+  reporting with the runtime owner.
 - Before dispatch, check the existing task, active worker and current PR for
   overlapping work. Continue with the existing owner, or state why a separate
   assignment is needed.
