@@ -47,7 +47,7 @@
 		"test:hooks": "bun test config/agents/claude/hooks",
 		"test:browser-login": "bun test config/agents/plugins/personal/library/one-password/tests",
 		"test:plugins": "bun run tooling/plugin-tests.ts",
-		"test:quality:repository": "bun test tooling/repository-quality/workspace-manifest.test.ts tooling/fallow-runtime-audit.test.ts tooling/repository-quality/plugin-tests.test.ts tooling/repository-quality/plugin-test-shards.test.ts tooling/repository-quality/plugin-preparation.test.ts tooling/plugin-preparation.test.ts tooling/repository-quality/typescript-ownership.test.ts tooling/repository-quality/personal-plugin.test.ts",
+		"test:quality:repository": "bun test tooling/repository-quality/native-git-hook.test.ts tooling/repository-quality/workspace-manifest.test.ts tooling/fallow-runtime-audit.test.ts tooling/repository-quality/plugin-tests.test.ts tooling/repository-quality/plugin-test-shards.test.ts tooling/repository-quality/plugin-preparation.test.ts tooling/plugin-preparation.test.ts tooling/repository-quality/typescript-ownership.test.ts tooling/repository-quality/personal-plugin.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json && bun run --filter '*' typecheck && bun run typecheck:browser-login",
 		"typecheck:browser-login": "tsc --ignoreConfig --noEmit --allowJs --checkJs --module nodenext --moduleResolution nodenext --target es2022 --types bun --skipLibCheck config/agents/plugins/personal/library/one-password/scripts/browser-login.mjs",
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows",
