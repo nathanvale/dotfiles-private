@@ -6,7 +6,7 @@ quality hooks for Claude Code and Codex: `biome-ci`, `fallow-ci`, and
 matching tool locally, so the plugin can be enabled globally without breaking
 a repository that has no Biome, Fallow, or TypeScript installed.
 
-The package identity is `proof` at version `0.2.2`. Keep that identity and
+The package identity is `proof` at version `0.2.3`. Keep that identity and
 version aligned across `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
 `package.json`, and the `personal` marketplace entries in
 `config/agents/plugins/.claude-plugin/marketplace.json` and
@@ -80,16 +80,21 @@ formats, so Proof does not maintain a separate suffix filter.
 Fallow analyzes files in the working tree. A commit writes the staged index,
 and a push publishes committed content. Before a literal commit, Proof blocks
 when any tracked or untracked file differs from the index.
-Before a push, it requires that content to match HEAD. Stop performs the same
-HEAD comparison whenever the branch has committed changes, before its
-working-tree delta shortcut. An unstaged revert therefore cannot conceal
-committed branch findings.
+Before a push, it requires that content to match HEAD. At Stop, if committed
+branch changes differ from the working tree, Proof first audits an existing
+clean Git worktree at the same HEAD with its installed local Fallow binary.
+It verifies both HEAD identities and snapshot cleanliness before and after
+that audit, then audits the session working tree separately. An unstaged
+revert therefore cannot conceal committed findings, and unrelated runtime
+files need not be staged or removed.
 
-This is a conservative block with `reason: snapshot-mismatch`, not a Fallow
-finding or operational skip. It also blocks legitimate partial staging and
-unrelated documentation dirt. Align tracked and untracked files with the
-candidate before retrying; Proof does not create an index snapshot or change
-Git content on your behalf.
+Without a clean initialized checkout at the same HEAD, Stop retains the
+conservative `snapshot-mismatch` block. Keep the task worktree clean after
+committing, or align the session files with HEAD before retrying. Proof never
+creates checkouts or changes Git content. A checkout that changes during the
+audit blocks with `snapshot-changed`. Commit and push checks still block
+partial staging and unrelated untracked content because those commands must
+publish the exact audited files.
 
 The publication gate supports a single direct `git commit` with message/amend
 flags, and `git push` for the current HEAD. Both forms accept one absolute

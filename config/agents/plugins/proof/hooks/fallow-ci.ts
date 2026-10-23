@@ -290,10 +290,43 @@ async function requireSupportedCommand(repoRoot: string, publication: Publicatio
 		'Configured Git push selection may publish a ref other than the audited HEAD. Use a single explicit git push <remote> HEAD:<branch>.')
 }
 
+/** Reuse an initialized checkout of exactly HEAD; never create or modify Git content. */
+async function cleanHeadWorktree(repoRoot: string, head: string): Promise<string | null> {
+	const listed = await gitOutput(repoRoot, ['worktree', 'list', '--porcelain', '-z'])
+	if (listed.exitCode !== 0) throw new Error('Cannot enumerate existing Git worktrees')
+	for (const record of listed.stdout.split('\0\0')) {
+		const fields = record.split('\0')
+		const root = fields.find((field) => field.startsWith('worktree '))?.slice(9)
+		if (!root || root === repoRoot || !fields.includes(`HEAD ${head}`)) continue
+		if (!existsSync(join(root, 'node_modules/.bin/fallow'))) continue
+		if ((await candidateDifference(root, 'HEAD')).length === 0 && await commitForRef(root, 'HEAD') === head) return root
+	}
+	return null
+}
+
+async function requireStableHead(repoRoot: string, snapshot: string, head: string): Promise<void> {
+	const files = await candidateDifference(snapshot, 'HEAD')
+	const heads = await Promise.all([commitForRef(repoRoot, 'HEAD'), commitForRef(snapshot, 'HEAD')])
+	if (files.length > 0 || heads.some((current) => current !== head))
+		blockCandidate('Stop', 'branch-delta', 'snapshot-changed',
+			'The committed checkout changed during its Fallow audit. Restore a clean checkout at the session HEAD and retry.', files)
+}
+
 async function guardCommittedBranch(repoRoot: string, base: AuditBase): Promise<void> {
-	const committed = await gitOutput(repoRoot, ['diff', '--name-only', '-z', base.commit, 'HEAD', '--'])
+	const head = await commitForRef(repoRoot, 'HEAD')
+	if (!head) throw new Error('Cannot resolve the committed audit candidate')
+	const committed = await gitOutput(repoRoot, ['diff', '--name-only', '-z', base.commit, head, '--'])
 	if (committed.exitCode !== 0) throw new Error('Cannot enumerate committed branch changes')
-	if (committed.stdout.length > 0) await requireMatchingCandidate(repoRoot, 'Stop', 'branch-delta', 'HEAD')
+	if (!committed.stdout || (await candidateDifference(repoRoot, 'HEAD')).length === 0) return
+	const snapshot = await cleanHeadWorktree(repoRoot, head)
+	if (!snapshot) {
+		await requireMatchingCandidate(repoRoot, 'Stop', 'branch-delta', 'HEAD')
+		return
+	}
+	await requireStableHead(repoRoot, snapshot, head)
+	const result = await runFallowAudit([join(snapshot, 'node_modules/.bin/fallow')], snapshot, ['--base', base.commit])
+	await requireStableHead(repoRoot, snapshot, head)
+	evaluate('Stop', 'committed-branch', result)
 }
 
 function reportUnqualifiedBase(event: string, base: AuditBase): void {
