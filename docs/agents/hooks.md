@@ -12,12 +12,13 @@ rule must fire whether or not the agent recalls it.
 
 - Codex hashes each hook command and stores a `trusted_hash` in
   `[hooks.state.*]` in `config.toml`.
-- Change the script and the hash changes. The hook becomes `Modified` and stops
-  running until approved again.
+- Changed hook declarations can become `Modified` and stop running until
+  approved again. Inspect `/hooks` after a release; a source file edit alone
+  does not prove trust changed or the hook ran.
 - An unapproved hook is `Untrusted` and does not run. Silence is the failure
   mode, not an error.
-- Claude Code has no equivalent gate. A hook edited in dotfiles takes effect
-  immediately there, and silently stops on Codex.
+- Claude Code has no equivalent trust gate. Verify the effective installed
+  source and a fresh-session canary in each harness.
 
 This asymmetry decides how a shared hook is deployed. Treat a hook edit as a
 Codex re-approval step, not a file change.
@@ -49,6 +50,9 @@ Codex re-approval step, not a file change.
 - Fallow owns its native PreToolUse hooks. Install through the pinned Fallow CLI's
   `hooks install --target agent --agent claude --user` and equivalent `codex`
   command. Preview with `--dry-run`; preserve unrelated hook declarations.
-  Follow repository policy for the comparison base. Native warnings remain advisory.
+  Dotfiles maps both native script paths to the unchanged shared generated source.
+  Run `./setup.sh symlinks` after updating it. Follow repository policy for the
+  comparison base. Native warnings remain advisory. Native runtime/setup errors
+  print a notice and allow the command; CI remains the required quality gate.
 - Codex hook installation does not prove trust or activation. Review the hook in
   `/hooks` and verify a fresh-session canary before claiming it is active.

@@ -1,6 +1,6 @@
 {
   "name": "proof",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "Self-gating Biome and TypeScript quality hooks for repositories carrying the tools locally.",
   "author": {
     "name": "Nathan Vale"

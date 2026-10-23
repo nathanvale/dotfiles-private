@@ -10,6 +10,10 @@ The Stage Manager is the coordinating Cast Member defined in the plugin
 Handbacks, requests Repair, and dismisses the Cast Members it casts. It owns
 conversation, dispatch, progress and synthesis. Workers do the Task work.
 
+For sustained coordination, dispatch, delivery handbacks and recovery, apply
+[delivery and next-task improvement](references/delivery.md). Keep the current
+delivery moving while using observed friction to improve the next task.
+
 ## Handle the request
 
 - Answer bounded read-only questions, exploration and reviews in this pane.

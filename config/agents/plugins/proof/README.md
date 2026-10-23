@@ -1,6 +1,6 @@
 # Proof
 
-Proof 0.2.2 provides Biome and TypeScript quality hooks for Claude Code and
+Proof 0.2.4 provides Biome and TypeScript quality hooks for Claude Code and
 Codex. Each hook runs only in repositories carrying its tool locally.
 
 Fallow uses its upstream-managed hooks instead. Install those with the pinned
@@ -87,24 +87,16 @@ Codex, user scope:
 codex plugin add proof@personal --json
 ```
 
-To refresh the installed source after a hook edit, remove and re-add rather
-than relying on an upgrade command that does not refresh a local marketplace
-source:
+For a local marketplace, rerun `codex plugin add proof@personal --json` to
+refresh the installed payload. Verify its returned path against the released
+source with the shared plugin verifier before claiming the update is complete.
 
-```sh
-codex plugin remove proof@personal --json
-codex plugin add proof@personal --json
-```
+### Codex hook trust
 
-### Codex `trusted_hash` caveat
-
-Codex hashes each configured hook command and stores the result as a
-`trusted_hash` in `[hooks.state.*]` in `config.toml`. Editing any hook
-source changes that hash, so the hook becomes `Modified` and stops running
-silently until it is trusted again. There is no equivalent gate in Claude
-Code: a hook edit takes effect there immediately. Every source edit to this
-plugin's hooks needs a Codex re-approval step, or the affected hook silently
-stops firing on Codex while continuing to run on Claude Code.
+After updating, inspect `/hooks` in a fresh Codex session. Changed declarations
+or hook positions can need approval again. Confirm the native Fallow gate and
+Proof's Biome and TypeScript hooks are enabled and trusted, then run a canary.
+Installation alone does not prove activation.
 
 ## Rollback
 

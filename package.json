@@ -31,7 +31,8 @@
 	"scripts": {
 		"biome:check": "biome check --diagnostic-level=error .",
 		"check": "bun run check:core && bun run --silent test:plugins",
-		"check:core": "git diff --check && bun run --silent check:plugin-shards && bun run biome:check && bun run typecheck && bun run test && bun run test:hooks && bun run test:browser-login && bun run test:quality:repository && bun run --silent quality:fallow && bun run --silent quality:fallow:runtime",
+		"check:core": "git diff --check && bun run test:model-selection && bun run --silent check:plugin-shards && bun run biome:check && bun run typecheck && bun run test && bun run test:hooks && bun run test:browser-login && bun run test:quality:repository && bun run --silent quality:fallow && bun run --silent quality:fallow:runtime",
+		"test:model-selection": "python3 -m unittest discover -s bin/test -p test_model_selection_preflight.py -v",
 		"check:plugin-shards": "bun run tooling/plugin-test-shards.ts",
 		"check:write": "biome check --write .",
 		"lint": "biome lint --diagnostic-level=error .",

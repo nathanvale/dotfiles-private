@@ -134,9 +134,17 @@
   exists.
 
 - Use `ghh` for GitHub CLI work.
-- Desktop typed or spoken requests to a project coordinator; Herdr Projects
-  tasks, completion or settings; or Herdr sessions, workspaces, tabs, panes or
-  agents: read `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
+- Herdr CLI or plugin installation or updates; desktop typed or spoken requests
+  to a project coordinator; Herdr Projects tasks, completion or settings; or
+  Herdr sessions, workspaces, tabs, panes or agents: read
+  `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
+- Treat Herdr Projects as third-party software, not our maintenance responsibility.
+  Use supported precompiled releases and documented interfaces. Never modify its
+  source, build custom fixes, or open or submit pull requests for it.
+- Report Herdr Projects defects only through issues in its verified upstream
+  repository, backed by a reproducible failure, exact version and environment,
+  expected versus actual behavior, and sanitized evidence. Use a documented
+  workaround or report the blocker; keep our project focused on its delivery goal.
 - Home network or WireGuard access to the Mini, or cross-device previews of
   local apps, Storybook or Herdr review pages: read
   `$HOME/code/dotfiles/docs/agents/browser-automation.md#private-previews` before
