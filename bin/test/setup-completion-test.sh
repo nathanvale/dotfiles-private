@@ -168,16 +168,19 @@ run_setup() {
   set +e
   if [[ "$extra_profile" == __EMPTY__ ]]; then
     env -i HOME="$FIXTURE_HOME" PATH="/usr/bin:/bin" \
+      HERDR_PROJECTS_HOME="${TEST_HERDR_PROJECTS_HOME:-}" HERDR_PROJECTS_CONFIG_DIR="${TEST_HERDR_PROJECTS_CONFIG_DIR:-}" \
       RECORD_DIR="$RECORD_DIR" DOTFILES_PROFILE='' \
       VERIFY_MODE="$verify_mode" "$FIXTURE_DOTFILES/setup.sh" "${setup_args[@]}" \
       >"$RUN_STDOUT" 2>"$RUN_STDERR"
   elif [[ -n "$extra_profile" ]]; then
     env -i HOME="$FIXTURE_HOME" PATH="/usr/bin:/bin" \
+      HERDR_PROJECTS_HOME="${TEST_HERDR_PROJECTS_HOME:-}" HERDR_PROJECTS_CONFIG_DIR="${TEST_HERDR_PROJECTS_CONFIG_DIR:-}" \
       RECORD_DIR="$RECORD_DIR" DOTFILES_PROFILE="$extra_profile" \
       VERIFY_MODE="$verify_mode" "$FIXTURE_DOTFILES/setup.sh" "${setup_args[@]}" \
       >"$RUN_STDOUT" 2>"$RUN_STDERR"
   else
     env -i HOME="$FIXTURE_HOME" PATH="/usr/bin:/bin" \
+      HERDR_PROJECTS_HOME="${TEST_HERDR_PROJECTS_HOME:-}" HERDR_PROJECTS_CONFIG_DIR="${TEST_HERDR_PROJECTS_CONFIG_DIR:-}" \
       RECORD_DIR="$RECORD_DIR" VERIFY_MODE="$verify_mode" \
       "$FIXTURE_DOTFILES/setup.sh" "${setup_args[@]}" \
       >"$RUN_STDOUT" 2>"$RUN_STDERR"
@@ -196,6 +199,7 @@ run_setup_relative() {
   (
     cd "$FIXTURE_DOTFILES"
     env -i HOME="$FIXTURE_HOME" PATH="/usr/bin:/bin" \
+      HERDR_PROJECTS_HOME="${TEST_HERDR_PROJECTS_HOME:-}" HERDR_PROJECTS_CONFIG_DIR="${TEST_HERDR_PROJECTS_CONFIG_DIR:-}" \
       RECORD_DIR="$RECORD_DIR" VERIFY_MODE="$verify_mode" \
       ./setup.sh "$@"
   ) >"$RUN_STDOUT" 2>"$RUN_STDERR"
@@ -446,10 +450,13 @@ actual_verifier_home="$TEST_ROOT/actual-verifier-home"
 actual_verifier_dotfiles="$TEST_ROOT/actual-verifier-dotfiles"
 mkdir -p "$actual_verifier_dotfiles"
 cp "$REPO_ROOT/verify_install.sh" "$actual_verifier_dotfiles/verify_install.sh"
+mkdir -p "$actual_verifier_dotfiles/bin/dotfiles" "$actual_verifier_dotfiles/config/herdr"
+cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$actual_verifier_dotfiles/bin/dotfiles/"
+cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$actual_verifier_dotfiles/config/herdr/"
 chmod +x "$actual_verifier_dotfiles/verify_install.sh"
 set +e
 env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" \
-  DOTFILES_PROFILE=desktop "$actual_verifier_dotfiles/verify_install.sh" --machine-summary \
+  DOTFILES_PROFILE=desktop "$actual_verifier_dotfiles/verify_install.sh" --verbose --machine-summary \
   >"$TEST_ROOT/actual-verifier-stdout" 2>"$TEST_ROOT/actual-verifier-stderr"
 actual_verifier_exit=$?
 set -e
@@ -461,6 +468,27 @@ assert_file_matches "$TEST_ROOT/actual-verifier-stdout" \
 actual_summary_count="$(grep -Ec '^DOTFILES_VERIFY_SUMMARY ' "$TEST_ROOT/actual-verifier-stdout")"
 assert_equals "$actual_summary_count" 1 \
   'real verifier emits exactly one machine summary'
+
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✗ Herdr coordinator default' \
+  'real verifier reports the missing coordinator default'
+assert_file_absent "$actual_verifier_home/.herdr-projects/settings/config.json" \
+  'real verifier does not install a missing coordinator default'
+env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" /usr/bin/python3 \
+  "$actual_verifier_dotfiles/bin/dotfiles/herdr-defaults.py" >"$TEST_ROOT/default-install-output"
+cp "$actual_verifier_home/.herdr-projects/settings/config.json" "$TEST_ROOT/verified-settings-before"
+env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" DOTFILES_PROFILE=desktop \
+  "$actual_verifier_dotfiles/verify_install.sh" --verbose --machine-summary \
+  >"$TEST_ROOT/actual-verifier-stdout" 2>"$TEST_ROOT/actual-verifier-stderr" || true
+/usr/bin/python3 - "$TEST_ROOT/actual-verifier-stdout" <<'PYTEST'
+import re, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+p.write_text(re.sub(r"\x1b\[[0-9;]*m", "", p.read_text()))
+PYTEST
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✓ Herdr coordinator default' \
+  'real verifier reports the installed coordinator default'
+cmp -s "$TEST_ROOT/verified-settings-before" "$actual_verifier_home/.herdr-projects/settings/config.json" || fail 'verification changed settings'
+pass 'real verifier leaves coordinator settings unchanged'
 
 # ---------------------------------------------------------------------------
 # The source-checkout activation boundary remains enforced by the public
@@ -539,7 +567,73 @@ if HOME="$FIXTURE_HOME" /usr/bin/python3 "$FIXTURE_DOTFILES/bin/dotfiles/herdr-d
 fi
 pass 'check rejects a missing default without applying it'
 
-expected_assertions=83
+# Strict JSON refusal preserves every malformed input byte.
+for invalid_constant in NaN Infinity -Infinity; do
+  printf '{"unrelated":%s}\n' "$invalid_constant" >"$FIXTURE_HOME/.herdr-projects/settings/config.json"
+  cp "$FIXTURE_HOME/.herdr-projects/settings/config.json" "$TEST_ROOT/settings-before"
+  run_setup '' pass --server --start-phase 6
+  [[ "$RUN_EXIT" -ne 0 ]] || fail "$invalid_constant must refuse setup"
+  cmp -s "$TEST_ROOT/settings-before" "$FIXTURE_HOME/.herdr-projects/settings/config.json" || fail "$invalid_constant settings changed"
+  pass "setup refuses $invalid_constant without rewriting settings"
+done
+
+# Exercise every guarded redirected path through the unchanged public setup.
+for redirected in config.json settings .herdr-projects; do
+  rm -rf "$FIXTURE_HOME/.herdr-projects" "$TEST_ROOT/foreign-settings"
+  mkdir -p "$FIXTURE_HOME/.herdr-projects/settings" "$TEST_ROOT/foreign-settings/settings"
+  printf '%s\n' '{"sentinel":"foreign"}' >"$TEST_ROOT/foreign-settings/config.json"
+  cp "$TEST_ROOT/foreign-settings/config.json" "$TEST_ROOT/foreign-settings/settings/config.json"
+  case "$redirected" in
+    config.json) link="$FIXTURE_HOME/.herdr-projects/settings/config.json"; destination="$TEST_ROOT/foreign-settings/config.json" ;;
+    settings) link="$FIXTURE_HOME/.herdr-projects/settings"; destination="$TEST_ROOT/foreign-settings"; rmdir "$link" ;;
+    .herdr-projects) link="$FIXTURE_HOME/.herdr-projects"; destination="$TEST_ROOT/foreign-settings"; rmdir "$link/settings" "$link" ;;
+  esac
+  ln -s "$destination" "$link"
+  run_setup '' pass --server --start-phase 6
+  [[ "$RUN_EXIT" -ne 0 && -L "$link" ]] || fail "redirected $redirected must refuse and preserve link"
+  /usr/bin/python3 - "$TEST_ROOT/foreign-settings" <<'PYTEST'
+import json, sys
+from pathlib import Path
+for relative in ["config.json", "settings/config.json"]:
+    p = Path(sys.argv[1]) / relative
+    assert p.is_file()
+    assert p.read_text() == '{"sentinel":"foreign"}\n'
+PYTEST
+  pass "setup refuses redirected $redirected and preserves foreign bytes and link"
+done
+rm -rf "$FIXTURE_HOME/.herdr-projects"
+mkdir -p "$FIXTURE_HOME/.herdr-projects/settings"
+printf '%s\n' '{"sentinel":"default-location"}' >"$FIXTURE_HOME/.herdr-projects/settings/config.json"
+cp "$FIXTURE_HOME/.herdr-projects/settings/config.json" "$TEST_ROOT/default-settings-before"
+for location_case in home config empty; do
+  TEST_HERDR_PROJECTS_HOME="$TEST_ROOT/board-$location_case"
+  TEST_HERDR_PROJECTS_CONFIG_DIR=''
+  selected="$TEST_HERDR_PROJECTS_HOME/settings/config.json"
+  if [[ "$location_case" == config ]]; then
+    TEST_HERDR_PROJECTS_CONFIG_DIR="$TEST_ROOT/settings-override"
+    selected="$TEST_HERDR_PROJECTS_CONFIG_DIR/config.json"
+  elif [[ "$location_case" == empty ]]; then
+    TEST_HERDR_PROJECTS_HOME=''
+    selected="$FIXTURE_HOME/.herdr-projects/settings/config.json"
+  fi
+  run_setup '' pass --server --start-phase 6
+  [[ "$RUN_EXIT" -eq 0 ]] || fail "$location_case settings location setup failed"
+  env -i HOME="$FIXTURE_HOME" HERDR_PROJECTS_HOME="$TEST_HERDR_PROJECTS_HOME" \
+    HERDR_PROJECTS_CONFIG_DIR="$TEST_HERDR_PROJECTS_CONFIG_DIR" PATH="/usr/bin:/bin" \
+    /usr/bin/python3 "$FIXTURE_DOTFILES/bin/dotfiles/herdr-defaults.py" --check >"$RUN_STDOUT"
+  /usr/bin/python3 - "$selected" <<'PYTEST'
+import json, sys
+assert "$HOME/code/dotfiles/" in json.load(open(sys.argv[1]))["coordinator"]["instructions"]
+PYTEST
+  if [[ "$location_case" != empty ]]; then
+    cmp -s "$TEST_ROOT/default-settings-before" "$FIXTURE_HOME/.herdr-projects/settings/config.json" || fail 'unselected default settings changed'
+  fi
+  pass "setup and checking respect $location_case location, preserving unselected settings"
+done
+TEST_HERDR_PROJECTS_HOME=''
+TEST_HERDR_PROJECTS_CONFIG_DIR=''
+
+expected_assertions=96
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

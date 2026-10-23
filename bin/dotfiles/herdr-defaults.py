@@ -8,18 +8,24 @@ import sys
 import tempfile
 
 
+def reject_constant(value):
+    raise ValueError(f"Non-standard JSON constant: {value}")
+
+
 def main():
     if sys.argv[1:] not in ([], ["--check"]):
         raise ValueError("Usage: herdr-defaults.py [--check]")
     check = sys.argv[1:] == ["--check"]
     root = Path(__file__).resolve().parents[2]
     default = (root / "config/herdr/coordinator-instructions.txt").read_text().strip()
-    target = Path.home() / ".herdr-projects/settings/config.json"
+    home = Path(os.environ.get("HERDR_PROJECTS_HOME") or Path.home() / ".herdr-projects")
+    config = Path(os.environ.get("HERDR_PROJECTS_CONFIG_DIR") or home / "settings")
+    target = config / "config.json"
     for path in (target, target.parent, target.parent.parent):
         if path.is_symlink():
             raise ValueError("Herdr settings must not redirect through a symlink")
     original = target.read_bytes() if target.exists() else None
-    settings = json.loads(original) if original is not None else {}
+    settings = json.loads(original, parse_constant=reject_constant) if original is not None else {}
     if not isinstance(settings, dict):
         raise ValueError("Herdr settings must be a JSON object")
     coordinator = settings.setdefault("coordinator", {})
@@ -38,7 +44,7 @@ def main():
     descriptor, staged = tempfile.mkstemp(prefix=".coordinator-default-", dir=target.parent)
     try:
         with os.fdopen(descriptor, "w") as output:
-            json.dump(settings, output, indent=2)
+            json.dump(settings, output, indent=2, allow_nan=False)
             output.write("\n")
         if (target.read_bytes() if target.exists() else None) != original:
             raise ValueError("Herdr settings changed during setup; retry when settings are idle")

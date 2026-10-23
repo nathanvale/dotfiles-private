@@ -17,7 +17,8 @@ remain in force.
 Configuration setup (`./setup.sh symlinks` or full setup) installs
 [the portable coordinator pointer](../../config/herdr/coordinator-instructions.txt)
 into the user-level `coordinator.instructions`. It adds to existing instructions;
-project additions and other settings stay intact. All existing and future
+project additions and other settings stay intact. Herdr's `HERDR_PROJECTS_HOME`
+and `HERDR_PROJECTS_CONFIG_DIR` overrides select the settings location. All existing and future
 coordinators inherit it, even when Herdr Projects is installed after setup.
 `verify_install.sh` checks the default. Fresh chats load it at startup; ask a
 running coordinator to read the policy without restarting active work.
