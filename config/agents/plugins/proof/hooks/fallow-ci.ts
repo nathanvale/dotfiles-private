@@ -8,7 +8,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import {
 	blockWithEnvelope,
 	createCommandScope,
@@ -84,8 +84,8 @@ function collectFindings(report: FallowAuditReport): FailureEntry[] {
 }
 
 /** Activate when the marker exists in the working tree, index or committed HEAD. */
-async function resolveFallowRepo(input: HookInput): Promise<string | null> {
-	const repoRoot = await resolveRepoRoot(resolveCwd(input), runCommand)
+async function resolveFallowRepo(input: HookInput, cwd = resolveCwd(input)): Promise<string | null> {
+	const repoRoot = await resolveRepoRoot(cwd, runCommand)
 	if (commandScope.cancelled) throw new Error('Command scope was cancelled')
 	if (!repoRoot) return null
 	if (FALLOW_MARKERS.some((marker) => existsSync(join(repoRoot, marker)))) return repoRoot
@@ -262,13 +262,26 @@ function supportedPushArgs(args: string[]): boolean {
 	return positional.length === 2 && /^HEAD(?::[^\s:]+)?$/.test(positional[1] ?? '')
 }
 
-async function requireSupportedCommand(repoRoot: string, command: string, action: 'commit' | 'push'): Promise<void> {
+interface PublicationCommand {
+	cwd: string
+	args: string[]
+}
+
+/** Only an absolute, single -C is independent of the harness's session cwd. */
+function publicationCommand(input: HookInput, command: string, action: 'commit' | 'push'): PublicationCommand | null {
 	const tokens = literalCommandTokens(command)
-	const args = tokens?.slice(2) ?? []
-	const direct = tokens?.[0] === 'git' && tokens[1] === action
-	const supported = action === 'commit' ? supportedCommitArgs(args) : supportedPushArgs(args)
-	if (!direct || !supported) blockCandidate('PreToolUse', action, 'unsupported-command',
-		'Run a single direct git commit with message/amend flags, or git push with the current HEAD ref. Compound commands, alternate commit content modes, Git prefix options and other push refs cannot be qualified. Stage changes in a separate tool call, then retry.')
+	if (tokens?.[0] !== 'git') return null
+	if (tokens[1] === action) return { cwd: resolveCwd(input), args: tokens.slice(2) }
+	const target = tokens[2]
+	if (tokens[1] !== '-C' || !target || !isAbsolute(target) || tokens[3] !== action) return null
+	return { cwd: target, args: tokens.slice(4) }
+}
+
+async function requireSupportedCommand(repoRoot: string, publication: PublicationCommand | null, action: 'commit' | 'push'): Promise<void> {
+	const args = publication?.args ?? []
+	const supported = publication && (action === 'commit' ? supportedCommitArgs(args) : supportedPushArgs(args))
+	if (!supported) blockCandidate('PreToolUse', action, 'unsupported-command',
+		'Run a single git commit or git push, optionally with one absolute git -C <directory>. Compound commands, other Git prefix options, alternate commit content modes and other push refs cannot be qualified. Stage changes separately, then retry.')
 	if (action !== 'push' || args.filter((arg) => !arg.startsWith('-')).length === 2) return
 	const configured = await gitOutput(repoRoot, ['config', '--get-regexp', '^(remote\\..*\\.(push|mirror)|push\\.default)$'])
 	if (configured.exitCode > 1) throw new Error('Cannot read configured Git push selection')
@@ -365,7 +378,8 @@ async function runPreToolUse(input: HookInput): Promise<void> {
 	const action = matchCommitOrPush(command)
 	if (!action) process.exit(0)
 
-	const repoRoot = await resolveFallowRepo(input)
+	const publication = publicationCommand(input, command, action)
+	const repoRoot = await resolveFallowRepo(input, publication?.cwd)
 	if (!repoRoot) process.exit(0)
 	const runner = resolveFallowRunner(repoRoot)
 	if (!runner) {
@@ -373,7 +387,7 @@ async function runPreToolUse(input: HookInput): Promise<void> {
 		process.exit(0)
 	}
 
-	await requireSupportedCommand(repoRoot, command, action)
+	await requireSupportedCommand(repoRoot, publication, action)
 	await requireMatchingCandidate(repoRoot, 'PreToolUse', action, action === 'push' ? 'HEAD' : undefined)
 	const base = await comparisonBase(repoRoot)
 	const result = await runFallowAudit(runner, repoRoot, ['--base', base.commit])

@@ -665,6 +665,24 @@ describe('fallow-ci persisted content guard', () => {
 		return runFallowHook({ hook_event_name: 'PreToolUse', cwd: dir, tool_name: 'Bash', tool_input: { command } }, ['--harness=codex'])
 	}
 
+	for (const state of ['clean', 'finding', 'mismatch']) {
+		test(`explicit absolute -C audits the target rather than the dirty session checkout: ${state}`, async () => {
+			const session = await snapshotRepo()
+			writeFileSync(join(session, 'unrelated-runtime.json'), '{}')
+			const target = await snapshotRepo()
+			if (state !== 'clean') {
+				writeFileSync(join(target, 'api.js'), 'export const used = 1; export const newlyUnused = 2;\n')
+				git(target, 'add', 'api.js')
+				if (state === 'mismatch') writeFileSync(join(target, 'api.js'), 'export const used = 1;\n')
+			}
+			const run = await preCommand(session, `git -C "${target}" commit -m next`)
+			expect(run.exitCode).toBe(state === 'clean' ? 0 : 2)
+			if (state === 'finding') expect(run.stderr).toContain('newlyUnused')
+			if (state === 'mismatch') expect(run.stderr).toContain('snapshot-mismatch')
+			expect(run.stderr).not.toContain('unrelated-runtime.json')
+		})
+	}
+
 	test('blocks a staged unused export hidden by a clean unstaged overwrite before literal commit', async () => {
 		const dir = await snapshotRepo()
 		writeFileSync(join(dir, 'api.js'), 'export const used = 1; export const newlyUnused = 2;\n')

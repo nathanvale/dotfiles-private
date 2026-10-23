@@ -145,8 +145,9 @@
   repository, backed by a reproducible failure, exact version and environment,
   expected versus actual behavior, and sanitized evidence. Use a documented
   workaround or report the blocker; keep our project focused on its delivery goal.
-- Home network or WireGuard access to the Mini, or cross-device previews of
-  local apps, Storybook or Herdr review pages: read
+- Ovis or Home Assistant browser access, home network or WireGuard access to
+  the Mini, or cross-device previews of local apps, Storybook or Herdr review
+  pages: read
   `$HOME/code/dotfiles/docs/agents/browser-automation.md#private-previews` before
   selecting the route.
 - Herdr or Herdr Projects coordinator/worker startup, resume, or model change:

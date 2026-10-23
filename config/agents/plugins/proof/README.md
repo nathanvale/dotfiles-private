@@ -6,7 +6,7 @@ quality hooks for Claude Code and Codex: `biome-ci`, `fallow-ci`, and
 matching tool locally, so the plugin can be enabled globally without breaking
 a repository that has no Biome, Fallow, or TypeScript installed.
 
-The package identity is `proof` at version `0.2.1`. Keep that identity and
+The package identity is `proof` at version `0.2.2`. Keep that identity and
 version aligned across `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
 `package.json`, and the `personal` marketplace entries in
 `config/agents/plugins/.claude-plugin/marketplace.json` and
@@ -92,8 +92,10 @@ candidate before retrying; Proof does not create an index snapshot or change
 Git content on your behalf.
 
 The publication gate supports a single direct `git commit` with message/amend
-flags, and `git push` for the current HEAD. It blocks compound shell commands,
-Git prefix options, alternate commit content modes such as `-a` or `--only`,
+flags, and `git push` for the current HEAD. Both forms accept one absolute
+`git -C <directory>` prefix and audit that repository rather than the session
+checkout. Relative or repeated `-C`, other Git prefix options, compound shell
+commands, alternate commit content modes such as `-a` or `--only`,
 and pushes selecting another ref with `reason: unsupported-command`. Run staging
 in a separate tool call, then use a supported publication command. Configured
 multi-ref push selection requires an explicit `HEAD:<branch>` refspec.
@@ -106,9 +108,14 @@ multi-ref push selection requires an explicit `HEAD:<branch>` refspec.
 - Live firing, cache refresh, and per-hook trust approval require a fresh
   harness canary. Historical trust records do not prove today's activation.
 
+Codex's hook `cwd` names the session directory. For a command in another
+worktree, use `git -C /absolute/worktree commit ...` or the equivalent push
+form so the command itself identifies the audited repository. Per-call shell
+working directories are not available in the normalized hook payload.
+
 The pre-command matcher recognizes literal shell `git commit` and `git push`
-commands. It cannot inspect an opaque Python driver, nested process, shell alias,
-or a command targeting another repository. The configured branch-delta Stop
+commands, including the supported absolute `-C` prefix. It cannot inspect an
+opaque Python driver, nested process or shell alias. The configured branch-delta Stop
 check is the backstop for this session repository, not subprocess introspection.
 Both current [Codex hook docs](https://developers.openai.com/codex/hooks) and
 [Claude hook docs](https://code.claude.com/docs/en/hooks) document normalized
