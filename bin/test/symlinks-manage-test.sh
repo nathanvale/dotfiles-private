@@ -9,7 +9,7 @@ TEST_ROOT="$(CDPATH='' cd "$TEST_ROOT" && pwd -P)"
 FIXTURE_REPO="$TEST_ROOT/repository"
 FAKE_BIN="$TEST_ROOT/fake-bin"
 CLI="$FIXTURE_REPO/bin/dotfiles/symlinks/symlinks_manage.sh"
-EXPECTED_ASSERTIONS=22
+EXPECTED_ASSERTIONS=28
 DASHED_RAW_TARGET='-prior-raw-target'
 assertion_count=0
 wrong_home="$TEST_ROOT/wrong-home"
@@ -34,8 +34,11 @@ cleanup() {
 		"$lying_home/.config" "$lying_home/bin" "$lying_former/sentinel" "$lying_log" \
 		"$TEST_ROOT/wrong-ln.log" "$TEST_ROOT/dangling-ln.log" "$TEST_ROOT/correct-ln.log" \
 		"$TEST_ROOT/missing-ln.log" "$FAKE_BIN/ln" \
-		"$FIXTURE_REPO/bin/dotfiles/symlinks/symlinks_manage.sh" "$FIXTURE_REPO/bin/colour_log.sh"
+		"$FIXTURE_REPO/bin/dotfiles/symlinks/symlinks_manage.sh" "$FIXTURE_REPO/bin/colour_log.sh" \
+		"$correct_home/.codex/hooks/fallow-gate.sh" "$FIXTURE_REPO/config/agents/claude/hooks/fallow-gate.sh"
 	rmdir -- \
+		"$correct_home/.codex/hooks" "$correct_home/.codex" \
+		"$FIXTURE_REPO/config/agents/claude/hooks" "$FIXTURE_REPO/config/agents/claude" "$FIXTURE_REPO/config/agents" \
 		"$wrong_former" "$wrong_home" "$dangling_home" "$correct_home" "$missing_home" \
 		"$creation_failure_former" "$creation_failure_home" \
 		"$lying_former" "$lying_home" "$FAKE_BIN" "$FIXTURE_REPO/config" \
@@ -151,7 +154,7 @@ run_link() {
 	set +e
 	last_output="$(env -i \
 		HOME="$home" \
-		DOTFILES_PROFILE=server \
+		DOTFILES_PROFILE="${4:-server}" \
 		PATH="$FAKE_BIN:/usr/bin:/bin" \
 		TERM=dumb \
 		SYMLINKS_TEST_LN_MODE="$mode" \
@@ -210,6 +213,21 @@ assert_equals "$(readlink "$lying_home/.config")" 'former-directory' 'lying link
 assert_equals "$(<"$lying_log")" 'lying-creation' 'lying link creation reaches the zero-exit injected fault'
 assert_contains "$last_output" 'replacement verification failed; restored previous symlink' 'lying link creation reports verification rejection and restoration'
 assert_equals "$(<"$lying_former/sentinel")" 'lying-former-sentinel-bytes' 'lying link creation preserves former referent bytes'
+
+# The installed path must execute the shared payload on both supported profiles.
+mkdir -p "$FIXTURE_REPO/config/agents/claude/hooks"
+printf '#!/usr/bin/env bash\nexit 23\n' >"$FIXTURE_REPO/config/agents/claude/hooks/fallow-gate.sh"
+chmod 700 "$FIXTURE_REPO/config/agents/claude/hooks/fallow-gate.sh"
+for profile in server desktop; do
+	run_link "$correct_home" pass "$TEST_ROOT/correct-ln.log" "$profile"
+	assert_equals "$last_status" '0' "$profile native hook installation exits zero"
+	assert_equals "$(readlink "$correct_home/.codex/hooks/fallow-gate.sh")" "$FIXTURE_REPO/config/agents/claude/hooks/fallow-gate.sh" "$profile Codex path resolves to the shared Fallow source"
+	set +e
+	"$correct_home/.codex/hooks/fallow-gate.sh"
+	gate_status=$?
+	set -e
+	assert_equals "$gate_status" '23' "$profile Codex path executes the payload rather than a missing script"
+done
 
 [[ "$assertion_count" -eq "$EXPECTED_ASSERTIONS" ]] ||
 	fail "assertion count drifted: expected $EXPECTED_ASSERTIONS, got $assertion_count"

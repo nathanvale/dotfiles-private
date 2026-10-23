@@ -74,6 +74,8 @@ common_symlinks=(
 	"${HOME}/.codex/AGENTS.md|${DOTFILES}/config/agents/AGENTS.md"
 	"${HOME}/.pi/agent/AGENTS.md|${DOTFILES}/config/agents/AGENTS.md"
 	"${HOME}/.codex/hooks.json|${DOTFILES}/config/agents/codex/hooks.json"
+	# Both native Fallow handlers use the same upstream-generated script.
+	"${HOME}/.codex/hooks/fallow-gate.sh|${DOTFILES}/config/agents/claude/hooks/fallow-gate.sh"
 	"${HOME}/.claude/CLAUDE.md|${DOTFILES}/config/agents/claude/CLAUDE.md"
 	"${HOME}/.claude/settings.json|${DOTFILES}/config/agents/claude/settings.json"
 	"${HOME}/.claude/hooks|${DOTFILES}/config/agents/claude/hooks"
