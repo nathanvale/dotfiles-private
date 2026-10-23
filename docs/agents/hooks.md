@@ -72,3 +72,9 @@ its pinned local audit after lint-staged in `.husky/pre-commit`, using
 PR's recorded destination commit in Bitbucket CI. Git runs its hook in the
 actual checkout, independently of the agent session. Agent hooks remain a
 feedback layer; they do not replace these enforcement points.
+
+Native audits read working-tree content; they do not snapshot the Git index.
+A partially staged commit can therefore differ from the local audit. CI audits
+its checked-out committed candidate against the recorded destination commit and
+is the authoritative committed-code gate. Keep this boundary explicit instead
+of adding a custom index-snapshot wrapper.

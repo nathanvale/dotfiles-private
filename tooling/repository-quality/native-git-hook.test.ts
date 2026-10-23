@@ -65,3 +65,26 @@ for (const scenario of ["inherited", "introduced", "formatter-failure", "invalid
 		expect(readFileSync(join(root, "api.ts"), "utf8")).toContain("value = 3");
 	}, 30_000);
 }
+
+test("the committed-candidate audit catches staged debt hidden by an unstaged repair", () => {
+	const { root, head } = fixture();
+	writeFileSync(join(root, "api.ts"), baselineApi + "export const newlyUnused = 4;\n");
+	git(root, "add", "api.ts");
+	writeFileSync(join(root, "api.ts"), baselineApi);
+	const commit = command(root, ["git", "commit", "-m", "test: stage a finding before the repair"]);
+	if (commit.exitCode !== 0) {
+		// A future native index-aware gate may reject this before CI is needed.
+		expect(commit.stderr.toString()).toContain('"verdict":"fail"');
+		expect(git(root, "rev-parse", "HEAD")).toBe(head);
+		return;
+	}
+	const snapshot = realpathSync(mkdtempSync(join(tmpdir(), "native-fallow-committed-")));
+	temporaryRoots.push(snapshot);
+	git(root, "worktree", "add", "--detach", snapshot, "HEAD");
+	const audit = command(snapshot, [join(repoRoot, "node_modules/.bin/fallow"), "audit", "--base", "origin/main", "--format", "json", "--quiet", "--type-aware", "--type-aware-require", "best-effort"]);
+	expect(audit.exitCode, audit.stderr.toString()).toBe(1);
+	const report = JSON.parse(audit.stdout.toString());
+	expect(report.verdict).toBe("fail");
+	expect(report.attribution.dead_code_introduced).toBe(1);
+	expect(readFileSync(join(root, "api.ts"), "utf8")).toBe(baselineApi);
+}, 30_000);
