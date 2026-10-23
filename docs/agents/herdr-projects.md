@@ -51,6 +51,12 @@ selected coordinator and qualify source, installation and activation separately.
   A tracking row does not attach a worker or supply the board's native check,
   review or completion lifecycle. Keep execution with the coordinator unless
   a supported adoption route is verified for the installed version.
+- When organising the board, use project grouping with the selected project
+  expanded and unrelated projects folded in the view Nathan uses. Verify the
+  displayed result; terminal labels do not establish native task ownership.
+- Let Projects own native task labels. For direct workers, keep workspace and
+  tab names readable and assignment-specific, using their recorded identities.
+  Preserve live locations and sessions when changing presentation.
 - When adding or delegating an authorized board task whose only output is a
   report, use the documented research-only route. Keep its result in the
   task's report folder, not the product repository.
