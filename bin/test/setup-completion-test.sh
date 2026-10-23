@@ -14,6 +14,7 @@ set -euo pipefail
 
 REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)"
 TEST_ROOT="$(mktemp -d)"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 assertion_count=0
@@ -601,6 +602,27 @@ for relative in ["config.json", "settings/config.json"]:
 PYTEST
   pass "setup refuses redirected $redirected and preserves foreign bytes and link"
 done
+for override_route in home config; do
+  rm -rf "$TEST_ROOT/redirected" "$TEST_ROOT/foreign-deep"
+  mkdir -p "$TEST_ROOT/foreign-deep/subdir/settings"
+  printf '%s\n' '{"sentinel":"foreign-deep"}' >"$TEST_ROOT/foreign-deep/subdir/settings/config.json"
+  cp "$TEST_ROOT/foreign-deep/subdir/settings/config.json" "$TEST_ROOT/deep-settings-before"
+  ln -s "$TEST_ROOT/foreign-deep" "$TEST_ROOT/redirected"
+  TEST_HERDR_PROJECTS_HOME="$TEST_ROOT/redirected/subdir"
+  TEST_HERDR_PROJECTS_CONFIG_DIR=''
+  if [[ "$override_route" == config ]]; then
+    TEST_HERDR_PROJECTS_HOME=''
+    TEST_HERDR_PROJECTS_CONFIG_DIR="$TEST_ROOT/redirected/subdir/settings"
+  fi
+  run_setup '' pass --server --start-phase 6
+  [[ "$RUN_EXIT" -ne 0 ]] || fail "$override_route deep redirect must refuse setup"
+  grep -Fq 'Herdr settings must not redirect through a symlink' "$RUN_STDERR" || fail 'deep redirect refusal diagnostic missing'
+  [[ -L "$TEST_ROOT/redirected" && "$(readlink "$TEST_ROOT/redirected")" == "$TEST_ROOT/foreign-deep" ]] || fail 'deep redirect link changed'
+  cmp -s "$TEST_ROOT/deep-settings-before" "$TEST_ROOT/foreign-deep/subdir/settings/config.json" || fail 'deep redirect foreign settings changed'
+  pass "setup refuses deep $override_route redirect and preserves foreign bytes and link"
+done
+TEST_HERDR_PROJECTS_HOME=''
+TEST_HERDR_PROJECTS_CONFIG_DIR=''
 rm -rf "$FIXTURE_HOME/.herdr-projects"
 mkdir -p "$FIXTURE_HOME/.herdr-projects/settings"
 printf '%s\n' '{"sentinel":"default-location"}' >"$FIXTURE_HOME/.herdr-projects/settings/config.json"
@@ -633,7 +655,7 @@ done
 TEST_HERDR_PROJECTS_HOME=''
 TEST_HERDR_PROJECTS_CONFIG_DIR=''
 
-expected_assertions=96
+expected_assertions=98
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

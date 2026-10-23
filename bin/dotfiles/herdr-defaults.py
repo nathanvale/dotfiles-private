@@ -20,8 +20,8 @@ def main():
     default = (root / "config/herdr/coordinator-instructions.txt").read_text().strip()
     home = Path(os.environ.get("HERDR_PROJECTS_HOME") or Path.home() / ".herdr-projects")
     config = Path(os.environ.get("HERDR_PROJECTS_CONFIG_DIR") or home / "settings")
-    target = config / "config.json"
-    for path in (target, target.parent, target.parent.parent):
+    target = (config / "config.json").absolute()
+    for path in (target, *target.parents):
         if path.is_symlink():
             raise ValueError("Herdr settings must not redirect through a symlink")
     original = target.read_bytes() if target.exists() else None

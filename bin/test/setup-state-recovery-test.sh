@@ -11,6 +11,7 @@ set -euo pipefail
 
 REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)"
 TEST_ROOT="$(mktemp -d)"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 assertion_count=0
