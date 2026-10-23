@@ -122,6 +122,7 @@ config/last30days/last-run.json
 config/code-server/
 config/herdr/*
 !config/herdr/config.toml
+!config/herdr/coordinator-instructions.txt
 
 # SwiftPM runtime symlinks (machine-specific)
 config/swiftpm/
