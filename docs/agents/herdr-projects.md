@@ -4,6 +4,14 @@ Use the installed `herdr-projects` skill and its full CLI path. Current CLI
 help owns syntax; `details` and `show` own task state and effective settings.
 Read app-generated coordinator or task rules supplied to this session.
 
+## Delivery and improvement
+
+For sustained coordination, dispatch, delivery handbacks and recovery, apply the
+[shared coordination policy](../../config/agents/plugins/my-second-brain-playground/skills/stage-manager/references/delivery.md).
+It owns bounded delegation, evidence pointers, durable learning and the strategic
+question about improving the next task. App-generated role and authority rules
+remain in force.
+
 ## Desktop conversations
 
 For typed or spoken requests to a named project coordinator, use
