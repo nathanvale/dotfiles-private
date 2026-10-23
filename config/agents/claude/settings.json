@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "attribution": {
     "commit": "",
     "pr": ""
@@ -139,6 +140,17 @@
             "type": "command",
             "command": "bun \"$HOME/.claude/hooks/worktree/worktree-remove.ts\"",
             "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME\"/.claude/hooks/fallow-gate.sh"
           }
         ]
       }

@@ -390,8 +390,9 @@ describe('fallow-ci branch ratchet', () => {
 		expect(readFileSync(argsFile, 'utf8').split('\n')).toContain(baseline)
 	})
 
-	test('a Bitbucket worktree blocks mixed committed and uncommitted content against develop', async () => {
+	test('a Bitbucket worktree blocks mixed content without a clean HEAD checkout against develop', async () => {
 		const {dir, argsFile} = await branchRepo('https://bitbucket.org/example/proof-fixture.git', 'develop')
+		writeFileSync(join(dir, 'runtime.json'), '{}')
 		const worktree = await makeTempDir('proof-fallow-worktree-')
 		git(dir, 'worktree', 'add', '-q', '--detach', worktree, 'HEAD')
 		mkdirSync(join(worktree, 'node_modules/.bin'), {recursive: true})
@@ -663,6 +664,55 @@ describe('fallow-ci persisted content guard', () => {
 
 	function preCommand(dir: string, command: string) {
 		return runFallowHook({ hook_event_name: 'PreToolUse', cwd: dir, tool_name: 'Bash', tool_input: { command } }, ['--harness=codex'])
+	}
+
+	for (const state of ['clean', 'finding', 'mismatch']) {
+		test(`explicit absolute -C audits the target rather than the dirty session checkout: ${state}`, async () => {
+			const session = await snapshotRepo()
+			writeFileSync(join(session, 'unrelated-runtime.json'), '{}')
+			const target = await snapshotRepo()
+			if (state !== 'clean') {
+				writeFileSync(join(target, 'api.js'), 'export const used = 1; export const newlyUnused = 2;\n')
+				git(target, 'add', 'api.js')
+				if (state === 'mismatch') writeFileSync(join(target, 'api.js'), 'export const used = 1;\n')
+			}
+			const run = await preCommand(session, `git -C "${target}" commit -m next`)
+			expect(run.exitCode).toBe(state === 'clean' ? 0 : 2)
+			if (state === 'finding') expect(run.stderr).toContain('newlyUnused')
+			if (state === 'mismatch') expect(run.stderr).toContain('snapshot-mismatch')
+			expect(run.stderr).not.toContain('unrelated-runtime.json')
+		})
+	}
+
+	for (const state of ['runtime', 'committed-finding', 'dirty-finding', 'snapshot-changed']) {
+		test(`Stop uses a clean HEAD worktree without concealing findings: ${state}`, async () => {
+			const dir = await snapshotRepo()
+			const cleanApi = 'export const used = 2;\n'
+			const badApi = 'export const used = 2; export const newlyUnused = 3;\n'
+			writeFileSync(join(dir, 'api.js'), state === 'committed-finding' ? badApi : cleanApi)
+			git(dir, 'add', 'api.js')
+			git(dir, 'commit', '-q', '-m', 'branch change')
+			const snapshot = await makeTempDir('proof-clean-head-')
+			git(dir, 'worktree', 'add', '--detach', snapshot, 'HEAD')
+			mkdirSync(join(snapshot, 'node_modules/.bin'), { recursive: true })
+			symlinkSync(realpathSync(join(dir, 'node_modules/.bin/fallow')), join(snapshot, 'node_modules/.bin/fallow'))
+			writeFileSync(join(dir, 'runtime.json'), '{}')
+			if (state === 'committed-finding') writeFileSync(join(dir, 'api.js'), cleanApi)
+			if (state === 'dirty-finding') writeFileSync(join(dir, 'api.js'), badApi)
+			if (state === 'snapshot-changed') {
+				rmSync(join(snapshot, 'node_modules/.bin/fallow'))
+				installFakeBinary(snapshot, 'fallow', `echo 'export const used = 4;' > api.js\necho '{"verdict":"pass"}'`)
+			}
+			const run = await runFallowHook({ hook_event_name: 'Stop', cwd: dir }, ['--harness=codex'])
+			expect(run.exitCode).toBe(state === 'runtime' ? 0 : 2)
+			if (state === 'runtime') {
+				expect(run.stdout).toBe('{}')
+				expect(run.stderr).toBe('')
+			} else {
+				expect(run.stderr).toContain(state === 'snapshot-changed' ? 'snapshot-changed' : 'newlyUnused')
+			}
+			expect(readFileSync(join(dir, 'runtime.json'), 'utf8')).toBe('{}')
+		})
 	}
 
 	test('blocks a staged unused export hidden by a clean unstaged overwrite before literal commit', async () => {
