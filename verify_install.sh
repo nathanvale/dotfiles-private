@@ -678,6 +678,7 @@ phase_end "Phase 5: Applications"
 # ============================================================================
 phase_start
 verify_managed_symlinks
+verify "Herdr coordinator default" "/usr/bin/python3 '$DOTFILES/bin/dotfiles/herdr-defaults.py' --check"
 verify_warn "Full Disk Access" "plutil -lint /Library/Preferences/com.apple.TimeMachine.plist"
 verify "Profile saved" "[[ -f '$STATE_DIR/profile' ]]"
 phase_end "Phase 6: Configuration"

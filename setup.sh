@@ -1410,6 +1410,9 @@ main() {
         else
             log_warn "Symlinks script not found: $symlinks_script"
         fi
+
+        log_section "Installing Herdr coordinator instructions"
+        run_setup_child /usr/bin/python3 "$dotfiles/bin/dotfiles/herdr-defaults.py"
     }
 
     install_prefs() {
