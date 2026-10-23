@@ -12,6 +12,17 @@ It owns bounded delegation, evidence pointers, durable learning and the strategi
 question about improving the next task. App-generated role and authority rules
 remain in force.
 
+## New-machine defaults
+
+Configuration setup (`./setup.sh symlinks` or full setup) installs
+[the portable coordinator pointer](../../config/herdr/coordinator-instructions.txt)
+into the user-level `coordinator.instructions`. It adds to existing instructions;
+project additions and other settings stay intact. Herdr's `HERDR_PROJECTS_HOME`
+and `HERDR_PROJECTS_CONFIG_DIR` overrides select the settings location. All existing and future
+coordinators inherit it, even when Herdr Projects is installed after setup.
+`verify_install.sh` checks the default. Fresh chats load it at startup; ask a
+running coordinator to read the policy without restarting active work.
+
 ## Desktop conversations
 
 For typed or spoken requests to a named project coordinator, use
@@ -40,6 +51,12 @@ selected coordinator and qualify source, installation and activation separately.
   A tracking row does not attach a worker or supply the board's native check,
   review or completion lifecycle. Keep execution with the coordinator unless
   a supported adoption route is verified for the installed version.
+- When organising the board, use project grouping with the selected project
+  expanded and unrelated projects folded in the view Nathan uses. Verify the
+  displayed result; terminal labels do not establish native task ownership.
+- Let Projects own native task labels. For direct workers, keep workspace and
+  tab names readable and assignment-specific, using their recorded identities.
+  Preserve live locations and sessions when changing presentation.
 - When adding or delegating an authorized board task whose only output is a
   report, use the documented research-only route. Keep its result in the
   task's report folder, not the product repository.

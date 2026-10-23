@@ -1,1 +1,2 @@
-bunx --no-install lint-staged
+bunx --no-install lint-staged || exit $?
+exec ./node_modules/.bin/fallow audit --base origin/main --format json --quiet --type-aware --type-aware-require best-effort --gate-marker pre-commit

@@ -1,7 +1,7 @@
 {
   "name": "proof",
-  "version": "0.2.2",
-  "description": "Self-gating Biome, Fallow, and TypeScript quality hooks that fire only in repositories carrying the tool locally.",
+  "version": "0.2.4",
+  "description": "Self-gating Biome and TypeScript quality hooks for repositories carrying the tools locally.",
   "author": {
     "name": "Nathan Vale"
   },
@@ -9,7 +9,6 @@
   "keywords": [
     "hooks",
     "biome",
-    "fallow",
     "typescript",
     "quality-gate"
   ]

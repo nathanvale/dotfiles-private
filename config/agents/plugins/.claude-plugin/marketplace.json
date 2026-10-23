@@ -10,7 +10,7 @@
     {
       "name": "my-second-brain-playground",
       "description": "A playground for building My Second Brain skills one vertical slice at a time.",
-      "version": "0.17.7",
+      "version": "0.17.8",
       "author": {
         "name": "Nathan Vale"
       },
@@ -18,8 +18,8 @@
     },
     {
       "name": "proof",
-      "description": "Self-gating Biome, Fallow, and TypeScript quality hooks that fire only in repositories carrying the tool locally.",
-      "version": "0.2.2",
+      "description": "Self-gating Biome and TypeScript quality hooks for repositories carrying the tools locally.",
+      "version": "0.2.4",
       "author": {
         "name": "Nathan Vale"
       },

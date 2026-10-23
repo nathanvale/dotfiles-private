@@ -12,12 +12,13 @@ rule must fire whether or not the agent recalls it.
 
 - Codex hashes each hook command and stores a `trusted_hash` in
   `[hooks.state.*]` in `config.toml`.
-- Change the script and the hash changes. The hook becomes `Modified` and stops
-  running until approved again.
+- Changed hook declarations can become `Modified` and stop running until
+  approved again. Inspect `/hooks` after a release; a source file edit alone
+  does not prove trust changed or the hook ran.
 - An unapproved hook is `Untrusted` and does not run. Silence is the failure
   mode, not an error.
-- Claude Code has no equivalent gate. A hook edited in dotfiles takes effect
-  immediately there, and silently stops on Codex.
+- Claude Code has no equivalent trust gate. Verify the effective installed
+  source and a fresh-session canary in each harness.
 
 This asymmetry decides how a shared hook is deployed. Treat a hook edit as a
 Codex re-approval step, not a file change.
@@ -43,11 +44,37 @@ Codex re-approval step, not a file change.
 
 - Existing non-plugin hook scripts: `config/agents/claude/hooks/`.
 - Hook declarations: Claude gates live in `config/agents/claude/settings.json`; reserve `config/agents/claude/hooks.json` for `InstructionsLoaded`; Codex uses `config/agents/codex/hooks.json`.
-- Biome, Fallow, and TypeScript quality gates come only from
-  `config/agents/plugins/proof/hooks/`, with its own `hooks/claude/hooks.json`
-  and `hooks/codex/hooks.json` per harness.
-  Activation is `enabledPlugins` in `config/agents/claude/settings.json`, not
-  a `settings.json` hook declaration. The scripts run from the installed
-  plugin cache, so a source change takes effect only through a plugin
-  release: `claude plugin marketplace update personal` on Claude Code, and a
-  Codex per-hook trust re-approval (see above) on Codex.
+- Biome and TypeScript quality gates come from
+  `config/agents/plugins/proof/hooks/`, with separate Claude and Codex declarations.
+  Refresh the native plugin after a source release and verify it in a fresh session.
+- Fallow owns its native PreToolUse hooks. Install through the pinned Fallow CLI's
+  `hooks install --target agent --agent claude --user` and equivalent `codex`
+  command. Preview with `--dry-run`; preserve unrelated hook declarations.
+  Dotfiles maps both native script paths to the unchanged shared generated source.
+  Run `./setup.sh symlinks` after updating it. Follow repository policy for the
+  comparison base. Native warnings remain advisory. Native runtime/setup errors
+  print a notice and allow the command; CI remains the required quality gate.
+- Codex hook installation does not prove trust or activation. Review the hook in
+  `/hooks` and verify a fresh-session canary before claiming it is active.
+
+## Codex directory limit and Git enforcement
+
+Codex's Bash hook input omits a shell call's separate `workdir`; its `cwd`
+identifies the session. The native agent gate can therefore audit the session
+checkout instead of the checkout receiving a commit. See
+[the upstream report](https://github.com/openai/codex/issues/33986).
+Use an explicit `git -C /absolute/worktree ...` command for cross-worktree
+publication so the native script can see its target.
+
+Keep native Fallow auditing in each repository's Git hook and CI. Dotfiles runs
+its pinned local audit after lint-staged in `.husky/pre-commit`, using
+`origin/main`. The SDK uses its own pinned audit with `origin/staging` and the
+PR's recorded destination commit in Bitbucket CI. Git runs its hook in the
+actual checkout, independently of the agent session. Agent hooks remain a
+feedback layer; they do not replace these enforcement points.
+
+Native audits read working-tree content; they do not snapshot the Git index.
+A partially staged commit can therefore differ from the local audit. CI audits
+its checked-out committed candidate against the recorded destination commit and
+is the authoritative committed-code gate. Keep this boundary explicit instead
+of adding a custom index-snapshot wrapper.
