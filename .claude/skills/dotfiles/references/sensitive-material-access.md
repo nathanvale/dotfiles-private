@@ -67,11 +67,17 @@ service-account token. Treat one as a defect to migrate, not a working route.
 ### Prerequisites
 
 1. A 1Password service account with read access to the required vault.
-2. Its token in `~/code/dotfiles/.env` as `OP_SERVICE_ACCOUNT_TOKEN`. That file
-   is git-ignored, a regular non-symlink file, owned by you, mode 0600.
+2. Its token in the login Keychain item the Connectors plugin registers
+   (service `connectors.1password.service-account`, account `connectors`).
+   When that Keychain is unavailable to the session, for example over SSH, the
+   launcher falls back to `~/code/dotfiles/.env` as `OP_SERVICE_ACCOUNT_TOKEN`:
+   git-ignored, a regular non-symlink file, owned by you, mode 0600.
+   `with-one-password-token --help` owns the exact order.
 3. The `op` CLI on PATH.
 
-Check custody without touching a value:
+Check custody without touching a value. Its `token_source`,
+`keychain_status` and `keychain_reader_exit` name the source used and why the
+Keychain was skipped:
 
 ```bash
 with-one-password-token check
