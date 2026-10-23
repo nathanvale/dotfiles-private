@@ -17,6 +17,19 @@ invocation, take the first plain token or quoted phrase after the skill name
 as the selector. Ask when the request names no destination. Generated chat
 titles, the Desktop working directory and UI focus do not select a coordinator.
 
+## Keep delivery and learning with the coordinator
+
+For sustained delivery requests and improvement feedback, use the shared
+[coordination policy](../stage-manager/references/delivery.md). Relay the named
+outcome, acceptance, new evidence and existing context pointers. Let the selected
+coordinator own the strategic question and any bounded improvement work.
+
+Keep status requests read-only. When progress exposes recurring friction, pass
+that observation to the coordinator within the authorized request; keep broader
+improvement proposals with the existing project owner. Report delivery state and
+material decisions to Nathan. Creating another worker, wiki, watcher or
+infrastructure task is not a prerequisite for relaying a request.
+
 ## Bind the destination
 
 1. Read `$HOME/code/dotfiles/docs/agents/herdr-terminal.md` for external-app
