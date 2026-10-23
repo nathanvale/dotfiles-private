@@ -12,6 +12,16 @@ It owns bounded delegation, evidence pointers, durable learning and the strategi
 question about improving the next task. App-generated role and authority rules
 remain in force.
 
+## New-machine defaults
+
+Configuration setup (`./setup.sh symlinks` or full setup) installs
+[the portable coordinator pointer](../../config/herdr/coordinator-instructions.txt)
+into the user-level `coordinator.instructions`. It adds to existing instructions;
+project additions and other settings stay intact. All existing and future
+coordinators inherit it, even when Herdr Projects is installed after setup.
+`verify_install.sh` checks the default. Fresh chats load it at startup; ask a
+running coordinator to read the policy without restarting active work.
+
 ## Desktop conversations
 
 For typed or spoken requests to a named project coordinator, use

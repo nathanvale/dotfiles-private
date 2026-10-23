@@ -96,6 +96,9 @@ prepare_fixture() {
   mkdir -p "$FIXTURE_DOTFILES/bin/dotfiles" "$FIXTURE_DOTFILES/config/macos" \
     "$RECORD_DIR"
   cp "$REPO_ROOT/setup.sh" "$FIXTURE_DOTFILES/setup.sh"
+  cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$FIXTURE_DOTFILES/bin/dotfiles/herdr-defaults.py"
+  mkdir -p "$FIXTURE_DOTFILES/config/herdr"
+  cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$FIXTURE_DOTFILES/config/herdr/coordinator-instructions.txt"
   chmod +x "$FIXTURE_DOTFILES/setup.sh"
 
   mkdir -p "$FIXTURE_DOTFILES/bin/dotfiles/symlinks"
@@ -486,7 +489,57 @@ pass 'linked-worktree activation exits nonzero'
 assert_file_contains "$TEST_ROOT/boundary-stdout" 'linked worktree is blocked' \
   'linked-worktree activation reports the canonical checkout boundary'
 
-expected_assertions=73
+# Coordinator defaults are installed by the public configuration phase on both profiles.
+for coordinator_profile in desktop server; do
+  reset_fixture
+  rm -rf "$FIXTURE_HOME/.herdr-projects"
+  write_verifier pass
+  run_setup '' pass "--$coordinator_profile" --start-phase 6
+  [[ "$RUN_EXIT" -eq 0 ]] || fail "$coordinator_profile default setup exits zero"
+  pass "$coordinator_profile default setup exits zero"
+  /usr/bin/python3 - "$FIXTURE_HOME/.herdr-projects/settings/config.json" <<'PYTEST'
+import json, sys
+value = json.load(open(sys.argv[1]))["coordinator"]["instructions"]
+assert "$HOME/code/dotfiles/config/agents/plugins/my-second-brain-playground/skills/stage-manager/references/delivery.md" in value
+assert "/Users/" not in value and value.count("At coordinator startup") == 1
+PYTEST
+  pass "$coordinator_profile installs the portable coordinator default"
+  cp "$FIXTURE_HOME/.herdr-projects/settings/config.json" "$TEST_ROOT/settings-before"
+  run_setup '' pass "--$coordinator_profile" --start-phase 6
+  [[ "$RUN_EXIT" -eq 0 ]] && cmp -s "$TEST_ROOT/settings-before" "$FIXTURE_HOME/.herdr-projects/settings/config.json" || fail 'repeat setup preserves settings bytes'
+  pass "$coordinator_profile repeat setup preserves settings bytes"
+done
+
+cat >"$FIXTURE_HOME/.herdr-projects/settings/config.json" <<'JSON'
+{"coordinator":{"instructions":" Keep my custom words. ","effort":"high"},"coordinators":{"projects":{"example":{"coordinator":{"instructions":"project words"}}}},"merge":{"by":"you"}}
+JSON
+run_setup '' pass --server --start-phase 6
+/usr/bin/python3 - "$FIXTURE_HOME/.herdr-projects/settings/config.json" <<'PYTEST'
+import json, sys
+value = json.load(open(sys.argv[1]))
+assert value["coordinator"]["instructions"].startswith(" Keep my custom words. \n\nAt coordinator startup")
+assert value["coordinator"]["effort"] == "high"
+assert value["coordinators"] == {"projects":{"example":{"coordinator":{"instructions":"project words"}}}}
+assert value["merge"] == {"by":"you"}
+PYTEST
+[[ "$RUN_EXIT" -eq 0 ]] || fail 'custom settings setup succeeds'
+pass 'setup preserves custom instructions, project additions and unrelated settings'
+
+printf '%s\n' '{malformed' >"$FIXTURE_HOME/.herdr-projects/settings/config.json"
+cp "$FIXTURE_HOME/.herdr-projects/settings/config.json" "$TEST_ROOT/settings-before"
+run_setup '' pass --server --start-phase 6
+[[ "$RUN_EXIT" -ne 0 ]] || fail 'malformed Herdr settings refuse setup'
+pass 'malformed Herdr settings refuse setup'
+cmp -s "$TEST_ROOT/settings-before" "$FIXTURE_HOME/.herdr-projects/settings/config.json" || fail 'malformed settings were overwritten'
+pass 'malformed Herdr settings remain unchanged'
+
+printf '%s\n' '{}' >"$FIXTURE_HOME/.herdr-projects/settings/config.json"
+if HOME="$FIXTURE_HOME" /usr/bin/python3 "$FIXTURE_DOTFILES/bin/dotfiles/herdr-defaults.py" --check >"$RUN_STDOUT" 2>"$RUN_STDERR"; then
+  fail 'check rejects a missing default'
+fi
+pass 'check rejects a missing default without applying it'
+
+expected_assertions=83
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

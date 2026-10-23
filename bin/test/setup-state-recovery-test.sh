@@ -97,6 +97,9 @@ prepare_fixture() {
     -e "s#/usr/local#$CANONICAL_INTEL_HOMEBREW_PREFIX#g" \
     "$REPO_ROOT/setup.sh" >"$FIXTURE_DOTFILES/setup.sh"
   chmod +x "$FIXTURE_DOTFILES/setup.sh"
+  cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$FIXTURE_DOTFILES/bin/dotfiles/herdr-defaults.py"
+  mkdir -p "$FIXTURE_DOTFILES/config/herdr"
+  cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$FIXTURE_DOTFILES/config/herdr/coordinator-instructions.txt"
 
   cat >"$FIXTURE_DOTFILES/bin/dotfiles/symlinks/symlinks_manage.sh" <<'EOF'
 #!/usr/bin/env bash
