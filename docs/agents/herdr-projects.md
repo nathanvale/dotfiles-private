@@ -48,8 +48,8 @@ selected coordinator and qualify source, installation and activation separately.
   [model selection](model-selection.md) for provider and account qualification
   on that host. A remote-control connection supplies neither files nor login.
 - Keep one native execution task on the machine doing the work and retain its
-  machine-qualified ID. Keep existing direct workers under their recorded
-  coordinator; a tracking row does not adopt them into the native lifecycle.
+  machine-qualified ID. Follow [Tasks and settings](#tasks-and-settings) for
+  existing direct-worker ownership.
 - Keep worktrees and conversations on their execution host. Transfer committed
   code through the repository's Git remote and explicit fetch/integration
   checks. Deploy reviewed shared instructions through the existing setup;
