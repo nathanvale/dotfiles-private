@@ -34,6 +34,34 @@ recovery, bounded reply checks and requested same-chat monitoring. Create a
 separate watcher only when Nathan requests one. Keep worker execution with the
 selected coordinator and qualify source, installation and activation separately.
 
+## Distributed work
+
+- Use `default` for new work on each execution host. Preserve live workers in
+  other sessions until their handbacks; consolidation does not relocate them.
+- Use the Mini as the coordination host and preferred execution host. Keep the
+  laptop available for explicitly assigned work. Resolve host addresses and
+  session sockets from local configuration, not shared instructions.
+- Start new projects through the existing main Coordinator. It routes project
+  setup and cross-machine dispatch; one project coordinator owns delivery,
+  acceptance and integration. Reuse these owners before creating another.
+- Before dispatch, bind the execution host, session, task and checkout. Follow
+  [model selection](model-selection.md) for provider and account qualification
+  on that host. A remote-control connection supplies neither files nor login.
+- Keep one native execution task on the machine doing the work and retain its
+  machine-qualified ID. Keep existing direct workers under their recorded
+  coordinator; a tracking row does not adopt them into the native lifecycle.
+- Keep worktrees and conversations on their execution host. Transfer committed
+  code through the repository's Git remote and explicit fetch/integration
+  checks. Deploy reviewed shared instructions through the existing setup;
+  preserve host overrides and dirty work.
+- Verify remote discovery, control and an accepted handback before relying on
+  a route. Inspect the installed completion mechanism; dispatch alone does not
+  establish callbacks. Use a cross-machine dependency for a real dependent
+  task, or inspect the existing remote task through completion.
+- After an interruption, inspect the same task and worker before retrying.
+  Close finished execution spaces separately from task archive or worktree
+  removal, using the preservation rules below.
+
 ## Tasks and settings
 
 - Keep work in its owning project. Reuse an existing task for the same scope;
@@ -92,3 +120,5 @@ features newer than the running version.
 - [Task lifecycle and cleanup](https://github.com/eliasstravik/herdr-projects/blob/main/docs/how-work-gets-done.md)
 - [Settings and applicability](https://github.com/eliasstravik/herdr-projects/blob/main/docs/settings.md)
 - [Sidebar and archived live panes](https://github.com/eliasstravik/herdr-projects/blob/main/docs/sidebar.md)
+- [Cross-machine tasks](https://github.com/eliasstravik/herdr-projects/blob/main/docs/other-machines.md)
+- [Remote completion monitoring](https://github.com/eliasstravik/herdr-projects/blob/main/docs/autopilot.md#other-machines)
