@@ -6,6 +6,7 @@ Use the project's adopted task, knowledge and execution owners.
 ## Deliver the current task
 
 - Keep one named delivery outcome and its acceptance evidence visible.
+  Define completion through an observable result, not a worker's exit or claim.
 - Delegate bounded implementation and independent review. Give each worker its
   scope, acceptance, stop condition and source pointers. Keep conversation,
   decisions and handback acceptance with the coordinator; answer small read-only
@@ -22,6 +23,8 @@ Use the project's adopted task, knowledge and execution owners.
 - On accepting a Handback, advance it to review, Repair or authorized
   integration. If work must wait, record the next owner and the condition that
   lets it resume in the existing task.
+  Keep the candidate revision, last proved state, evidence pointers and next
+  action together there so recovery does not require replaying conversation.
 - At dispatch, reassignment and Handback, keep the worker visibly associated
   with its current project and assignment in the existing execution labels
   and owning task. Refresh assignment names when work changes; leave status
@@ -43,6 +46,9 @@ At a meaningful delivery handback or when the same friction recurs, ask:
 - Prefer one small improvement to an existing instruction, interface, check or
   data-access route. Give it an owner, a bounded change and a completion check.
   Reuse the existing mechanism before proposing another tool or process.
+  For a new deterministic check, use the installed `test-design` skill's
+  negative-control procedure: show it rejects the observed failure and accepts
+  the supported case. A green exit with no relevant execution is not proof.
 - Make the improvement within current authority when it is necessary to satisfy
   the current task, or when an existing improvement mandate covers it and it
   will not delay ready delivery. Otherwise record the proposal with the project
