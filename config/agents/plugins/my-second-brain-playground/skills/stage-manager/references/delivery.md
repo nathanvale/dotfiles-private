@@ -14,6 +14,13 @@ Use the project's adopted task, knowledge and execution owners.
 - Read the relevant decision and evidence pointers before dispatch or a material
   decision. Pass pointers and the new delta instead of copying transcripts or
   whole project histories into briefs.
+- At dispatch and Handback, link the exact admission and evidence files from
+  the owning task or report. Resolve local links relative to that document;
+  qualify remote paths by execution host. Check that each target is readable
+  on the worker or reviewer host before handing it over.
+- Pair each cited checksum with the artifact type and exact file path. Bind
+  code evidence to its repository and source commit. Reuse an existing seal
+  or manifest as the artifact index.
 - Choose skills for the current gap. When the route is unclear, consult the
   installed `ask-matt` router and read only the selected skills. Pass relevant
   execution skills to the worker; keep coordination and acceptance here.
