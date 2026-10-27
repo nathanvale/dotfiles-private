@@ -176,7 +176,7 @@ def main():
     for note in notes:
         print(f"Host keeps {note}")
     if check:
-        drifted = sorted(key for key in merged if merged[key] != machine.get(key, MISSING))
+        drifted = sorted(key for key in {*merged, *machine} if merged.get(key, MISSING) != machine.get(key, MISSING))
         if drifted:
             raise ValueError(f"policy differs at {', '.join(drifted)}; {REPAIR}")
         if strict and notes:

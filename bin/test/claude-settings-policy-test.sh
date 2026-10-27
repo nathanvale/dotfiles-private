@@ -266,6 +266,14 @@ assert_equals "$RUN_STATUS" 0 'strict check passes once nothing differs'
 
 prepare_checkout "$POLICY_FIXTURE"
 run_policy
+edit_policy 'del data["permissions"]'
+run_policy --check
+assert_equals "$RUN_STATUS" 1 'check fails until a removed policy key is retired'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'permissions' 2>/dev/null || echo absent)" absent 'install removes a policy-only key retired from policy'
+
+prepare_checkout "$POLICY_FIXTURE"
+run_policy
 /usr/bin/python3 - "$MACHINE" <<'PY'
 import json, sys
 path = sys.argv[1]
