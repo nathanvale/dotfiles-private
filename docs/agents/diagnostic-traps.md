@@ -64,8 +64,10 @@ the whole `skillOverrides` block, 73 entries.
 - Hooks, permissions, `enabledPlugins`, `extraKnownMarketplaces` and
   `statusLine` merge three ways against
   `~/.claude/settings.dotfiles-policy.json`, the last-applied policy. Policy
-  edits and retirements apply, a host's own hooks, rules, plugin choices and
-  host-correct paths stay, and a missing policy entry is restored.
+  edits and retirements apply, and a host's own hooks, rules, plugin choices
+  and host-correct paths stay. A missing policy hook or permission rule is
+  restored; a plugin, marketplace or status line the host removed (such as
+  `claude plugin uninstall`) stays removed until the policy changes it.
 - Setup records only a policy file that matches its committed `HEAD`, so a
   dirty tracked file (such as one a legacy symlink wrote into) never becomes
   the baseline. Without a record, every existing host value stays. A host rule
@@ -78,6 +80,10 @@ the whole `skillOverrides` block, 73 entries.
   `--check` names `hooks` first.
 - `~/.claude/settings.local.json` is HOME's project-local file: it applies
   only when Claude runs from HOME, so it cannot hold user-level settings.
+- Managed settings (`/Library/Application Support/ClaudeCode/` on macOS, a
+  fixed path with no environment override) outrank the machine file: a
+  managed deny, plugin disable or `allowManagedHooksOnly` wins over user
+  values, and setup neither writes nor reports that scope.
 - Plugin state also lives in untracked runtime files
   (`~/.claude/plugins/known_marketplaces.json`, `installed_plugins.json`).
   An `enabledPlugins` key with no matching install is inert: a session starts

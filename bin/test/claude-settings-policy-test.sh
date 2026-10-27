@@ -181,7 +181,8 @@ pass 'failing check leaves machine bytes unchanged'
 
 run_policy
 assert_equals "$RUN_STATUS" 0 'install repairs drift'
-# Independent oracle: the merged result, written out by hand.
+# Independent oracle: the merged result, written out by hand. The recorded
+# `personal` marketplace the host dropped is a host removal and stays out.
 assert_equals "$(canonical "$MACHINE")" "$(canonical_text '{
   "permissions": {"deny": ["AskUserQuestion"], "defaultMode": "default"},
   "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "gate.sh"}]}]},
@@ -191,7 +192,7 @@ assert_equals "$(canonical "$MACHINE")" "$(canonical_text '{
   "modelSettings": {"claude-opus-5-5": {"effortLevel": "max"}, "claude-sonnet-5-5": {"effortLevel": "xhigh"}},
   "theme": "light",
   "enabledPlugins": {"proof@personal": false, "pstack@cursor-plugins": true},
-  "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}, "personal": {"source": {"source": "directory", "path": "/p"}}},
+  "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}},
   "skillOverrides": {"gog": "off"},
   "feedbackSurveyState": {"lastShownTime": 1}
 }')" 'install restores policy and preserves machine choices'
@@ -311,6 +312,58 @@ assert_equals "$RUN_STATUS" 0 'check accepts host-correct paths'
 edit_policy 'data["statusLine"]["padding"] = 1'
 run_policy
 assert_equals "$(json_field "$MACHINE" 'statusLine')" '{"command": "bash /Users/server/.claude/statusline-command.sh", "padding": 1, "type": "command"}' 'a later policy change lands beside the host-correct path'
+
+# --- Host removals of plugin choices stay removed ----------------------------
+
+# Claude's `plugin uninstall` deletes the enabledPlugins entry and
+# `plugin marketplace remove` empties both maps; setup must keep that choice.
+prepare_checkout "$POLICY_FIXTURE"
+edit_policy 'data["statusLine"] = {"type": "command", "command": "status.sh"}'
+run_policy
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["enabledPlugins"] = {}
+data["extraKnownMarketplaces"] = {}
+del data["statusLine"]
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy --check
+assert_equals "$RUN_STATUS" 0 'check accepts host-removed plugin and marketplace declarations'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'enabledPlugins')" '{}' 'install keeps a host-uninstalled plugin removed'
+assert_equals "$(json_field "$MACHINE" 'extraKnownMarketplaces')" '{}' 'install keeps a host-removed marketplace removed'
+assert_equals "$(/usr/bin/python3 -c 'import json,sys;print("statusLine" in json.load(open(sys.argv[1])))' "$MACHINE")" False 'install keeps a host-removed status line removed'
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+del data["enabledPlugins"], data["extraKnownMarketplaces"]
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy
+assert_equals "$(/usr/bin/python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print("enabledPlugins" in d, "extraKnownMarketplaces" in d)' "$MACHINE")" 'False False' 'install keeps whole host-removed plugin maps removed'
+edit_policy 'data["enabledPlugins"]["later@personal"] = True'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'enabledPlugins')" '{"later@personal": true}' 'a plugin the policy adds later still lands; the removed one stays removed'
+edit_policy 'data["enabledPlugins"]["proof@personal"] = False'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'enabledPlugins.proof@personal')" false 'a later policy change to a host-removed plugin lands'
+# Security keys are a floor: a removed policy deny rule or hook comes back.
+prepare_checkout "$POLICY_FIXTURE"
+run_policy
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["permissions"]["deny"] = []
+data["hooks"] = {}
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy
+assert_equals "$(json_field "$MACHINE" 'permissions.deny')" '["AskUserQuestion"]' 'install restores a host-removed policy deny rule'
+assert_equals "$(json_field "$MACHINE" 'hooks')" "$(json_field "$POLICY_FIXTURE" 'hooks')" 'install restores a host-removed policy hook'
 
 # --- Host security controls survive; only missing policy entries are added --
 
@@ -472,7 +525,7 @@ assert_equals "$(checkout_status)" '' 'applying merged policy leaves the checkou
 
 # --- Real Claude settings operations ----------------------------------------
 
-real_rows_expected=3
+real_rows_expected=5
 real_rows_covered=0
 real_rows_skipped=0
 
@@ -544,6 +597,70 @@ print(next((str(p.get("enabled")) for p in d if str(p.get("id",p.get("name",""))
   assert_equals "$(canary_enabled "$TEST_ROOT/elsewhere")" True 'user-dir settings.local.json does not override user settings outside HOME'
   assert_equals "$(canary_enabled "$FAKE_HOME")" False 'user-dir settings.local.json applies only when Claude runs from HOME'
   real_rows_covered=$((real_rows_covered + 1))
+
+  # Supported removals of a policy-declared plugin and marketplace survive setup.
+  printf '%s\n' "{\"enabledPlugins\":{\"canary@test-local\":true},\"extraKnownMarketplaces\":{\"test-local\":{\"source\":{\"source\":\"directory\",\"path\":\"$MARKET\"}}}}" \
+    >"$TEST_ROOT/plugin-policy.json"
+  prepare_checkout "$TEST_ROOT/plugin-policy.json"
+  run_policy
+  run_claude plugin marketplace add "$MARKET" --scope user
+  run_claude plugin install canary@test-local --scope user
+  run_claude plugin uninstall canary@test-local --scope user
+  assert_equals "$(json_field "$MACHINE" 'enabledPlugins')" '{}' 'Claude uninstall removes the policy plugin entry'
+  run_policy
+  assert_equals "$(json_field "$MACHINE" 'enabledPlugins')" '{}' 'setup keeps a Claude-uninstalled policy plugin removed'
+  run_claude plugin marketplace remove test-local
+  assert_equals "$(json_field "$MACHINE" 'extraKnownMarketplaces')" '{}' 'Claude marketplace remove empties the policy marketplace map'
+  run_policy
+  assert_equals "$(json_field "$MACHINE" 'extraKnownMarketplaces')" '{}' 'setup keeps a Claude-removed policy marketplace removed'
+  run_policy --check
+  assert_equals "$RUN_STATUS" 0 'check accepts the host removals'
+  assert_equals "$(checkout_status)" '' 'removals leave the checkout clean'
+  real_rows_covered=$((real_rows_covered + 1))
+
+  # Hooks and rules in the converted machine file run in a real Claude turn.
+  # A local mock Messages API (placeholder key, no account) asks for one Bash
+  # call the policy allows; the policy's PreToolUse gate must block it.
+  claude_turn() {
+    local workdir="$TEST_ROOT/turn-$assertion_count" port_file="$TEST_ROOT/mock-port" mock_pid
+    mkdir -p "$workdir"
+    rm -f "$port_file"
+    /usr/bin/python3 -I "$REPO_ROOT/bin/test/fixtures/claude-mock-messages-api.py" \
+      "$port_file" "$TEST_ROOT/mock-requests" 'touch canary-ran' &
+    mock_pid=$!
+    for _ in $(seq 50); do [[ -s "$port_file" ]] && break; /bin/sleep 0.1; done
+    (cd "$workdir" && env -i HOME="$FAKE_HOME" PATH="/usr/bin:/bin:$(dirname "$CLAUDE_BIN")" \
+      TMPDIR="$TEST_ROOT" USER="${USER:-test}" ANTHROPIC_API_KEY=placeholder-not-a-key \
+      ANTHROPIC_BASE_URL="http://127.0.0.1:$(cat "$port_file")" CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+      /usr/bin/perl -e 'alarm 120; exec @ARGV' "$CLAUDE_BIN" -p 'run the canary' --output-format json \
+      </dev/null >"$TEST_ROOT/turn.json" 2>>"$TEST_ROOT/claude.log") || true
+    kill "$mock_pid" 2>/dev/null || true
+    wait "$mock_pid" 2>/dev/null || true
+    TURN_DIR="$workdir"
+  }
+  cat >"$TEST_ROOT/hook-policy.json" <<JSON
+{"permissions": {"allow": ["Bash(touch canary-ran)"]},
+ "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "echo session >> '$TEST_ROOT/hook-events'"}]}],
+  "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo pretool >> '$TEST_ROOT/hook-events'; echo 'blocked by canary gate' >&2; exit 2"}]}]}}
+JSON
+  prepare_checkout "$TEST_ROOT/hook-policy.json"
+  ln -s "$CHECKOUT/$TRACKED" "$MACHINE"
+  run_policy
+  run_claude plugin marketplace add "$MARKET" --scope user
+  assert_equals "$(object_type "$MACHINE")" file 'hook row: converted machine file stays regular after a Claude write'
+  claude_turn
+  assert_equals "$(json_field "$TEST_ROOT/turn.json" 'result')" '"mock done"' 'hook row: a real Claude turn completes against the mock API'
+  assert_equals "$(tr '\n' ' ' <"$TEST_ROOT/hook-events")" 'session pretool ' 'machine-file SessionStart and PreToolUse hooks fire'
+  assert_equals "$(object_type "$TURN_DIR/canary-ran")" absent 'the PreToolUse gate blocks the allowed Bash call'
+  grep -rqF 'blocked by canary gate' "$FAKE_HOME/.claude/projects" || fail 'gate reason missing from the transcript'
+  pass 'the gate reason reaches the model'
+  # Control: without the gate the allowed call runs, so the block was the hook's.
+  /usr/bin/python3 -c 'import json,sys
+d=json.load(open(sys.argv[1])); del d["hooks"]["PreToolUse"]; json.dump(d,open(sys.argv[1],"w"))' "$MACHINE"
+  claude_turn
+  assert_equals "$(object_type "$TURN_DIR/canary-ran")" file 'control: the machine-file allow rule runs the call without the gate'
+  assert_equals "$(checkout_status)" '' 'hook row leaves the checkout clean'
+  real_rows_covered=$((real_rows_covered + 1))
 else
   printf '# skip real-Claude rows: no claude executable on PATH (set CLAUDE_SETTINGS_TEST_CLAUDE)\n'
   real_rows_skipped=$real_rows_expected
@@ -553,7 +670,7 @@ assert_equals "$((real_rows_covered + real_rows_skipped))" "$real_rows_expected"
 printf '# real-Claude rows: covered=%d skipped=%d\n' "$real_rows_covered" "$real_rows_skipped"
 # Pinned total: a dropped row is a reviewable edit. Without claude, the real
 # rows' assertions do not run.
-expected_assertions=$(( real_rows_skipped == 0 ? 114 : 102 ))
+expected_assertions=$(( real_rows_skipped == 0 ? 136 : 111 ))
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

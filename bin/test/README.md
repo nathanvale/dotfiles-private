@@ -107,18 +107,23 @@ with a temporary HOME. It proves fresh install, byte-identical repeat, drift
 reporting, policy repair with preserved machine choices, three-way hook and
 permission merges (policy edits and retirements land, host rules,
 `defaultMode`, plugin choices and host-correct paths survive, missing or
-mis-shaped policy entries return, only committed policy is recorded), legacy
+mis-shaped policy hooks and rules return, host-removed plugins, marketplaces
+and status lines stay removed, only committed policy is recorded), legacy
 symlink
 conversion, refusal of foreign or redirected targets and invalid JSON,
 `CLAUDE_CONFIG_DIR` placement, and a clean merge of an intentional policy edit.
 With an installed `claude`, it also proves that the legacy symlink lets one
 supported plugin operation dirty a clean checkout, and that the installed
 layout keeps repeated plugin operations out of Git while hooks, permissions
-and skill overrides keep their tracked values, and that
-`~/.claude/settings.local.json` applies only when Claude runs from HOME. Without
-`claude` those three rows skip; covered and skipped rows and the total
-assertion count are pinned. It does not prove hooks firing in an authenticated
-session.
+and skill overrides keep their tracked values, that
+`~/.claude/settings.local.json` applies only when Claude runs from HOME, that
+setup keeps a `plugin uninstall` and `plugin marketplace remove` of a
+policy-declared entry, and that a converted machine file's SessionStart and
+PreToolUse hooks fire and block an allowed call in a real Claude turn, with a
+no-gate control. That turn uses
+`fixtures/claude-mock-messages-api.py` and a placeholder key, so it proves
+settings behavior, not an account-backed session. Without `claude` those five
+rows skip; covered and skipped rows and the total assertion count are pinned.
 
 `setup-completion-test.sh` runs the complete public `setup.sh` process in a
 disposable HOME fixture. It proves phase-option arity and range validation,

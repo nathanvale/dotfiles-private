@@ -14,8 +14,11 @@ Merge, policy over machine:
   three-way merge against the last-applied policy record.
   Policy edits and retirements since that record apply; the host's own hooks,
   rules, plugin choices and paths (such as `defaultMode` or a host-correct
-  status line) stay; a policy entry the host lacks is restored. Without a
-  record, existing host values stay. The record is written only from a policy
+  status line) stay. A security entry the host lacks is restored, because
+  SECURITY_KEYS are a floor; a plugin, marketplace or status line entry the
+  host removed (`claude plugin uninstall`, `plugin marketplace remove`) stays
+  removed until the policy changes that entry. Without a record, existing host
+  values stay and missing policy entries are added. The record is written only from a policy
   file that matches its committed HEAD version, because a dirty tracked file
   (such as one a legacy symlink wrote into) may hold the host's own values.
   `--check --strict` also fails while the host keeps a differing value.
@@ -53,34 +56,41 @@ def load_object(data, label):
     return value
 
 
-def merge_object(base, machine, policy):
+def merge_object(base, machine, policy, removable):
     policy_map = {} if policy is MISSING else policy
     base_map = base if isinstance(base, dict) else {}
     merged = {}
     for key in [*machine, *(key for key in policy_map if key not in machine)]:
-        value = three_way(base_map.get(key, MISSING), machine.get(key, MISSING), policy_map.get(key, MISSING))
+        value = three_way(base_map.get(key, MISSING), machine.get(key, MISSING), policy_map.get(key, MISSING), removable)
         if value is not MISSING:
             merged[key] = value
     return MISSING if policy is MISSING and not merged else merged
 
 
-def merge_list(base, machine, policy):
+def merge_list(base, machine, policy, removable):
     policy_list = [] if policy is MISSING else policy
     base_list = base if isinstance(base, list) else []
     kept = [entry for entry in machine if entry in policy_list or entry not in base_list]
-    merged = kept + [entry for entry in policy_list if entry not in machine]
+    merged = kept + [entry for entry in policy_list if entry not in machine and not (removable and entry in base_list)]
     return MISSING if policy is MISSING and not merged else merged
 
 
-def three_way(base, machine, policy):
-    """Apply policy changes since `base` to `machine`; keep the host's own changes."""
+def three_way(base, machine, policy, removable):
+    """Apply policy changes since `base` to `machine`; keep the host's own changes.
+
+    `removable`: a host removal of an unchanged policy entry stays removed.
+    """
     if machine is MISSING:
-        return policy
+        if not removable or base is MISSING:
+            return policy
+        if isinstance(base, dict) and isinstance(policy, dict):
+            return merge_object(base, {}, policy, removable) or MISSING
+        return MISSING if base == policy else policy
     shape = type(machine) if policy is MISSING else type(policy)
     if isinstance(machine, dict) and shape is dict:
-        return merge_object(base, machine, policy)
+        return merge_object(base, machine, policy, removable)
     if isinstance(machine, list) and shape is list:
-        return merge_list(base, machine, policy)
+        return merge_list(base, machine, policy, removable)
     if policy is MISSING:
         return MISSING if machine == base else machine
     if isinstance(policy, (dict, list)) or isinstance(machine, (dict, list)):
@@ -91,18 +101,17 @@ def three_way(base, machine, policy):
 def merge(machine, policy, record):
     merged = dict(machine)
     for key, value in policy.items():
-        current = machine.get(key)
         if key in MACHINE_CHOICES:
             continue
-        if key not in machine:
-            merged[key] = value
-        elif key in THREE_WAY_KEYS:
-            merged[key] = three_way(record.get(key, MISSING), current, value)
+        if key in THREE_WAY_KEYS:
+            value = three_way(record.get(key, MISSING), machine.get(key, MISSING), value, key not in SECURITY_KEYS)
+            if value is not MISSING:
+                merged[key] = value
         else:
             merged[key] = value
     for key in THREE_WAY_KEYS:
         if key in record and key in machine and key not in policy:
-            value = three_way(record[key], machine[key], MISSING)
+            value = three_way(record[key], machine[key], MISSING, key not in SECURITY_KEYS)
             if value is MISSING:
                 del merged[key]
             else:
