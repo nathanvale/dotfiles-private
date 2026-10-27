@@ -55,9 +55,13 @@ the whole `skillOverrides` block, 73 entries.
   and `theme` (seeded only into a new file), plus plugin and marketplace
   entries the policy does not declare.
 - Existing host still on the symlink: break it before cleaning or updating the
-  checkout, or its machine writes are lost with the tracked diff:
-  `cp ~/.claude/settings.json ~/.claude/settings.json.real && mv
-  ~/.claude/settings.json.real ~/.claude/settings.json`.
+  checkout, or its machine writes are lost with the tracked diff. Confirm the
+  last command prints `file`:
+
+  ```sh
+  cp ~/.claude/settings.json ~/.claude/settings.json.real && mv ~/.claude/settings.json.real ~/.claude/settings.json
+  test -L ~/.claude/settings.json && echo symlink || echo file
+  ```
 - `./verify_install.sh` (`claude-settings.py --check`) names every policy key a
   harness write changed. Port an intended change to the tracked file, or rerun
   setup to restore the policy.
