@@ -35,25 +35,27 @@ done
   before judging a link broken.
 - Exclude `.worktrees` when scanning a repository. Its links are disposable.
 
-## The `/plugin` UI drops `skillOverrides`
+## Claude rewrites its user settings file
 
-`/plugin` rewrites `~/.claude/settings.json` wholesale rather than merging.
-A session removing marketplaces on 2026-08-19 also removed the entire
-`skillOverrides` block, 73 entries, reported only as `✔ Removed 1
-marketplace`. The diff was 16 insertions, 91 deletions.
+Claude Code rewrites `~/.claude/settings.json` wholesale on every supported
+settings write: plugin install, enable or disable, marketplace add, `/model`,
+`/effort`. On a HOME without its one-time migration flags in
+`~/.claude.json`, even `claude plugin list` rewrites it (2.1.311 changed
+`model` to `opus[1m]` and dropped `skipAutoPermissionPrompt`).
 
-The file has two writers that do not know about each other: dotfiles owns it
-as tracked config at `config/agents/claude/settings.json`; the harness owns it
-as runtime state. Unrecognised keys do not survive the harness write.
+While that path was a symlink into dotfiles, each write dirtied the tracked
+file and blocked Herdr Projects merges with "Merge needs a clean checkout"
+(FLS-3 and FLS-4, 27 October 2026). A 2026-08-19 `/plugin` session also lost
+the whole `skillOverrides` block, 73 entries.
 
-Observed, not isolated: several removals happened in one session, so the
-triggering action is unconfirmed. Treat any `/plugin` use as able to destroy
-the block.
-
-- Commit a `skillOverrides` change before other work. Recovery is then
-  `git show <sha>:config/agents/claude/settings.json`.
-- After any `/plugin` use, run `git status` in dotfiles and confirm the block
-  is present with an unchanged entry count.
+- Policy source: `config/agents/claude/settings.json`. Edit it there and run
+  `./setup.sh symlinks`; `bin/dotfiles/claude-settings.py` merges it into the
+  real machine-owned `~/.claude/settings.json`.
+- Machine choices stay out of Git: `model`, `effortLevel`, `modelSettings`,
+  `theme`, plus plugin and marketplace entries the policy does not declare.
+- `./verify_install.sh` (`claude-settings.py --check`) names every policy key a
+  harness write changed. Port an intended change to the tracked file, or rerun
+  setup to restore the policy.
 - Plugin state also lives in untracked runtime files
   (`~/.claude/plugins/known_marketplaces.json`, `installed_plugins.json`).
   An `enabledPlugins` key with no matching install is inert: a session starts

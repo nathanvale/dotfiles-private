@@ -1413,6 +1413,9 @@ main() {
 
         log_section "Installing Herdr coordinator instructions"
         run_setup_child /usr/bin/python3 "$dotfiles/bin/dotfiles/herdr-defaults.py"
+
+        log_section "Installing Claude settings policy"
+        run_setup_child /usr/bin/python3 "$dotfiles/bin/dotfiles/claude-settings.py"
     }
 
     install_prefs() {

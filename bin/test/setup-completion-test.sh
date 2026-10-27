@@ -100,6 +100,9 @@ prepare_fixture() {
   cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$FIXTURE_DOTFILES/bin/dotfiles/herdr-defaults.py"
   mkdir -p "$FIXTURE_DOTFILES/config/herdr"
   cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$FIXTURE_DOTFILES/config/herdr/coordinator-instructions.txt"
+  cp "$REPO_ROOT/bin/dotfiles/claude-settings.py" "$FIXTURE_DOTFILES/bin/dotfiles/claude-settings.py"
+  mkdir -p "$FIXTURE_DOTFILES/config/agents/claude"
+  cp "$REPO_ROOT/config/agents/claude/settings.json" "$FIXTURE_DOTFILES/config/agents/claude/settings.json"
   chmod +x "$FIXTURE_DOTFILES/setup.sh"
 
   mkdir -p "$FIXTURE_DOTFILES/bin/dotfiles/symlinks"
@@ -454,6 +457,9 @@ cp "$REPO_ROOT/verify_install.sh" "$actual_verifier_dotfiles/verify_install.sh"
 mkdir -p "$actual_verifier_dotfiles/bin/dotfiles" "$actual_verifier_dotfiles/config/herdr"
 cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$actual_verifier_dotfiles/bin/dotfiles/"
 cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$actual_verifier_dotfiles/config/herdr/"
+cp "$REPO_ROOT/bin/dotfiles/claude-settings.py" "$actual_verifier_dotfiles/bin/dotfiles/"
+mkdir -p "$actual_verifier_dotfiles/config/agents/claude"
+cp "$REPO_ROOT/config/agents/claude/settings.json" "$actual_verifier_dotfiles/config/agents/claude/"
 chmod +x "$actual_verifier_dotfiles/verify_install.sh"
 set +e
 env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" \

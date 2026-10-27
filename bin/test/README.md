@@ -33,6 +33,7 @@ bin/test/toolchain-apply-test.sh
 bin/test/toolchain-bootstrap-test.sh
 bin/test/setup-completion-test.sh
 bin/test/setup-state-recovery-test.sh
+bin/test/claude-settings-policy-test.sh
 bin/test/profile-link-parity-test.sh
 bin/test/bun-core-install-test.sh
 bin/test/lm-studio-ensure-test.sh
@@ -98,6 +99,19 @@ hostile inherited `DOTFILES`, and silent zero-exit startup. Mise, pyenv, and
 the retired fnm are process fakes, so this does not prove a Homebrew install,
 real runtime download, project-local override, arbitrary GUI host, or clean
 no-cache Mac.
+
+`claude-settings-policy-test.sh` copies `bin/dotfiles/claude-settings.py` and
+a policy into disposable Git checkouts and runs it under an empty environment
+with a temporary HOME. It proves fresh install, byte-identical repeat, drift
+reporting, policy repair with preserved machine choices, legacy symlink
+conversion, refusal of foreign or redirected targets and invalid JSON,
+`CLAUDE_CONFIG_DIR` placement, and a clean merge of an intentional policy edit.
+With an installed `claude`, it also proves that the legacy symlink lets one
+supported plugin operation dirty a clean checkout, and that the installed
+layout keeps repeated plugin operations out of Git while hooks, permissions
+and skill overrides keep their tracked values. Without `claude` those two rows
+skip with a pinned count. It does not prove hooks firing in an authenticated
+session.
 
 `setup-completion-test.sh` runs the complete public `setup.sh` process in a
 disposable HOME fixture. It proves phase-option arity and range validation,
