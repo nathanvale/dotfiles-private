@@ -334,7 +334,7 @@ with-one-password-token inject <ENV_KEY> <op://reference> -- <command>
 | `setup.sh` sudo denied | MDM restrictions | Note failures, continue without sudo |
 | `profile.zsh` not sourced | Slug unset, rejected, or refused | Run `dotfiles-work-profile`; it names which |
 | Symlink shows WRONG | Target changed | `symlinks_manage.sh --link --force` |
-| `with-one-password-token check` blocked | OP_SERVICE_ACCOUNT_TOKEN missing or file mode wrong | Add to `~/code/dotfiles/.env`, mode 0600 |
+| `with-one-password-token check` blocked | Keychain token unavailable and `.env` token missing or file mode wrong | Read `keychain_status` in the envelope; repair per `with-one-password-token --help` |
 | `brew bundle` ignores env var | Missing HOMEBREW_ prefix | Rename to `HOMEBREW_<name>` |
 | Node not found in non-interactive shell | No applied Mise revision selected | `bin/dotfiles/toolchain status --json`; apply with `toolchain update --apply` |
 | macOS prefs not applied | Needs restart | `killall SystemUIServer` or restart |
