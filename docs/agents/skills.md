@@ -5,8 +5,8 @@
 | Skill | Owner | Everyday action |
 | --- | --- | --- |
 | Personal | `config/agents/plugins/personal/` | Edit the plugin source and refresh the native plugin. |
-| Matt Pocock | `npx skills` | Use its global add, list, update, and remove commands. |
-| Other reviewed third-party | `config/agents/skills/third-party/` | Follow [third-party skills](third-party-skills.md). |
+| Third-party, including Matt Pocock | `npx skills` | Use its global add, list, update, and remove commands; follow [third-party skills](third-party-skills.md). |
+| GOG, Herdr, `find-skills` (pending migration to the installer) | `config/agents/skills/third-party/` | Leave as is; [third-party skills](third-party-skills.md) records the pending migration. |
 | Project-only | Owning project | Keep discovery within that project. |
 | Codex-installed or another plugin | That Harness or plugin | Use its native management route. |
 
@@ -52,9 +52,12 @@ for the one-time source and installed-address cutover. Preserve old live links
 until the replacement plugin works. Remove only links whose stored and resolved
 targets identify the old personal source.
 
-`bin/agent-skills-inventory --json` checks the remaining reviewed vendors,
-project addresses, and obsolete links. Personal enablement belongs to the
-native manifests; Matt installation belongs to the installer lock.
+`bin/agent-skills-inventory --json` accepts every skill in the machine lock as
+installer-owned at `~/.agents/skills` and `~/.claude/skills`, with no topology
+or repository-lock declaration. It also checks the vendors pending migration,
+project addresses, and obsolete links, and reports an entry with no lock entry
+and no other owner as `unknown-provenance`. Personal enablement belongs to the
+native manifests; third-party installation belongs to the installer lock.
 Entries that an app writes into a user address (Claude's `synced` and `.trash`,
 the work board's `herdr-projects`) are declared in `topology.json#appOwned`.
 
