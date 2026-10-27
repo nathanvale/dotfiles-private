@@ -13,9 +13,10 @@
 # when the port changes, so the next start follows the move.
 #
 # A link port that another Laptop process already listens on (for example a
-# forward added to the shared interactive mac-mini mux) is left alone. When
-# every port is held this waits without opening an SSH connection, so it never
-# competes for a port or repeats authentication.
+# forward added to the shared interactive mac-mini mux) is left alone and
+# checked every poll; once it is released the session ends so the next start
+# takes it over. When every port is held this waits without opening an SSH
+# connection, so it never competes for a port or repeats authentication.
 
 set -euo pipefail
 
@@ -36,8 +37,10 @@ die() {
   exit 1
 }
 
+# Always run in a subshell (command substitution or &), so exec makes the
+# subshell the ssh process itself and its PID is the one to stop.
 ssh_mini() {
-  "${SSH_BIN}" -S none -n \
+  exec "${SSH_BIN}" -S none -n \
     -o BatchMode=yes \
     -o StrictHostKeyChecking=yes \
     -o ServerAliveInterval=15 \
@@ -66,6 +69,15 @@ valid_port() {
 # PIDs listening on a local port on any local address; empty when free.
 port_listeners() {
   "${LSOF_BIN}" -nP -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true
+}
+
+# First of the given ports that no process listens on any more; fails when all are held.
+first_released() {
+  local port
+  for port in "$@"; do
+    [[ -z "$(port_listeners "${port}")" ]] && echo "${port}" && return 0
+  done
+  return 1
 }
 
 # Retain the original per-port agents alongside automatic report discovery.
@@ -104,7 +116,11 @@ main() {
   while read -r port; do
     valid_port "${port}" && [[ "${port}" != "${current}" ]] && ports+=("${port}")
   done < <(tail -n +2 <<<"${discovered}")
-  ((${#ports[@]} <= MAX_PORTS)) || die "found ${#ports[@]} link ports, more than HERDR_REPORT_FORWARD_MAX_PORTS=${MAX_PORTS}"
+  if ((${#ports[@]} > MAX_PORTS)); then
+    # Keep the current port (first) and the lowest older ones.
+    log "status=truncated found=${#ports[@]} kept=${MAX_PORTS} setting=HERDR_REPORT_FORWARD_MAX_PORTS"
+    ports=("${ports[@]:0:${MAX_PORTS}}")
+  fi
 
   local -a forwards=() forwarded=() held=()
   for port in "${ports[@]}"; do
@@ -118,25 +134,34 @@ main() {
     fi
   done
 
+  local freed
   if ((${#forwards[@]} == 0)); then
     # Wait locally until one held port frees; the next start rediscovers.
-    while true; do
-      for port in "${held[@]}"; do
-        [[ -z "$(port_listeners "${port}")" ]] && exit 0
-      done
+    until freed="$(first_released "${held[@]}")"; do
       sleep "${POLL_SECONDS}"
     done
+    log "status=released port=${freed}"
+    exit 0
   fi
 
   log "status=forwarding remote_port=${current} ports=$(IFS=,; echo "${forwarded[*]}") host=${SSH_HOST}"
-  exec "${SSH_BIN}" -S none -n \
-    -o BatchMode=yes \
-    -o StrictHostKeyChecking=yes \
-    -o ExitOnForwardFailure=yes \
-    -o ServerAliveInterval=15 \
-    -o ServerAliveCountMax=3 \
-    "${forwards[@]}" \
-    "${SSH_HOST}" "$(watch_command "${current}")"
+  ssh_mini -o ExitOnForwardFailure=yes "${forwards[@]}" "${SSH_HOST}" "$(watch_command "${current}")" &
+  local ssh_pid=$! status=0
+  trap 'kill "${ssh_pid}" 2>/dev/null || true; exit 143' TERM INT
+
+  while kill -0 "${ssh_pid}" 2>/dev/null; do
+    if ((${#held[@]} > 0)) && freed="$(first_released "${held[@]}")"; then
+      log "status=reclaiming port=${freed}"
+      kill "${ssh_pid}" 2>/dev/null || true
+      wait "${ssh_pid}" 2>/dev/null || true
+      exit 0
+    fi
+    # Backgrounded so a TERM from launchd is handled without waiting out the poll.
+    sleep "${POLL_SECONDS}" &
+    wait $! || true
+  done
+  wait "${ssh_pid}" || status=$?
+  exit "${status}"
 }
 
 main "$@"
