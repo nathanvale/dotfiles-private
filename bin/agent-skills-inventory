@@ -517,23 +517,31 @@ class Inventory:
             return
         self.attach(row, "unknown-provenance", "entry has no declared source owner")
 
+    def installer_payload(self, name):
+        """Return the real installer payload directory for a name, or None."""
+        entry = os.path.join(ADDRESSES["agents"], name)
+        target = os.path.realpath(entry)
+        if not os.path.isfile(os.path.join(target, "SKILL.md")):
+            return None
+        if os.path.islink(entry):
+            obsolete_roots = (LEGACY_SOURCE, PERSONAL_SOURCE, THIRD_PARTY_SOURCE)
+            if os.path.basename(target) != name or any(
+                is_within(target, root) for root in obsolete_roots
+            ):
+                return None
+        return target
+
     def installer_address_matches(self, row):
         """The installer owns its payload at `agents` and links to it elsewhere."""
-        name = row["name"]
-        payload = os.path.realpath(os.path.join(ADDRESSES["agents"], name))
-        target = row["resolved_target"]
-        if not os.path.exists(target):
+        payload = self.installer_payload(row["name"])
+        if payload is None:
             return False
         if row["address"] == "agents":
-            if row["filesystem_kind"] == "directory":
-                return True
-            obsolete_roots = (LEGACY_SOURCE, PERSONAL_SOURCE, THIRD_PARTY_SOURCE)
-            return (
-                row["filesystem_kind"] == "symlink"
-                and os.path.basename(target) == name
-                and not any(is_within(target, root) for root in obsolete_roots)
-            )
-        return row["filesystem_kind"] == "symlink" and target == payload
+            return True
+        return (
+            row["filesystem_kind"] == "symlink"
+            and row["resolved_target"] == payload
+        )
 
     def app_owned_matches(self, row, declaration):
         """An app-owned entry is a real directory at a declared address."""

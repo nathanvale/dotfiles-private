@@ -725,6 +725,37 @@ describe('agent-skills-inventory public process', () => {
 			expect(issuePairs(JSON.parse(result.stdout.toString()))).toContainEqual(['installer-address-mismatch', 'agents', 'turborepo-fixture'])
 		})
 
+		test('rejects a shared payload that is a regular file, with the links through it', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			write(join(fixture.home, 'elsewhere', 'turborepo-fixture'), 'not a skill\n')
+			symlinkSync(join(fixture.home, 'elsewhere', 'turborepo-fixture'), join(fixture.agents, 'turborepo-fixture'))
+			symlinkSync(join(fixture.agents, 'turborepo-fixture'), join(fixture.codex, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(issuePairs(report).map((pair) => pair[0])).toContain('installer-address-mismatch')
+			expect(report.entries.filter((row: { name: string, provenance: string }) => row.name === 'turborepo-fixture' && row.provenance === 'third-party-installer-owned')).toEqual([])
+		})
+
+		test('rejects links through a shared payload that points into the obsolete personal source', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			skill(join(fixture.personalSource, 'turborepo-fixture', 'SKILL.md'), 'turborepo-fixture')
+			symlinkSync(join(fixture.personalSource, 'turborepo-fixture'), join(fixture.agents, 'turborepo-fixture'))
+			symlinkSync(join(fixture.agents, 'turborepo-fixture'), join(fixture.codex, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.entries.filter((row: { name: string, provenance: string }) => row.name === 'turborepo-fixture' && row.provenance === 'third-party-installer-owned')).toEqual([])
+			const addresses = issuePairs(report).filter((pair) => pair[2] === 'turborepo-fixture').map((pair) => pair[1])
+			expect(addresses).toEqual(expect.arrayContaining(['agents', 'claude', 'codex']))
+		})
+
 		test('accepts a Codex link to the installer payload and flags an independent Codex copy', () => {
 			const fixture = makeFixture()
 			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
