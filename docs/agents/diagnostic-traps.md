@@ -52,8 +52,7 @@ the whole `skillOverrides` block, 73 entries.
   `./setup.sh symlinks`; `bin/dotfiles/claude-settings.py` merges it into the
   real machine-owned `~/.claude/settings.json`.
 - Machine choices stay out of Git: `model`, `effortLevel`, `modelSettings`
-  and `theme` (seeded only into a new file), plus plugin and marketplace
-  entries the policy does not declare.
+  and `theme` are seeded only into a new file.
 - Existing host still on the symlink: break it before cleaning or updating the
   checkout, or its machine writes are lost with the tracked diff. Confirm the
   last command prints `file`:
@@ -62,13 +61,15 @@ the whole `skillOverrides` block, 73 entries.
   cp ~/.claude/settings.json ~/.claude/settings.json.real && mv ~/.claude/settings.json.real ~/.claude/settings.json
   test -L ~/.claude/settings.json && echo symlink || echo file
   ```
-- Hooks and permissions merge three ways against
-  `~/.claude/settings.dotfiles-policy.json`, the last-applied policy: policy
-  edits and retirements apply, a host's own hooks, rules and `defaultMode`
-  stay, and a missing policy hook or rule is restored. A host's first run, and
-  a legacy-link conversion, write no trusted record, so every existing host
-  value stays. A host rule the policy later adopts and then retires goes with
-  it.
+- Hooks, permissions, `enabledPlugins`, `extraKnownMarketplaces` and
+  `statusLine` merge three ways against
+  `~/.claude/settings.dotfiles-policy.json`, the last-applied policy. Policy
+  edits and retirements apply, a host's own hooks, rules, plugin choices and
+  host-correct paths stay, and a missing policy entry is restored.
+- Setup records only a policy file that matches its committed `HEAD`, so a
+  dirty tracked file (such as one a legacy symlink wrote into) never becomes
+  the baseline. Without a record, every existing host value stays. A host rule
+  the policy later adopts and then retires goes with it.
 - `./verify_install.sh` fails on unapplied or missing policy and warns when a
   host keeps a security value that differs from it. `claude-settings.py
   --check` prints each `Host keeps …` value; port an intended one to the

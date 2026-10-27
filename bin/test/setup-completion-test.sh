@@ -570,6 +570,45 @@ cmp -s "$TEST_ROOT/tracked-before" "$FIXTURE_DOTFILES/config/agents/claude/setti
   fail 'legacy conversion changed the tracked Claude settings'
 pass 'legacy conversion leaves the tracked Claude settings unchanged'
 
+# Repeated public setup before the owner cleans the tracked file keeps
+# host-only controls written through the legacy link.
+reset_fixture
+git -C "$FIXTURE_DOTFILES" init -q -b main
+git -C "$FIXTURE_DOTFILES" -c user.name=test -c user.email=test@invalid -c commit.gpgsign=false \
+  add config/agents/claude/settings.json
+git -C "$FIXTURE_DOTFILES" -c user.name=test -c user.email=test@invalid -c commit.gpgsign=false \
+  commit -qm policy
+rm -f "$FIXTURE_HOME/.claude/settings.json" "$FIXTURE_HOME/.claude/settings.dotfiles-policy.json"
+ln -s "$FIXTURE_DOTFILES/config/agents/claude/settings.json" "$FIXTURE_HOME/.claude/settings.json"
+/usr/bin/python3 - "$FIXTURE_HOME/.claude/settings.json" <<'PYTEST'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["permissions"]["deny"].append("Read(~/private/**)")
+data["hooks"].setdefault("PreToolUse", []).append(
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "host-gate.sh"}]})
+json.dump(data, open(path, "w"), indent=2)
+PYTEST
+write_verifier pass
+for attempt in first second; do
+  run_setup '' pass --desktop --start-phase 6
+  [[ "$RUN_EXIT" -eq 0 ]] || fail "$attempt setup before tracked cleanup exits zero"
+  pass "$attempt setup before tracked cleanup exits zero"
+done
+git -C "$FIXTURE_DOTFILES" checkout -q -- config/agents/claude/settings.json
+run_setup '' pass --desktop --start-phase 6
+[[ "$RUN_EXIT" -eq 0 ]] || fail 'setup after tracked cleanup exits zero'
+pass 'setup after tracked cleanup exits zero'
+/usr/bin/python3 - "$FIXTURE_HOME/.claude/settings.json" <<'PYTEST' ||
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert "Read(~/private/**)" in data["permissions"]["deny"], data["permissions"]["deny"]
+assert any(h["command"] == "host-gate.sh" for g in data["hooks"]["PreToolUse"] for h in g["hooks"])
+PYTEST
+  fail 'repeated setup before tracked cleanup keeps host-only deny rule and gate'
+pass 'repeated setup before tracked cleanup keeps host-only deny rule and gate'
+rm -rf "$FIXTURE_DOTFILES/.git"
+
 cat >"$FIXTURE_HOME/.herdr-projects/settings/config.json" <<'JSON'
 {"coordinator":{"instructions":" Keep my custom words. ","effort":"high"},"coordinators":{"projects":{"example":{"coordinator":{"instructions":"project words"}}}},"merge":{"by":"you"}}
 JSON
@@ -686,7 +725,7 @@ done
 TEST_HERDR_PROJECTS_HOME=''
 TEST_HERDR_PROJECTS_CONFIG_DIR=''
 
-expected_assertions=105
+expected_assertions=109
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

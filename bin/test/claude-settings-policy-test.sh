@@ -170,7 +170,7 @@ JSON
 cp "$MACHINE" "$TEST_ROOT/drifted"
 run_policy --check
 assert_equals "$RUN_STATUS" 1 'check fails on policy drift'
-for key in permissions hooks disableAllHooks enabledPlugins skillOverrides; do
+for key in permissions hooks disableAllHooks skillOverrides; do
   assert_contains "$RUN_STDERR" "$key" "check names drifted policy key $key"
 done
 for key in model effortLevel modelSettings theme pstack feedbackSurveyState; do
@@ -190,7 +190,7 @@ assert_equals "$(canonical "$MACHINE")" "$(canonical_text '{
   "effortLevel": "xhigh",
   "modelSettings": {"claude-opus-5-5": {"effortLevel": "max"}, "claude-sonnet-5-5": {"effortLevel": "xhigh"}},
   "theme": "light",
-  "enabledPlugins": {"proof@personal": true, "pstack@cursor-plugins": true},
+  "enabledPlugins": {"proof@personal": false, "pstack@cursor-plugins": true},
   "extraKnownMarketplaces": {"cursor-plugins": {"source": {"source": "github", "repo": "cursor/plugins"}}, "personal": {"source": {"source": "directory", "path": "/p"}}},
   "skillOverrides": {"gog": "off"},
   "feedbackSurveyState": {"lastShownTime": 1}
@@ -223,6 +223,7 @@ data = json.load(open(path))
 exec(change)
 json.dump(data, open(path, "w"), indent=2)
 PY
+  git_c commit -qam 'policy change'
 }
 
 prepare_checkout "$POLICY_FIXTURE"
@@ -289,6 +290,27 @@ assert_equals "$RUN_STATUS" 1 'check fails when a security value has the wrong s
 run_policy
 assert_equals "$(json_field "$MACHINE" 'hooks.PreToolUse')" "$(json_field "$POLICY_FIXTURE" 'hooks.PreToolUse')" 'install restores a mis-shaped policy hook list'
 assert_equals "$(json_field "$MACHINE" 'permissions.deny')" '["AskUserQuestion"]' 'install restores a mis-shaped policy rule list'
+
+# --- Host-correct paths survive; later policy changes still land -----------
+
+prepare_checkout "$REPO_ROOT/$TRACKED"
+run_policy
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["statusLine"]["command"] = "bash /Users/server/.claude/statusline-command.sh"
+data["extraKnownMarketplaces"]["personal"]["source"]["path"] = "/Users/server/code/dotfiles/config/agents/plugins"
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy
+assert_equals "$(json_field "$MACHINE" 'statusLine.command')" '"bash /Users/server/.claude/statusline-command.sh"' 'install keeps a host-correct status line'
+assert_equals "$(json_field "$MACHINE" 'extraKnownMarketplaces.personal.source.path')" '"/Users/server/code/dotfiles/config/agents/plugins"' 'install keeps a host-correct marketplace path'
+run_policy --check
+assert_equals "$RUN_STATUS" 0 'check accepts host-correct paths'
+edit_policy 'data["statusLine"]["padding"] = 1'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'statusLine')" '{"command": "bash /Users/server/.claude/statusline-command.sh", "padding": 1, "type": "command"}' 'a later policy change lands beside the host-correct path'
 
 # --- Host security controls survive; only missing policy entries are added --
 
@@ -368,11 +390,19 @@ json.dump(data, open(path, "w"), indent=2)
 PY
 run_policy
 assert_equals "$RUN_STATUS" 0 'install converts a legacy link carrying host controls'
+run_policy
+assert_equals "$RUN_STATUS" 0 'repeat install before the owner cleans the tracked file'
+assert_contains "$RUN_STDOUT" 'uncommitted' 'install says it does not record an uncommitted policy'
 git_c checkout -q -- "$TRACKED"
 run_policy
 assert_equals "$RUN_STATUS" 0 'install succeeds after the owner restores the tracked file'
 assert_equals "$(json_field "$MACHINE" 'permissions.deny')" '["AskUserQuestion", "Read(~/.ssh/**)"]' 'host deny rule written through the legacy link survives'
 assert_equals "$(/usr/bin/python3 -c 'import json,sys;print(sum(1 for g in json.load(open(sys.argv[1]))["hooks"]["PreToolUse"] for h in g["hooks"] if h["command"]=="host-gate.sh"))' "$MACHINE")" 1 'host hook written through the legacy link survives'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'permissions.deny')" '["AskUserQuestion", "Read(~/.ssh/**)"]' 'host deny rule survives a later setup with a committed record'
+run_policy --check --strict
+assert_equals "$RUN_STATUS" 1 'strict check reports the host-only controls'
+assert_contains "$RUN_STDOUT" 'Read(~/.ssh/**)' 'strict check names the host-only deny rule'
 
 prepare_checkout "$POLICY_FIXTURE"
 printf '%s\n' '{"sentinel":"foreign"}' >"$TEST_ROOT/foreign.json"

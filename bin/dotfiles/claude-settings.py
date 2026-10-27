@@ -10,30 +10,33 @@ Merge, policy over machine:
 - MACHINE_CHOICES: the policy seeds them only into a new file; afterwards the
   machine owns them, including their absence (Claude deletes `model` for the
   default model).
-- MERGED_MAPS: policy entries win; entries only the machine declares stay.
-- SECURITY_KEYS: three-way merge against the last-applied policy record.
+- THREE_WAY_KEYS (security, plugin and marketplace maps, the status line):
+  three-way merge against the last-applied policy record.
   Policy edits and retirements since that record apply; the host's own hooks,
-  rules and values (such as `defaultMode`) stay; a policy hook or rule the
-  host lacks is restored. Without a record, existing host values stay; a
-  legacy-link conversion writes no record, because the tracked file may then
-  hold the host's own writes.
+  rules, plugin choices and paths (such as `defaultMode` or a host-correct
+  status line) stay; a policy entry the host lacks is restored. Without a
+  record, existing host values stay. The record is written only from a policy
+  file that matches its committed HEAD version, because a dirty tracked file
+  (such as one a legacy symlink wrote into) may hold the host's own values.
   `--check --strict` also fails while the host keeps a differing value.
 - Every other policy key: the policy value wins.
 - Keys the policy does not declare stay as the machine wrote them.
 
-Setup never deletes a machine key outside SECURITY_KEYS. Retire a policy entry
-there with an explicit value, such as false for a plugin.
+Outside THREE_WAY_KEYS, setup never deletes a machine key; retire a policy
+key there with an explicit value.
 """
 
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 
 MACHINE_CHOICES = ("model", "effortLevel", "modelSettings", "theme")
-MERGED_MAPS = ("enabledPlugins", "extraKnownMarketplaces")
 SECURITY_KEYS = ("hooks", "permissions")
+THREE_WAY_KEYS = (*SECURITY_KEYS, "enabledPlugins", "extraKnownMarketplaces", "statusLine")
+POLICY_PATH = "config/agents/claude/settings.json"
 RECORD_NAME = "settings.dotfiles-policy.json"
 REPAIR = "run ./setup.sh symlinks"
 MISSING = object()
@@ -93,13 +96,11 @@ def merge(machine, policy, record):
             continue
         if key not in machine:
             merged[key] = value
-        elif key in SECURITY_KEYS:
+        elif key in THREE_WAY_KEYS:
             merged[key] = three_way(record.get(key, MISSING), current, value)
-        elif key in MERGED_MAPS and isinstance(current, dict) and isinstance(value, dict):
-            merged[key] = {**current, **value}
         else:
             merged[key] = value
-    for key in SECURITY_KEYS:
+    for key in THREE_WAY_KEYS:
         if key in record and key in machine and key not in policy:
             value = three_way(record[key], machine[key], MISSING)
             if value is MISSING:
@@ -150,6 +151,18 @@ def write_atomic(target, data, original, mode):
             os.unlink(staged)
 
 
+def committed(root, data):
+    """True when the policy bytes equal the committed HEAD version."""
+    if not (root / ".git").exists():
+        return False
+    try:
+        head = subprocess.run(["git", "-C", str(root), "show", f"HEAD:{POLICY_PATH}"],
+                              capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return head == data
+
+
 def resolve_target(source, check):
     target = settings_path()
     for path in target.parents:
@@ -168,8 +181,10 @@ def main():
         raise ValueError("Usage: claude-settings.py [--check [--strict]]")
     check = sys.argv[1:2] == ["--check"]
     strict = sys.argv[2:] == ["--strict"]
-    source = Path(__file__).resolve().parents[2] / "config/agents/claude/settings.json"
-    policy = load_object(source.read_bytes(), "Claude settings policy")
+    root = Path(__file__).resolve().parents[2]
+    source = root / POLICY_PATH
+    policy_bytes = source.read_bytes()
+    policy = load_object(policy_bytes, "Claude settings policy")
     target, legacy = resolve_target(source, check)
     record_path = target.parent / RECORD_NAME
     record_bytes = record_path.read_bytes() if record_path.exists() else None
@@ -200,8 +215,11 @@ def main():
         print(f"Installed Claude settings policy into {target}; machine choices preserved")
     else:
         print("Claude settings policy already applied")
-    applied = render({key: policy[key] for key in SECURITY_KEYS if key in policy})
-    if applied != record_bytes and not legacy:
+    if not committed(root, policy_bytes):
+        print(f"Tracked policy has uncommitted changes; applied but not recorded in {record_path.name}")
+        return
+    applied = render({key: policy[key] for key in THREE_WAY_KEYS if key in policy})
+    if applied != record_bytes:
         write_atomic(record_path, applied, record_bytes, 0o600)
 
 
