@@ -114,8 +114,10 @@ conversion, refusal of foreign or redirected targets and invalid JSON,
 With an installed `claude`, it also proves that the legacy symlink lets one
 supported plugin operation dirty a clean checkout, and that the installed
 layout keeps repeated plugin operations out of Git while hooks, permissions
-and skill overrides keep their tracked values. Without `claude` those two rows
-skip with a pinned count. It does not prove hooks firing in an authenticated
+and skill overrides keep their tracked values, and that
+`~/.claude/settings.local.json` applies only when Claude runs from HOME. Without
+`claude` those three rows skip; covered and skipped rows and the total
+assertion count are pinned. It does not prove hooks firing in an authenticated
 session.
 
 `setup-completion-test.sh` runs the complete public `setup.sh` process in a
@@ -125,7 +127,9 @@ suffix execution, mandatory verification before checkpoint clearance, retained
 repair checkpoints for failed or missing verification, qualified warning
 receipts, malformed machine-summary refusal, the real verifier's stable summary
 emission, the linked-worktree activation boundary, and that public setup
-installs a regular Claude settings file with the tracked hooks and permissions
+installs a regular Claude settings file with the tracked hooks and permissions,
+that the real verifier reports a missing policy without installing it and
+passes both Claude rows once it is installed,
 and converts a legacy settings link without writing through it, keeping
 host-only controls across repeated setup before the tracked file is cleaned. It uses harmless Phase 6
 collaborators and a fake verifier for setup boundary cases, so it does not prove

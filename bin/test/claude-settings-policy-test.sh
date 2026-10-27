@@ -472,7 +472,7 @@ assert_equals "$(checkout_status)" '' 'applying merged policy leaves the checkou
 
 # --- Real Claude settings operations ----------------------------------------
 
-real_rows_expected=2
+real_rows_expected=3
 real_rows_covered=0
 real_rows_skipped=0
 
@@ -529,6 +529,21 @@ if [[ -x "$CLAUDE_BIN" ]]; then
   run_policy --check
   assert_equals "$RUN_STATUS" 0 'check passes after Claude plugin choices'
   real_rows_covered=$((real_rows_covered + 1))
+
+  # Scope: ~/.claude/settings.local.json is HOME's project-local file, so it
+  # cannot replace a user-level setting for work outside HOME.
+  canary_enabled() {
+    (cd "$1" && env -i HOME="$FAKE_HOME" PATH="/usr/bin:/bin:$(dirname "$CLAUDE_BIN")" TMPDIR="$TEST_ROOT" \
+      USER="${USER:-test}" "$CLAUDE_BIN" plugin list --json </dev/null 2>/dev/null) |
+      /usr/bin/python3 -c 'import json,sys
+d=json.load(sys.stdin); d=d if isinstance(d,list) else d.get("plugins",d)
+print(next((str(p.get("enabled")) for p in d if str(p.get("id",p.get("name",""))).startswith("canary")),"absent"))'
+  }
+  printf '%s\n' '{"enabledPlugins":{"canary@test-local":false}}' >"$FAKE_HOME/.claude/settings.local.json"
+  mkdir -p "$TEST_ROOT/elsewhere"
+  assert_equals "$(canary_enabled "$TEST_ROOT/elsewhere")" True 'user-dir settings.local.json does not override user settings outside HOME'
+  assert_equals "$(canary_enabled "$FAKE_HOME")" False 'user-dir settings.local.json applies only when Claude runs from HOME'
+  real_rows_covered=$((real_rows_covered + 1))
 else
   printf '# skip real-Claude rows: no claude executable on PATH (set CLAUDE_SETTINGS_TEST_CLAUDE)\n'
   real_rows_skipped=$real_rows_expected
@@ -536,4 +551,9 @@ fi
 
 assert_equals "$((real_rows_covered + real_rows_skipped))" "$real_rows_expected" 'real-Claude rows are all accounted for'
 printf '# real-Claude rows: covered=%d skipped=%d\n' "$real_rows_covered" "$real_rows_skipped"
+# Pinned total: a dropped row is a reviewable edit. Without claude, the real
+# rows' assertions do not run.
+expected_assertions=$(( real_rows_skipped == 0 ? 114 : 102 ))
+[[ "$assertion_count" -eq "$expected_assertions" ]] ||
+  fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

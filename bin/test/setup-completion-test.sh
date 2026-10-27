@@ -480,6 +480,12 @@ assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✗ Herdr coordinator 
   'real verifier reports the missing coordinator default'
 assert_file_absent "$actual_verifier_home/.herdr-projects/settings/config.json" \
   'real verifier does not install a missing coordinator default'
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✗ Claude settings policy' \
+  'real verifier reports the missing Claude settings policy'
+assert_file_absent "$actual_verifier_home/.claude/settings.json" \
+  'real verifier does not install the Claude settings policy'
+env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" /usr/bin/python3 \
+  "$actual_verifier_dotfiles/bin/dotfiles/claude-settings.py" >"$TEST_ROOT/claude-install-output"
 env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" /usr/bin/python3 \
   "$actual_verifier_dotfiles/bin/dotfiles/herdr-defaults.py" >"$TEST_ROOT/default-install-output"
 cp "$actual_verifier_home/.herdr-projects/settings/config.json" "$TEST_ROOT/verified-settings-before"
@@ -494,6 +500,10 @@ p.write_text(re.sub(r"\x1b\[[0-9;]*m", "", p.read_text()))
 PYTEST
 assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✓ Herdr coordinator default' \
   'real verifier reports the installed coordinator default'
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✓ Claude settings policy' \
+  'real verifier reports the installed Claude settings policy'
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✓ Claude host security values' \
+  'real verifier reports matching Claude host security values'
 cmp -s "$TEST_ROOT/verified-settings-before" "$actual_verifier_home/.herdr-projects/settings/config.json" || fail 'verification changed settings'
 pass 'real verifier leaves coordinator settings unchanged'
 
@@ -725,7 +735,7 @@ done
 TEST_HERDR_PROJECTS_HOME=''
 TEST_HERDR_PROJECTS_CONFIG_DIR=''
 
-expected_assertions=109
+expected_assertions=113
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"
