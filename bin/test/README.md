@@ -37,6 +37,7 @@ bin/test/claude-settings-policy-test.sh
 bin/test/profile-link-parity-test.sh
 bin/test/bun-core-install-test.sh
 bin/test/lm-studio-ensure-test.sh
+bin/test/herdr-report-forward-test.sh
 bin/test/atuin-agent-history-test.sh
 bin/test/symlinks-manage-test.sh
 bin/test/symlinks-real-directory-test.sh

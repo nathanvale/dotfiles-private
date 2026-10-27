@@ -85,6 +85,14 @@ Browser Use are retired by
 
 ### Nathan's home route
 
+For Ovis and Home Assistant, start at the canonical vault's
+[Home web access](../../../my-second-brain-playground/systems/home-web-access.md)
+note. It owns the approved hostnames, private/public login behavior, runtime
+configuration locations and verification boundaries. Resolve the vault through
+`$HOME/.config/context/vault.md` if the adjacent checkout is unavailable.
+Read that setup before changing DNS, proxies, certificates or login protection;
+inspect the named runtime owners before treating recorded state as current.
+
 Nathan already uses WireGuard on his UniFi home router. Its
 [VPN server settings](https://192.168.1.1/network/default/settings/vpn/server)
 are the existing configuration owner.
