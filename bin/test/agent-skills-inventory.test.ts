@@ -667,6 +667,83 @@ describe('agent-skills-inventory public process', () => {
 			])
 		})
 
+		function issuePairs(report: { issues: { code: string, address: string, name: string }[] }) {
+			return report.issues.map((issue) => [issue.code, issue.address, issue.name])
+		}
+
+		test('flags a Claude link redirected to the obsolete legacy source', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.legacySource, 'turborepo-fixture', 'SKILL.md'), 'turborepo-fixture')
+			rmSync(join(fixture.claude, 'turborepo-fixture'))
+			symlinkSync(join(fixture.legacySource, 'turborepo-fixture'), join(fixture.claude, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			expect(issuePairs(JSON.parse(result.stdout.toString()))).toContainEqual(['legacy-live-address', 'claude', 'turborepo-fixture'])
+		})
+
+		test('flags a Claude link that resolves to a different valid payload', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.agents, 'other-skill', 'SKILL.md'), 'other-skill')
+			write(join(fixture.home, '.agents', '.skill-lock.json'), JSON.stringify({ version: 3, skills: {
+				'turborepo-fixture': { source: 'vercel/turborepo' },
+				'other-skill': { source: 'vercel/turborepo' },
+			} }))
+			rmSync(join(fixture.claude, 'turborepo-fixture'))
+			symlinkSync(join('..', '..', '.agents', 'skills', 'other-skill'), join(fixture.claude, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(issuePairs(report)).toEqual([['installer-address-mismatch', 'claude', 'turborepo-fixture']])
+			const row = report.entries.find((entry: { name: string, address: string }) => entry.name === 'turborepo-fixture' && entry.address === 'claude')
+			expect(row.provenance).not.toBe('third-party-installer-owned')
+		})
+
+		test('flags a Claude real directory that is not the installer payload link', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.claude, 'turborepo-fixture'))
+			skill(join(fixture.claude, 'turborepo-fixture', 'SKILL.md'), 'turborepo-fixture')
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			expect(issuePairs(JSON.parse(result.stdout.toString()))).toEqual([['installer-address-mismatch', 'claude', 'turborepo-fixture']])
+		})
+
+		test('flags an agents link that does not name its own payload', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.home, 'elsewhere', 'other-skill', 'SKILL.md'), 'other-skill')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			symlinkSync(join(fixture.home, 'elsewhere', 'other-skill'), join(fixture.agents, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			expect(issuePairs(JSON.parse(result.stdout.toString()))).toContainEqual(['installer-address-mismatch', 'agents', 'turborepo-fixture'])
+		})
+
+		test('accepts a Codex link to the installer payload and flags an independent Codex copy', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			symlinkSync(join(fixture.agents, 'turborepo-fixture'), join(fixture.codex, 'turborepo-fixture'))
+			const linked = run(fixture.home, '--json')
+			expect(linked.exitCode).toBe(0)
+			expect(JSON.parse(linked.stdout.toString()).issues).toEqual([])
+
+			rmSync(join(fixture.codex, 'turborepo-fixture'))
+			skill(join(fixture.codex, 'turborepo-fixture', 'SKILL.md'), 'completely-different-skill')
+			const copied = run(fixture.home, '--json')
+			expect(copied.exitCode).toBe(1)
+			const report = JSON.parse(copied.stdout.toString())
+			expect(issuePairs(report)).toEqual([['codex-duplicate-name', 'codex', 'turborepo-fixture']])
+			const row = report.entries.find((entry: { name: string, address: string }) => entry.name === 'turborepo-fixture' && entry.address === 'codex')
+			expect(row.provenance).toBe('codex-owned')
+		})
+
 		test('keeps a declared reviewed vendor on its reviewed checks until it migrates', () => {
 			const fixture = makeFixture()
 			// The machine lock also records locked-one, which topology declares as a reviewed vendor.

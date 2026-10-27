@@ -53,8 +53,9 @@ installer owns its files, links, and machine lock. A machine-lock entry is
 sufficient provenance. A third-party skill needs no copy under
 `config/agents/skills/third-party/`, no repository lock record, and no
 `topology.json#thirdParty` declaration. `bin/agent-skills-inventory` accepts any
-locked skill at the installer-created `agents` and `claude` addresses and still
-reports broken links, obsolete links, and entries with no lock entry or other
+locked skill at its installer payload in `agents` and at links to that payload
+from `claude` and `codex`. It still reports links to any other target, independent
+copies at link addresses, broken links, and entries with no lock entry or other
 owner. Staging and review before install remain practice for unfamiliar authors,
 not a gate.
 

@@ -29,9 +29,11 @@ addresses with links to copies. Its entry for a skill records the upstream
 `source`, `ref`, and `skillFolderHash`.
 
 `bin/agent-skills-inventory` accepts any skill with a machine-lock entry as
-installer-owned at the installer-created addresses (`agents`, `claude`), whatever
-its upstream source. It still reports broken links, obsolete entries, and
-entries with no lock entry and no other owner.
+installer-owned at the installer-created addresses, whatever its upstream
+source: the payload at `~/.agents/skills/<name>`, and links to that payload from
+`~/.claude/skills` and `~/.codex/skills`. It reports a link to any other target
+(including the obsolete repository sources), an independent copy at a link
+address, broken links, and entries with no lock entry and no other owner.
 
 ### Unfamiliar authors
 

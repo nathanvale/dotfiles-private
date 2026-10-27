@@ -53,8 +53,9 @@ until the replacement plugin works. Remove only links whose stored and resolved
 targets identify the old personal source.
 
 `bin/agent-skills-inventory --json` accepts every skill in the machine lock as
-installer-owned at `~/.agents/skills` and `~/.claude/skills`, with no topology
-or repository-lock declaration. It also checks the vendors pending migration,
+installer-owned at its payload in `~/.agents/skills` and at links to that payload
+from `~/.claude/skills`, with no topology or repository-lock declaration; any
+other target is reported. It also checks the vendors pending migration,
 project addresses, and obsolete links, and reports an entry with no lock entry
 and no other owner as `unknown-provenance`. Personal enablement belongs to the
 native manifests; third-party installation belongs to the installer lock.

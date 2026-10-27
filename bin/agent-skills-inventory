@@ -422,7 +422,7 @@ class Inventory:
                 content_agreement="owned",
             )
             return
-        if name in self.installer:
+        if name in self.installer and self.installer_address_matches(row):
             self.classify_installer(row)
             return
         if name in self.third_party:
@@ -453,7 +453,7 @@ class Inventory:
             if agreement == "unverified":
                 self.attach(row, "content-unverified", "lock content could not be verified")
             return
-        if name in self.locked:
+        if name in self.locked and name not in self.installer:
             agreement = self.agreement_with_lock(name, target)
             row.update(
                 provenance="third-party-locked",
@@ -508,7 +508,32 @@ class Inventory:
                 content_agreement="owned",
             )
             return
+        if name in self.installer:
+            self.attach(
+                row,
+                "installer-address-mismatch",
+                "locked skill address is not the installer payload or a link to it",
+            )
+            return
         self.attach(row, "unknown-provenance", "entry has no declared source owner")
+
+    def installer_address_matches(self, row):
+        """The installer owns its payload at `agents` and links to it elsewhere."""
+        name = row["name"]
+        payload = os.path.realpath(os.path.join(ADDRESSES["agents"], name))
+        target = row["resolved_target"]
+        if not os.path.exists(target):
+            return False
+        if row["address"] == "agents":
+            if row["filesystem_kind"] == "directory":
+                return True
+            obsolete_roots = (LEGACY_SOURCE, PERSONAL_SOURCE, THIRD_PARTY_SOURCE)
+            return (
+                row["filesystem_kind"] == "symlink"
+                and os.path.basename(target) == name
+                and not any(is_within(target, root) for root in obsolete_roots)
+            )
+        return row["filesystem_kind"] == "symlink" and target == payload
 
     def app_owned_matches(self, row, declaration):
         """An app-owned entry is a real directory at a declared address."""
@@ -545,8 +570,8 @@ class Inventory:
         )
 
     def classify_codex(self, row):
-        if row["name"] in self.installer:
-            self.classify_live(row)
+        if row["name"] in self.installer and self.installer_address_matches(row):
+            self.classify_installer(row)
             return
         if row["filesystem_kind"] == "symlink" and not os.path.exists(
             row["resolved_target"]
@@ -828,7 +853,13 @@ class Inventory:
         codex_names = {
             row["name"] for row in self.entries if row["address"] == "codex"
         }
-        for name in sorted((agents_names & codex_names) - self.installer):
+        installer_linked = {
+            row["name"]
+            for row in self.entries
+            if row["address"] == "codex"
+            and row["provenance"] == "third-party-installer-owned"
+        }
+        for name in sorted((agents_names & codex_names) - installer_linked):
             self.issue(
                 "codex-duplicate-name",
                 "codex",
