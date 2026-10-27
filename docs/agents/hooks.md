@@ -37,13 +37,17 @@ Codex re-approval step, not a file change.
 - One `settings.json` key trades every hook for its tokens: every configured
   hook event, plus the custom status line and any custom file-suggestion
   command.
-- Nothing reports the loss. Silence is the failure mode here too.
+- The policy declares it `false`, so `verify_install.sh` reports it in user
+  settings. Nothing reports it from a project or flag scope.
 - Trim hooks one declaration at a time.
 
 ## Owner
 
 - Existing non-plugin hook scripts: `config/agents/claude/hooks/`.
-- Hook declarations: Claude gates live in `config/agents/claude/settings.json`, which setup merges into the machine-owned `~/.claude/settings.json`; reserve `config/agents/claude/hooks.json` for `InstructionsLoaded`; Codex uses `config/agents/codex/hooks.json`.
+- Hook declarations: Claude gates live in `config/agents/claude/settings.json`;
+  setup merges it into the machine-owned `~/.claude/settings.json`. Reserve
+  `config/agents/claude/hooks.json` for `InstructionsLoaded`; Codex uses
+  `config/agents/codex/hooks.json`.
 - Biome and TypeScript quality gates come from
   `config/agents/plugins/proof/hooks/`, with separate Claude and Codex declarations.
   Refresh the native plugin after a source release and verify it in a fresh session.

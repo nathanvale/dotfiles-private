@@ -118,6 +118,7 @@ cat >"$POLICY_FIXTURE" <<'JSON'
 {
   "permissions": {"deny": ["AskUserQuestion"], "defaultMode": "bypassPermissions"},
   "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "gate.sh"}]}]},
+  "disableAllHooks": false,
   "model": "opus",
   "effortLevel": "high",
   "modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}},
@@ -155,6 +156,7 @@ cat >"$MACHINE" <<'JSON'
 {
   "permissions": {"deny": [], "defaultMode": "default"},
   "hooks": {},
+  "disableAllHooks": true,
   "model": "sonnet",
   "effortLevel": "xhigh",
   "modelSettings": {"claude-opus-5-5": {"effortLevel": "max"}, "claude-sonnet-5-5": {"effortLevel": "xhigh"}},
@@ -167,7 +169,7 @@ JSON
 cp "$MACHINE" "$TEST_ROOT/drifted"
 run_policy --check
 assert_equals "$RUN_STATUS" 1 'check fails on policy drift'
-for key in permissions hooks enabledPlugins skillOverrides; do
+for key in permissions hooks disableAllHooks enabledPlugins skillOverrides; do
   assert_contains "$RUN_STDERR" "$key" "check names drifted policy key $key"
 done
 for key in model effortLevel modelSettings theme pstack feedbackSurveyState; do
@@ -182,6 +184,7 @@ assert_equals "$RUN_STATUS" 0 'install repairs drift'
 assert_equals "$(canonical "$MACHINE")" "$(canonical_text '{
   "permissions": {"deny": ["AskUserQuestion"], "defaultMode": "bypassPermissions"},
   "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "gate.sh"}]}]},
+  "disableAllHooks": false,
   "model": "sonnet",
   "effortLevel": "xhigh",
   "modelSettings": {"claude-opus-5-5": {"effortLevel": "max"}, "claude-sonnet-5-5": {"effortLevel": "xhigh"}},
@@ -193,6 +196,21 @@ assert_equals "$(canonical "$MACHINE")" "$(canonical_text '{
 }')" 'install restores policy and preserves machine choices'
 run_policy --check
 assert_equals "$RUN_STATUS" 0 'check passes after repair'
+
+# Claude records the default model by deleting `model`; the machine owns that.
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+for key in ("model", "effortLevel", "modelSettings", "theme"):
+    del data[key]
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy --check
+assert_equals "$RUN_STATUS" 0 'check accepts machine choices removed by Claude'
+run_policy
+assert_equals "$RUN_STATUS" 0 'install succeeds without machine choices'
+assert_equals "$(/usr/bin/python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(sorted(set(d)&{"model","effortLevel","modelSettings","theme"}))' "$MACHINE")" '[]' 'install leaves removed machine choices absent'
 
 # --- Legacy symlink layout is converted without touching the checkout -------
 
@@ -233,6 +251,13 @@ ln -s "$TEST_ROOT/foreign-dir" "$FAKE_HOME/.claude"
 run_policy
 assert_ne_status 'install refuses a redirected Claude directory'
 assert_equals "$(object_type "$TEST_ROOT/foreign-dir/settings.json")" absent 'redirected directory stays untouched'
+
+prepare_checkout "$POLICY_FIXTURE"
+mkdir -p "$TEST_ROOT/foreign-ancestor"
+ln -s "$TEST_ROOT/foreign-ancestor" "$TEST_ROOT/linked-ancestor"
+EXTRA_ENV="CLAUDE_CONFIG_DIR=$TEST_ROOT/linked-ancestor/cfg" run_policy
+assert_ne_status 'install refuses a redirected ancestor directory'
+assert_equals "$(object_type "$TEST_ROOT/foreign-ancestor/cfg")" absent 'redirected ancestor stays untouched'
 
 # --- Invalid machine files are preserved ------------------------------------
 

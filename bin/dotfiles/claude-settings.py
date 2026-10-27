@@ -7,7 +7,9 @@ rewrites ~/.claude/settings.json on every supported settings operation
 machine-owned copy: a symlink would carry those writes into the checkout.
 
 Merge, policy over machine:
-- MACHINE_CHOICES: the policy seeds a missing value; the machine value wins.
+- MACHINE_CHOICES: the policy seeds them only into a new file; afterwards the
+  machine owns them, including their absence (Claude deletes `model` for the
+  default model).
 - MERGED_MAPS: policy entries win; entries only the machine declares stay.
 - Every other policy key: the policy value wins.
 - Keys the policy does not declare stay as the machine wrote them.
@@ -38,23 +40,14 @@ def load_object(data, label):
     return value
 
 
-def seed(machine, policy):
-    if not isinstance(machine, dict) or not isinstance(policy, dict):
-        return machine
-    merged = dict(machine)
-    for key, value in policy.items():
-        merged[key] = seed(machine[key], value) if key in machine else value
-    return merged
-
-
 def merge(machine, policy):
     merged = dict(machine)
     for key, value in policy.items():
         current = machine.get(key)
+        if key in MACHINE_CHOICES:
+            continue
         if key not in machine:
             merged[key] = value
-        elif key in MACHINE_CHOICES:
-            merged[key] = seed(current, value)
         elif key in MERGED_MAPS and isinstance(current, dict) and isinstance(value, dict):
             merged[key] = {**current, **value}
         else:
@@ -78,8 +71,9 @@ def main():
     source = Path(__file__).resolve().parents[2] / "config/agents/claude/settings.json"
     policy = load_object(source.read_bytes(), "Claude settings policy")
     target = settings_path()
-    if target.parent.is_symlink():
-        raise ValueError(f"{target.parent} must not redirect through a symlink")
+    for path in target.parents:
+        if path.is_symlink():
+            raise ValueError(f"{path} must not redirect through a symlink")
     legacy = target.is_symlink()
     if legacy and Path(os.path.realpath(target)) != source.resolve():
         raise ValueError(f"{target} is a symlink to a file other than the policy; move it aside first")
@@ -87,8 +81,11 @@ def main():
         raise ValueError(f"{target} is a legacy symlink into the checkout; {REPAIR}")
 
     original = target.read_bytes() if target.exists() else None
-    machine = load_object(original, f"{target}") if original is not None else {}
-    merged = merge(machine, policy)
+    if original is None:
+        machine, merged = {}, policy
+    else:
+        machine = load_object(original, f"{target}")
+        merged = merge(machine, policy)
     if merged == machine and not legacy:
         print("Claude settings policy already applied")
         return

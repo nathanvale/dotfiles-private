@@ -51,8 +51,13 @@ the whole `skillOverrides` block, 73 entries.
 - Policy source: `config/agents/claude/settings.json`. Edit it there and run
   `./setup.sh symlinks`; `bin/dotfiles/claude-settings.py` merges it into the
   real machine-owned `~/.claude/settings.json`.
-- Machine choices stay out of Git: `model`, `effortLevel`, `modelSettings`,
-  `theme`, plus plugin and marketplace entries the policy does not declare.
+- Machine choices stay out of Git: `model`, `effortLevel`, `modelSettings`
+  and `theme` (seeded only into a new file), plus plugin and marketplace
+  entries the policy does not declare.
+- Existing host still on the symlink: break it before cleaning or updating the
+  checkout, or its machine writes are lost with the tracked diff:
+  `cp ~/.claude/settings.json ~/.claude/settings.json.real && mv
+  ~/.claude/settings.json.real ~/.claude/settings.json`.
 - `./verify_install.sh` (`claude-settings.py --check`) names every policy key a
   harness write changed. Port an intended change to the tracked file, or rerun
   setup to restore the policy.
