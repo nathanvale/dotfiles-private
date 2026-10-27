@@ -689,6 +689,10 @@ d=json.load(open(sys.argv[1])); del d["hooks"]["PreToolUse"]; json.dump(d,open(s
   /usr/bin/python3 -c 'import json,sys
 d=json.load(open(sys.argv[1])); del d["hooks"]["UserPromptSubmit"]; json.dump(d,open(sys.argv[1],"w"))' "$MACHINE"
   claude_turn
+  # Absence counts only from a completed turn that left a transcript.
+  [[ "$(json_field "$TEST_ROOT/turn.json" 'result' 2>/dev/null)" == '"mock done"' ]] ||
+    fail 'control: the mock turn did not complete'
+  compgen -G "$FAKE_HOME/.claude/projects/*/*.jsonl" >/dev/null || fail 'control: no transcript to inspect'
   if grep -rqF 'Current datetime:' "$FAKE_HOME/.claude/projects"; then
     fail 'control: datetime line present without the hook'
   fi
