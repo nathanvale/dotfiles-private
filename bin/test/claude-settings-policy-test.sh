@@ -350,6 +350,22 @@ assert_equals "$(json_field "$MACHINE" 'enabledPlugins')" '{"later@personal": tr
 edit_policy 'data["enabledPlugins"]["proof@personal"] = False'
 run_policy
 assert_equals "$(json_field "$MACHINE" 'enabledPlugins.proof@personal')" false 'a later policy change to a host-removed plugin lands'
+# A nested policy change to a host-removed compound declaration restores the
+# whole valid declaration, never only the changed field.
+edit_policy 'data["statusLine"]["padding"] = 1'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'statusLine')" '{"command": "status.sh", "padding": 1, "type": "command"}' 'a nested change to a host-removed status line restores the whole declaration'
+edit_policy 'data["extraKnownMarketplaces"]["personal"]["source"]["path"] = "/q"'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'extraKnownMarketplaces')" '{"personal": {"source": {"path": "/q", "source": "directory"}}}' 'a nested change to a marketplace in a host-removed map restores the whole entry'
+/usr/bin/python3 -c 'import json,sys
+d=json.load(open(sys.argv[1])); d["extraKnownMarketplaces"]={}; json.dump(d,open(sys.argv[1],"w"))' "$MACHINE"
+run_policy
+edit_policy 'data["extraKnownMarketplaces"]["personal"]["source"]["path"] = "/r"'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'extraKnownMarketplaces')" '{"personal": {"source": {"path": "/r", "source": "directory"}}}' 'a nested change to a host-removed marketplace entry restores the whole entry'
+run_policy --check
+assert_equals "$RUN_STATUS" 0 'check passes after restoring whole declarations'
 # Security keys are a floor: a removed policy deny rule or hook comes back.
 prepare_checkout "$POLICY_FIXTURE"
 run_policy
@@ -688,7 +704,7 @@ assert_equals "$((real_rows_covered + real_rows_skipped))" "$real_rows_expected"
 printf '# real-Claude rows: covered=%d skipped=%d\n' "$real_rows_covered" "$real_rows_skipped"
 # Pinned total: a dropped row is a reviewable edit. Without claude, the real
 # rows' assertions do not run.
-expected_assertions=$(( real_rows_skipped == 0 ? 139 : 111 ))
+expected_assertions=$(( real_rows_skipped == 0 ? 143 : 115 ))
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

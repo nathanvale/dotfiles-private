@@ -17,7 +17,8 @@ Merge, policy over machine:
   status line) stay. A security entry the host lacks is restored, because
   SECURITY_KEYS are a floor; a plugin, marketplace or status line entry the
   host removed (`claude plugin uninstall`, `plugin marketplace remove`) stays
-  removed until the policy changes that entry. Without a record, existing host
+  removed until the policy changes that entry, which then returns whole (a
+  status line, a marketplace entry), never as a partial declaration. Without a record, existing host
   values stay and missing policy entries are added. The record is written only from a policy
   file that matches its committed HEAD version, because a dirty tracked file
   (such as one a legacy symlink wrote into) may hold the host's own values.
@@ -38,7 +39,9 @@ import tempfile
 
 MACHINE_CHOICES = ("model", "effortLevel", "modelSettings", "theme")
 SECURITY_KEYS = ("hooks", "permissions")
-THREE_WAY_KEYS = (*SECURITY_KEYS, "enabledPlugins", "extraKnownMarketplaces", "statusLine")
+# Maps of independent declarations: a host removes one entry at a time.
+COLLECTION_KEYS = ("enabledPlugins", "extraKnownMarketplaces")
+THREE_WAY_KEYS = (*SECURITY_KEYS, *COLLECTION_KEYS, "statusLine")
 POLICY_PATH = "config/agents/claude/settings.json"
 RECORD_NAME = "settings.dotfiles-policy.json"
 REPAIR = "run ./setup.sh symlinks"
@@ -78,14 +81,11 @@ def merge_list(base, machine, policy, removable):
 def three_way(base, machine, policy, removable):
     """Apply policy changes since `base` to `machine`; keep the host's own changes.
 
-    `removable`: a host removal of an unchanged policy entry stays removed.
+    `removable`: a host removal of an unchanged policy entry stays removed;
+    a changed one returns as the whole policy value.
     """
     if machine is MISSING:
-        if not removable or base is MISSING:
-            return policy
-        if isinstance(base, dict) and isinstance(policy, dict):
-            return merge_object(base, {}, policy, removable) or MISSING
-        return MISSING if base == policy else policy
+        return MISSING if removable and base is not MISSING and base == policy else policy
     shape = type(machine) if policy is MISSING else type(policy)
     if isinstance(machine, dict) and shape is dict:
         return merge_object(base, machine, policy, removable)
@@ -103,11 +103,12 @@ def merge(machine, policy, record):
     for key, value in policy.items():
         if key in MACHINE_CHOICES:
             continue
-        if key in THREE_WAY_KEYS:
+        if key in COLLECTION_KEYS and key not in machine and isinstance(record.get(key), dict) and isinstance(value, dict):
+            # The host removed the whole map: decide entry by entry.
+            value = merge_object(record[key], {}, value, True) or MISSING
+        elif key in THREE_WAY_KEYS:
             value = three_way(record.get(key, MISSING), machine.get(key, MISSING), value, key not in SECURITY_KEYS)
-            if value is not MISSING:
-                merged[key] = value
-        else:
+        if value is not MISSING:
             merged[key] = value
     for key in THREE_WAY_KEYS:
         if key in record and key in machine and key not in policy:

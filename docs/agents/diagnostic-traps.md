@@ -67,7 +67,8 @@ the whole `skillOverrides` block, 73 entries.
   edits and retirements apply, and a host's own hooks, rules, plugin choices
   and host-correct paths stay. A missing policy hook or permission rule is
   restored; a plugin, marketplace or status line the host removed (such as
-  `claude plugin uninstall`) stays removed until the policy changes it.
+  `claude plugin uninstall`) stays removed until the policy changes it, and
+  then returns as the whole policy declaration.
 - Setup records only a policy file that matches its committed `HEAD`, so a
   dirty tracked file (such as one a legacy symlink wrote into) never becomes
   the baseline. Without a record, every existing host value stays. A host rule
