@@ -11,6 +11,9 @@ Merge, policy over machine:
   machine owns them, including their absence (Claude deletes `model` for the
   default model).
 - MERGED_MAPS: policy entries win; entries only the machine declares stay.
+- SECURITY_KEYS: missing policy entries are added; machine hooks, permission
+  rules and scalars such as `defaultMode` are never removed or replaced, so
+  setup cannot weaken a host's effective controls.
 - Every other policy key: the policy value wins.
 - Keys the policy does not declare stay as the machine wrote them.
 
@@ -26,6 +29,7 @@ import tempfile
 
 MACHINE_CHOICES = ("model", "effortLevel", "modelSettings", "theme")
 MERGED_MAPS = ("enabledPlugins", "extraKnownMarketplaces")
+SECURITY_KEYS = ("hooks", "permissions")
 REPAIR = "run ./setup.sh symlinks"
 
 
@@ -40,6 +44,17 @@ def load_object(data, label):
     return value
 
 
+def add_missing(machine, policy):
+    if isinstance(machine, dict) and isinstance(policy, dict):
+        merged = dict(machine)
+        for key, value in policy.items():
+            merged[key] = add_missing(machine[key], value) if key in machine else value
+        return merged
+    if isinstance(machine, list) and isinstance(policy, list):
+        return machine + [entry for entry in policy if entry not in machine]
+    return machine
+
+
 def merge(machine, policy):
     merged = dict(machine)
     for key, value in policy.items():
@@ -48,6 +63,8 @@ def merge(machine, policy):
             continue
         if key not in machine:
             merged[key] = value
+        elif key in SECURITY_KEYS:
+            merged[key] = add_missing(current, value)
         elif key in MERGED_MAPS and isinstance(current, dict) and isinstance(value, dict):
             merged[key] = {**current, **value}
         else:

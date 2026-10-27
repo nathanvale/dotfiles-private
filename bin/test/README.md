@@ -103,7 +103,9 @@ no-cache Mac.
 `claude-settings-policy-test.sh` copies `bin/dotfiles/claude-settings.py` and
 a policy into disposable Git checkouts and runs it under an empty environment
 with a temporary HOME. It proves fresh install, byte-identical repeat, drift
-reporting, policy repair with preserved machine choices, legacy symlink
+reporting, policy repair with preserved machine choices, preserved host-only
+hooks, permission rules and `defaultMode` with missing policy entries added,
+legacy symlink
 conversion, refusal of foreign or redirected targets and invalid JSON,
 `CLAUDE_CONFIG_DIR` placement, and a clean merge of an intentional policy edit.
 With an installed `claude`, it also proves that the legacy symlink lets one
@@ -119,7 +121,9 @@ environment and stored-profile validation before state writes, documented phase
 suffix execution, mandatory verification before checkpoint clearance, retained
 repair checkpoints for failed or missing verification, qualified warning
 receipts, malformed machine-summary refusal, the real verifier's stable summary
-emission, and the linked-worktree activation boundary. It uses harmless Phase 6
+emission, the linked-worktree activation boundary, and that public setup
+installs a regular Claude settings file with the tracked hooks and permissions
+and converts a legacy settings link without writing through it. It uses harmless Phase 6
 collaborators and a fake verifier for setup boundary cases, so it does not prove
 live macOS, Homebrew, Mise, profile dependency parity, or serialized setup-state
 recovery.

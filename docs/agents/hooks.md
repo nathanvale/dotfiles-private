@@ -56,8 +56,8 @@ Codex re-approval step, not a file change.
   command. Preview with `--dry-run`; preserve unrelated hook declarations.
   Dotfiles maps both native script paths to the unchanged shared generated source.
   Run `./setup.sh symlinks` after updating it. A Claude `--user` install writes
-  only the machine file: copy its `hooks` change into the tracked settings, or
-  `verify_install.sh` reports `hooks` drift and the next setup reverts it.
+  only the machine file, and setup keeps it there; copy its `hooks` change into
+  the tracked settings to share it with other hosts.
   Follow repository policy for the comparison base. Native warnings remain advisory. Native runtime/setup errors
   print a notice and allow the command; CI remains the required quality gate.
 - Codex hook installation does not prove trust or activation. Review the hook in

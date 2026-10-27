@@ -182,7 +182,7 @@ run_policy
 assert_equals "$RUN_STATUS" 0 'install repairs drift'
 # Independent oracle: the merged result, written out by hand.
 assert_equals "$(canonical "$MACHINE")" "$(canonical_text '{
-  "permissions": {"deny": ["AskUserQuestion"], "defaultMode": "bypassPermissions"},
+  "permissions": {"deny": ["AskUserQuestion"], "defaultMode": "default"},
   "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "gate.sh"}]}]},
   "disableAllHooks": false,
   "model": "sonnet",
@@ -211,6 +211,47 @@ assert_equals "$RUN_STATUS" 0 'check accepts machine choices removed by Claude'
 run_policy
 assert_equals "$RUN_STATUS" 0 'install succeeds without machine choices'
 assert_equals "$(/usr/bin/python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(sorted(set(d)&{"model","effortLevel","modelSettings","theme"}))' "$MACHINE")" '[]' 'install leaves removed machine choices absent'
+
+# --- Host security controls survive; only missing policy entries are added --
+
+prepare_checkout "$REPO_ROOT/$TRACKED"
+/usr/bin/python3 - "$CHECKOUT/$TRACKED" "$MACHINE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+data["hooks"].setdefault("PreToolUse", []).append(
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "host-security-gate.sh"}]})
+data["permissions"]["deny"].append("Read(~/private/**)")
+data["permissions"]["ask"].append("Bash(git push:*)")
+data["permissions"]["defaultMode"] = "auto"
+json.dump(data, open(sys.argv[2], "w"), indent=2)
+PY
+cp "$MACHINE" "$TEST_ROOT/host-controls"
+run_policy --check
+assert_equals "$RUN_STATUS" 0 'check accepts host-only security controls'
+run_policy
+assert_equals "$RUN_STATUS" 0 'install succeeds with host-only security controls'
+cmp -s "$TEST_ROOT/host-controls" "$MACHINE" || fail 'install changed host security controls'
+pass 'install keeps the host gate, deny and ask rules and defaultMode'
+
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["permissions"]["deny"].remove("AskUserQuestion")
+data["hooks"].pop("SessionStart")
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy --check
+assert_equals "$RUN_STATUS" 1 'check fails when a policy rule or hook is missing'
+assert_contains "$RUN_STDERR" 'hooks' 'check names missing policy hooks'
+assert_contains "$RUN_STDERR" 'permissions' 'check names a missing policy rule'
+run_policy
+assert_equals "$RUN_STATUS" 0 'install adds the missing policy entries'
+assert_equals "$(json_field "$MACHINE" 'hooks.SessionStart')" "$(json_field "$CHECKOUT/$TRACKED" 'hooks.SessionStart')" 'install restores the missing policy hook'
+assert_equals "$(/usr/bin/python3 -c 'import json,sys;p=json.load(open(sys.argv[1]))["permissions"];print(sorted(p["deny"]), p["ask"], p["defaultMode"])' "$MACHINE")" "['AskUserQuestion', 'Read(~/private/**)'] ['Bash(git push:*)'] auto" 'install restores the policy deny rule and keeps host rules'
+assert_equals "$(/usr/bin/python3 -c 'import json,sys;print(sum(1 for g in json.load(open(sys.argv[1]))["hooks"]["PreToolUse"] for h in g["hooks"] if h["command"]=="host-security-gate.sh"))' "$MACHINE")" 1 'install keeps exactly one host security gate'
+run_policy --check
+assert_equals "$RUN_STATUS" 0 'check passes after missing entries are added'
 
 # --- Legacy symlink layout is converted without touching the checkout -------
 

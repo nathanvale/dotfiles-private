@@ -539,11 +539,36 @@ assert "$HOME/code/dotfiles/docs/agents/herdr-projects.md" in value
 assert "/Users/" not in value and value.count("At coordinator startup") == 1
 PYTEST
   pass "$coordinator_profile installs the portable coordinator default"
+  [[ -f "$FIXTURE_HOME/.claude/settings.json" && ! -L "$FIXTURE_HOME/.claude/settings.json" ]] ||
+    fail "$coordinator_profile setup installs a regular Claude settings file"
+  pass "$coordinator_profile setup installs a regular Claude settings file"
+  /usr/bin/python3 - "$FIXTURE_HOME/.claude/settings.json" "$REPO_ROOT/config/agents/claude/settings.json" <<'PYTEST'
+import json, sys
+machine, policy = (json.load(open(path)) for path in sys.argv[1:])
+assert machine["hooks"] == policy["hooks"] and machine["permissions"] == policy["permissions"]
+PYTEST
+  pass "$coordinator_profile setup installs the tracked Claude hooks and permissions"
   cp "$FIXTURE_HOME/.herdr-projects/settings/config.json" "$TEST_ROOT/settings-before"
   run_setup '' pass "--$coordinator_profile" --start-phase 6
   [[ "$RUN_EXIT" -eq 0 ]] && cmp -s "$TEST_ROOT/settings-before" "$FIXTURE_HOME/.herdr-projects/settings/config.json" || fail 'repeat setup preserves settings bytes'
   pass "$coordinator_profile repeat setup preserves settings bytes"
 done
+
+# Public setup converts a legacy Claude settings link without writing through it.
+reset_fixture
+rm -f "$FIXTURE_HOME/.claude/settings.json"
+ln -s "$FIXTURE_DOTFILES/config/agents/claude/settings.json" "$FIXTURE_HOME/.claude/settings.json"
+cp "$FIXTURE_DOTFILES/config/agents/claude/settings.json" "$TEST_ROOT/tracked-before"
+write_verifier pass
+run_setup '' pass --desktop --start-phase 6
+[[ "$RUN_EXIT" -eq 0 ]] || fail 'legacy Claude link setup exits zero'
+pass 'legacy Claude link setup exits zero'
+[[ -f "$FIXTURE_HOME/.claude/settings.json" && ! -L "$FIXTURE_HOME/.claude/settings.json" ]] ||
+  fail 'setup replaces the legacy Claude link with a regular file'
+pass 'setup replaces the legacy Claude link with a regular file'
+cmp -s "$TEST_ROOT/tracked-before" "$FIXTURE_DOTFILES/config/agents/claude/settings.json" ||
+  fail 'legacy conversion changed the tracked Claude settings'
+pass 'legacy conversion leaves the tracked Claude settings unchanged'
 
 cat >"$FIXTURE_HOME/.herdr-projects/settings/config.json" <<'JSON'
 {"coordinator":{"instructions":" Keep my custom words. ","effort":"high"},"coordinators":{"projects":{"example":{"coordinator":{"instructions":"project words"}}}},"merge":{"by":"you"}}
@@ -661,7 +686,7 @@ done
 TEST_HERDR_PROJECTS_HOME=''
 TEST_HERDR_PROJECTS_CONFIG_DIR=''
 
-expected_assertions=98
+expected_assertions=105
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"
