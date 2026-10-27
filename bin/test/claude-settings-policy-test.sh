@@ -660,6 +660,24 @@ d=json.load(open(sys.argv[1])); del d["hooks"]["PreToolUse"]; json.dump(d,open(s
   claude_turn
   assert_equals "$(object_type "$TURN_DIR/canary-ran")" file 'control: the machine-file allow rule runs the call without the gate'
   assert_equals "$(checkout_status)" '' 'hook row leaves the checkout clean'
+
+  # The tracked policy's own hooks run after a legacy-link activation: its
+  # UserPromptSubmit hook adds the datetime line, which Claude does not add.
+  prepare_checkout "$REPO_ROOT/$TRACKED"
+  ln -s "$CHECKOUT/$TRACKED" "$MACHINE"
+  run_policy
+  claude_turn
+  grep -rqF 'Current datetime:' "$FAKE_HOME/.claude/projects" || fail 'tracked UserPromptSubmit hook output missing'
+  pass 'the tracked policy UserPromptSubmit hook fires from the activated machine file'
+  rm -rf "$FAKE_HOME/.claude/projects"
+  /usr/bin/python3 -c 'import json,sys
+d=json.load(open(sys.argv[1])); del d["hooks"]["UserPromptSubmit"]; json.dump(d,open(sys.argv[1],"w"))' "$MACHINE"
+  claude_turn
+  if grep -rqF 'Current datetime:' "$FAKE_HOME/.claude/projects"; then
+    fail 'control: datetime line present without the hook'
+  fi
+  pass 'control: without that hook the datetime line is absent'
+  assert_equals "$(checkout_status)" '' 'tracked-policy hook row leaves the checkout clean'
   real_rows_covered=$((real_rows_covered + 1))
 else
   printf '# skip real-Claude rows: no claude executable on PATH (set CLAUDE_SETTINGS_TEST_CLAUDE)\n'
@@ -670,7 +688,7 @@ assert_equals "$((real_rows_covered + real_rows_skipped))" "$real_rows_expected"
 printf '# real-Claude rows: covered=%d skipped=%d\n' "$real_rows_covered" "$real_rows_skipped"
 # Pinned total: a dropped row is a reviewable edit. Without claude, the real
 # rows' assertions do not run.
-expected_assertions=$(( real_rows_skipped == 0 ? 136 : 111 ))
+expected_assertions=$(( real_rows_skipped == 0 ? 139 : 111 ))
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

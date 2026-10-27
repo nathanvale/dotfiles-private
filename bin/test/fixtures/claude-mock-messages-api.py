@@ -3,7 +3,8 @@
 Usage: claude-mock-messages-api.py PORT_FILE REQUEST_LOG TOOL_COMMAND
 
 The first request that offers tools gets one Bash tool call running
-TOOL_COMMAND; every later request gets a final text reply. Claude points at it
+TOOL_COMMAND; every later request gets a final text reply. REQUEST_LOG gets
+one line per request naming the tools Claude offered. Claude points at it
 through ANTHROPIC_BASE_URL with a placeholder key, so no account is used.
 """
 
@@ -41,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
         with open(REQUEST_LOG, "a") as log:
-            log.write(f"POST {self.path}\n")
+            log.write(f"POST {self.path} tools={','.join(sorted(t.get('name', '') for t in body.get('tools', [])))}\n")
         if "count_tokens" in self.path:
             return self.reply("application/json", json.dumps({"input_tokens": 1}).encode())
         called = any(isinstance(m.get("content"), list) and any(p.get("type") == "tool_use" for p in m["content"])

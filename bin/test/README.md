@@ -120,7 +120,8 @@ and skill overrides keep their tracked values, that
 setup keeps a `plugin uninstall` and `plugin marketplace remove` of a
 policy-declared entry, and that a converted machine file's SessionStart and
 PreToolUse hooks fire and block an allowed call in a real Claude turn, with a
-no-gate control. That turn uses
+no-gate control, and that the tracked policy's own UserPromptSubmit hook fires
+after a legacy-link activation, with a no-hook control. Those turns use
 `fixtures/claude-mock-messages-api.py` and a placeholder key, so it proves
 settings behavior, not an account-backed session. Without `claude` those five
 rows skip; covered and skipped rows and the total assertion count are pinned.
