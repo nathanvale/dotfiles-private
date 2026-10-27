@@ -212,6 +212,64 @@ run_policy
 assert_equals "$RUN_STATUS" 0 'install succeeds without machine choices'
 assert_equals "$(/usr/bin/python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(sorted(set(d)&{"model","effortLevel","modelSettings","theme"}))' "$MACHINE")" '[]' 'install leaves removed machine choices absent'
 
+# --- Policy edits and retirements reach hosts; host changes survive --------
+
+edit_policy() {
+  /usr/bin/python3 - "$CHECKOUT/$TRACKED" "$1" <<'PY'
+import json, sys
+path, change = sys.argv[1:]
+data = json.load(open(path))
+exec(change)
+json.dump(data, open(path, "w"), indent=2)
+PY
+}
+
+prepare_checkout "$POLICY_FIXTURE"
+run_policy
+edit_policy 'data["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] = 30
+data["permissions"]["deny"] = ["Read(~/.ssh/**)"]
+data["permissions"]["defaultMode"] = "default"'
+run_policy --check
+assert_equals "$RUN_STATUS" 1 'check fails until a policy edit is applied'
+assert_contains "$RUN_STDERR" 'hooks' 'check names the edited policy hooks'
+assert_contains "$RUN_STDERR" 'permissions' 'check names the edited policy permissions'
+run_policy
+assert_equals "$RUN_STATUS" 0 'install applies a policy edit'
+assert_equals "$(json_field "$MACHINE" 'hooks.PreToolUse')" '[{"hooks": [{"command": "gate.sh", "timeout": 30, "type": "command"}], "matcher": "Bash"}]' 'an edited policy hook replaces the old one'
+assert_equals "$(json_field "$MACHINE" 'permissions')" '{"defaultMode": "default", "deny": ["Read(~/.ssh/**)"]}' 'policy rule retirement and defaultMode change reach the host'
+
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["permissions"]["defaultMode"] = "plan"
+data["permissions"]["deny"].append("Read(~/private/**)")
+json.dump(data, open(path, "w"), indent=2)
+PY
+edit_policy 'data["permissions"]["deny"].append("WebFetch")'
+run_policy
+assert_equals "$RUN_STATUS" 0 'install merges a policy update with host changes'
+assert_equals "$(json_field "$MACHINE" 'permissions')" '{"defaultMode": "plan", "deny": ["Read(~/.ssh/**)", "Read(~/private/**)", "WebFetch"]}' 'host defaultMode and rule survive a later policy update'
+run_policy --check
+assert_equals "$RUN_STATUS" 0 'check passes with a host-owned defaultMode'
+assert_contains "$RUN_STDOUT" 'Host keeps permissions.defaultMode="plan" (policy "default")' 'check names the host value that differs from policy'
+
+prepare_checkout "$POLICY_FIXTURE"
+run_policy
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["hooks"]["PreToolUse"] = {}
+data["permissions"]["deny"] = ""
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy --check
+assert_equals "$RUN_STATUS" 1 'check fails when a security value has the wrong shape'
+run_policy
+assert_equals "$(json_field "$MACHINE" 'hooks.PreToolUse')" "$(json_field "$POLICY_FIXTURE" 'hooks.PreToolUse')" 'install restores a mis-shaped policy hook list'
+assert_equals "$(json_field "$MACHINE" 'permissions.deny')" '["AskUserQuestion"]' 'install restores a mis-shaped policy rule list'
+
 # --- Host security controls survive; only missing policy entries are added --
 
 prepare_checkout "$REPO_ROOT/$TRACKED"

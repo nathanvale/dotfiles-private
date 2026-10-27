@@ -62,12 +62,14 @@ the whole `skillOverrides` block, 73 entries.
   cp ~/.claude/settings.json ~/.claude/settings.json.real && mv ~/.claude/settings.json.real ~/.claude/settings.json
   test -L ~/.claude/settings.json && echo symlink || echo file
   ```
-- Hooks and permissions are additive: setup adds missing policy hooks and
-  rules but never removes or replaces a host's own hooks, rules or
-  `defaultMode`. Retire a shared hook or rule by removing it on each host too.
-- `./verify_install.sh` (`claude-settings.py --check`) names every policy key a
-  harness write changed or removed. Port an intended change to the tracked
-  file, or rerun setup to restore the policy.
+- Hooks and permissions merge three ways against
+  `~/.claude/settings.dotfiles-policy.json`, the last-applied policy: policy
+  edits and retirements apply, a host's own hooks, rules and `defaultMode`
+  stay, and a missing policy hook or rule is restored. A host's first run has
+  no record, so it keeps every existing value.
+- `./verify_install.sh` (`claude-settings.py --check`) fails on unapplied or
+  missing policy and prints `Host keeps …` for each host value that differs.
+  Port an intended host change to the tracked file.
 - Plugin state also lives in untracked runtime files
   (`~/.claude/plugins/known_marketplaces.json`, `installed_plugins.json`).
   An `enabledPlugins` key with no matching install is inert: a session starts

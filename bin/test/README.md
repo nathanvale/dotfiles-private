@@ -103,9 +103,10 @@ no-cache Mac.
 `claude-settings-policy-test.sh` copies `bin/dotfiles/claude-settings.py` and
 a policy into disposable Git checkouts and runs it under an empty environment
 with a temporary HOME. It proves fresh install, byte-identical repeat, drift
-reporting, policy repair with preserved machine choices, preserved host-only
-hooks, permission rules and `defaultMode` with missing policy entries added,
-legacy symlink
+reporting, policy repair with preserved machine choices, three-way hook and
+permission merges (policy edits and retirements land, host rules and
+`defaultMode` survive, missing or mis-shaped policy entries return), legacy
+symlink
 conversion, refusal of foreign or redirected targets and invalid JSON,
 `CLAUDE_CONFIG_DIR` placement, and a clean merge of an intentional policy edit.
 With an installed `claude`, it also proves that the legacy symlink lets one
