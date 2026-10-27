@@ -79,6 +79,7 @@ jobs:
             bin/test/with-one-password-token-test.sh
             bin/test/work-profile-slug-parity-test.sh
             bin/test/zsh-effective-behavior-test.sh
+            bin/test/zsh-ssh-config-home-test.sh
             bin/test/zsh-startup-silence-test.sh
             bin/test/zsh-work-profile-boundary-test.sh
           )

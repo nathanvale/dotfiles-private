@@ -77,3 +77,27 @@ export PATH
 # machine-local state instead, so the repository holds the pointer and never
 # the secret. Restore on a new machine from the 1Password entries.
 export GOG_HOME="$HOME/.local/state/gogcli"
+
+# ----------------------------------------------------------------------------
+# Canonical config home for remote (SSH) commands
+# ----------------------------------------------------------------------------
+# ~/.config is a symlink into this repository, so the Herdr socket has two
+# paths: ~/.config/herdr/herdr.sock and <repo>/config/herdr/herdr.sock. The
+# Ovis (herdr-web-ui) connection server resolves the canonical one (`cd -P`)
+# and looks for the Laptop bridge's descriptor under it. The bridge builds its
+# socket from XDG_CONFIG_HOME or ~/.config WITHOUT resolving it (Bun's
+# realpathSync fails on a Unix socket), so a bridge the other machine starts
+# over a non-interactive SSH command, which passes no XDG_CONFIG_HOME,
+# registers under the alias path and is reported as "Bridge did not start".
+#
+# Give those commands the resolved path. It is limited to non-interactive SSH
+# commands and never overrides a value the caller supplied. Interactive shells
+# keep the value .zshrc sets, and the directory is the same either way.
+# `:A` resolves symlinks inside zsh, so this costs no subprocess.
+# Contract: bin/test/zsh-ssh-config-home-test.sh
+# Rollback: delete this block (or revert its commit). The Laptop bridge is then
+# registered under the alias path again, so start it by hand with
+# XDG_CONFIG_HOME=$HOME/code/dotfiles/config until the block is restored.
+if [[ -n "${SSH_CONNECTION:-}" && -z "${XDG_CONFIG_HOME:-}" && ! -o interactive ]]; then
+  export XDG_CONFIG_HOME="${${:-$HOME/.config}:A}"
+fi
