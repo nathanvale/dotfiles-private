@@ -9,10 +9,10 @@ const baselineApi = "export const value = 1;\nexport const inherited = 2;\n";
 
 afterAll(() => { for (const root of temporaryRoots) rmSync(root, { recursive: true, force: true }); });
 
-function command(root: string, args: string[], formatterExit = "0") {
+function command(root: string, args: string[], formatterExit = "0", extraEnv: Record<string, string> = {}) {
 	return Bun.spawnSync(args, {
 		cwd: root, stdout: "pipe", stderr: "pipe", timeout: 30_000,
-		env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", FALLOW_AUDIT_BASE: "", FORMATTER_EXIT: formatterExit, PATH: `${join(root, "bin")}:${process.env.PATH}` },
+		env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", FALLOW_AUDIT_BASE: "", FORMATTER_EXIT: formatterExit, PATH: `${join(root, "bin")}:${process.env.PATH}`, ...extraEnv },
 	});
 }
 
@@ -88,3 +88,23 @@ test("the committed-candidate audit catches staged debt hidden by an unstaged re
 	expect(report.attribution.dead_code_introduced).toBe(1);
 	expect(readFileSync(join(root, "api.ts"), "utf8")).toBe(baselineApi);
 }, 30_000);
+
+for (const introduced of [false, true]) {
+	test(`inherited editor companion cannot replace pinned Git analysis: introduced=${introduced}`, () => {
+		const { root, head } = fixture();
+		writeFileSync(join(root, "api.ts"), baselineApi.replace("value = 1", "value = 3") + (introduced ? "export const editorUnused = 4;\n" : ""));
+		git(root, "add", "api.ts");
+		const result = command(root, ["git", "commit", "-m", "test: editor-inherited environment"], "0", {
+			FALLOW_TYPE_AWARE_BIN: join(root, "missing-editor-companion"),
+			FALLOW_TYPE_AWARE_SCRIPT: join(root, "missing-editor-script"),
+			FALLOW_TYPE_AWARE_BIN_SOURCE: "editor-extension",
+		});
+		expect(result.exitCode, result.stderr.toString()).toBe(introduced ? 1 : 0);
+		expect(git(root, "rev-parse", "HEAD") === head).toBe(introduced);
+		const reportLine = `${result.stdout}${result.stderr}`.split("\n").find((line) => line.startsWith('{"kind":"audit"'));
+		expect(reportLine).toBeDefined();
+		const report = JSON.parse(reportLine ?? "null");
+		expect(report.verdict).toBe(introduced ? "fail" : "pass");
+		expect(report._meta.type_aware.executed).toBe(true);
+	}, 30_000);
+}
