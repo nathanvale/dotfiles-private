@@ -15,6 +15,7 @@ Merge, policy over machine:
   Policy edits and retirements since that record apply; the host's own hooks,
   rules and values (such as `defaultMode`) stay; a policy hook or rule the
   host lacks is restored. Without a record, existing host values stay.
+  `--check --strict` also fails while the host keeps a differing value.
 - Every other policy key: the policy value wins.
 - Keys the policy does not declare stay as the machine wrote them.
 
@@ -96,6 +97,13 @@ def merge(machine, policy, record):
             merged[key] = {**current, **value}
         else:
             merged[key] = value
+    for key in SECURITY_KEYS:
+        if key in record and key in machine and key not in policy:
+            value = three_way(record[key], machine[key], MISSING)
+            if value is MISSING:
+                del merged[key]
+            else:
+                merged[key] = value
     return merged
 
 
@@ -147,9 +155,10 @@ def resolve_target(source, check):
 
 
 def main():
-    if sys.argv[1:] not in ([], ["--check"]):
-        raise ValueError("Usage: claude-settings.py [--check]")
-    check = sys.argv[1:] == ["--check"]
+    if sys.argv[1:] not in ([], ["--check"], ["--check", "--strict"]):
+        raise ValueError("Usage: claude-settings.py [--check [--strict]]")
+    check = sys.argv[1:2] == ["--check"]
+    strict = sys.argv[2:] == ["--strict"]
     source = Path(__file__).resolve().parents[2] / "config/agents/claude/settings.json"
     policy = load_object(source.read_bytes(), "Claude settings policy")
     target, legacy = resolve_target(source, check)
@@ -163,13 +172,15 @@ def main():
     else:
         machine = load_object(original, f"{target}")
         merged = merge(machine, policy, record)
-    for key in SECURITY_KEYS:
-        for note in host_values(merged.get(key), policy.get(key), key):
-            print(f"Host keeps {note}")
+    notes = [note for key in SECURITY_KEYS if key in policy for note in host_values(merged.get(key), policy[key], key)]
+    for note in notes:
+        print(f"Host keeps {note}")
     if check:
         drifted = sorted(key for key in merged if merged[key] != machine.get(key, MISSING))
         if drifted:
             raise ValueError(f"policy differs at {', '.join(drifted)}; {REPAIR}")
+        if strict and notes:
+            raise ValueError("host security values differ from policy; port them to the tracked settings or change them on this host")
         print("Claude settings policy already applied")
         return
 

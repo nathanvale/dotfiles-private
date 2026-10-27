@@ -253,6 +253,16 @@ assert_equals "$(json_field "$MACHINE" 'permissions')" '{"defaultMode": "plan", 
 run_policy --check
 assert_equals "$RUN_STATUS" 0 'check passes with a host-owned defaultMode'
 assert_contains "$RUN_STDOUT" 'Host keeps permissions.defaultMode="plan" (policy "default")' 'check names the host value that differs from policy'
+run_policy --check --strict
+assert_equals "$RUN_STATUS" 1 'strict check fails while the host keeps a differing value'
+assert_contains "$RUN_STDERR" 'host security values differ' 'strict check explains the host difference'
+
+edit_policy 'del data["permissions"]'
+run_policy
+assert_equals "$RUN_STATUS" 0 'install retires a removed policy key'
+assert_equals "$(json_field "$MACHINE" 'permissions')" '{"defaultMode": "plan", "deny": ["Read(~/private/**)"]}' 'retiring a policy key keeps only host-own entries'
+run_policy --check --strict
+assert_equals "$RUN_STATUS" 0 'strict check passes once nothing differs'
 
 prepare_checkout "$POLICY_FIXTURE"
 run_policy

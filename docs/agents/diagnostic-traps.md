@@ -67,9 +67,12 @@ the whole `skillOverrides` block, 73 entries.
   edits and retirements apply, a host's own hooks, rules and `defaultMode`
   stay, and a missing policy hook or rule is restored. A host's first run has
   no record, so it keeps every existing value.
-- `./verify_install.sh` (`claude-settings.py --check`) fails on unapplied or
-  missing policy and prints `Host keeps …` for each host value that differs.
-  Port an intended host change to the tracked file.
+- `./verify_install.sh` fails on unapplied or missing policy and warns when a
+  host keeps a security value that differs from it. `claude-settings.py
+  --check` prints each `Host keeps …` value; port an intended one to the
+  tracked file or change it on the host.
+- A host's in-place edit of a policy hook group leaves both groups after setup;
+  `--check` names `hooks` first.
 - Plugin state also lives in untracked runtime files
   (`~/.claude/plugins/known_marketplaces.json`, `installed_plugins.json`).
   An `enabledPlugins` key with no matching install is inert: a session starts

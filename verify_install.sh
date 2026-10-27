@@ -680,6 +680,7 @@ phase_start
 verify_managed_symlinks
 verify "Herdr coordinator default" "/usr/bin/python3 '$DOTFILES/bin/dotfiles/herdr-defaults.py' --check"
 verify "Claude settings policy" "/usr/bin/python3 '$DOTFILES/bin/dotfiles/claude-settings.py' --check"
+verify_warn "Claude host security values match policy (details: bin/dotfiles/claude-settings.py --check)" "/usr/bin/python3 '$DOTFILES/bin/dotfiles/claude-settings.py' --check --strict"
 verify_warn "Full Disk Access" "plutil -lint /Library/Preferences/com.apple.TimeMachine.plist"
 verify "Profile saved" "[[ -f '$STATE_DIR/profile' ]]"
 phase_end "Phase 6: Configuration"
