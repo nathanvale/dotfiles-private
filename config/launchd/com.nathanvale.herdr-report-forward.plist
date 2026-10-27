@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nathanvale.herdr-report-forward</string>
+
+    <!-- Reads the Mini's current page server port and its report-link ports on every start. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/nathanvale/code/dotfiles/bin/system/herdr_report_forward.sh</string>
+    </array>
+
+    <!-- Start at login and restart after any exit (dropped connection, page server move, failed bind). -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Space reconnect attempts so an unreachable Mini is not retried every few seconds. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/nathanvale/Library/Logs/com.nathanvale.herdr-report-forward.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/nathanvale/Library/Logs/com.nathanvale.herdr-report-forward.log</string>
+</dict>
+</plist>

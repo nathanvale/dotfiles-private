@@ -171,7 +171,8 @@
     "my-second-brain-playground@personal": true,
     "personal@personal": true,
     "connectors@personal": true,
-    "monash-tools@monash-plugins": true
+    "monash-tools@monash-plugins": true,
+    "pstack@cursor-plugins": true
   },
   "extraKnownMarketplaces": {
     "monash-plugins": {

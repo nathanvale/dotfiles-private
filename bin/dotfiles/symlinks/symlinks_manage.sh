@@ -94,6 +94,9 @@ desktop_symlinks=(
 
 	# launchd user agents (loaded from ~/Library/LaunchAgents, not XDG)
 	"${HOME}/Library/LaunchAgents/com.nathanvale.raycast-restart.plist|${DOTFILES}/config/launchd/com.nathanvale.raycast-restart.plist"
+	# Loopback forwards to the live Mini-hosted Herdr Projects report-link ports
+	"${HOME}/Library/LaunchAgents/com.nathanvale.herdr-report-forward-51012.plist|${DOTFILES}/config/launchd/com.nathanvale.herdr-report-forward-51012.plist"
+	"${HOME}/Library/LaunchAgents/com.nathanvale.herdr-report-forward-52079.plist|${DOTFILES}/config/launchd/com.nathanvale.herdr-report-forward-52079.plist"
 )
 
 server_symlinks=(
