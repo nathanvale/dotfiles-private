@@ -14,7 +14,9 @@ Merge, policy over machine:
 - SECURITY_KEYS: three-way merge against the last-applied policy record.
   Policy edits and retirements since that record apply; the host's own hooks,
   rules and values (such as `defaultMode`) stay; a policy hook or rule the
-  host lacks is restored. Without a record, existing host values stay.
+  host lacks is restored. Without a record, existing host values stay; a
+  legacy-link conversion writes no record, because the tracked file may then
+  hold the host's own writes.
   `--check --strict` also fails while the host keeps a differing value.
 - Every other policy key: the policy value wins.
 - Keys the policy does not declare stay as the machine wrote them.
@@ -113,6 +115,13 @@ def host_values(machine, policy, path):
         for key, value in policy.items():
             if key in machine:
                 yield from host_values(machine[key], value, f"{path}.{key}")
+        for key in machine:
+            if key not in policy:
+                yield f"{path}.{key} (host only)"
+    elif isinstance(machine, list) and isinstance(policy, list):
+        for entry in machine:
+            if entry not in policy:
+                yield f"{path} entry {json.dumps(entry)[:120]} (host only)"
     elif not isinstance(policy, (dict, list)) and machine != policy:
         yield f"{path}={json.dumps(machine)} (policy {json.dumps(policy)})"
 
@@ -192,7 +201,7 @@ def main():
     else:
         print("Claude settings policy already applied")
     applied = render({key: policy[key] for key in SECURITY_KEYS if key in policy})
-    if applied != record_bytes:
+    if applied != record_bytes and not legacy:
         write_atomic(record_path, applied, record_bytes, 0o600)
 
 

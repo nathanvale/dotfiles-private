@@ -135,6 +135,7 @@ prepare_checkout "$POLICY_FIXTURE"
 run_policy
 assert_equals "$RUN_STATUS" 0 'fresh install succeeds'
 assert_equals "$(object_type "$MACHINE")" file 'fresh install writes a regular machine-owned file'
+assert_equals "$(stat -f '%Lp' "$MACHINE")" 600 'fresh install writes the machine file owner-only'
 assert_equals "$(canonical "$MACHINE")" "$(canonical "$POLICY_FIXTURE")" 'fresh install seeds the whole policy'
 assert_equals "$(checkout_status)" '' 'fresh install leaves the checkout clean'
 
@@ -256,6 +257,7 @@ assert_contains "$RUN_STDOUT" 'Host keeps permissions.defaultMode="plan" (policy
 run_policy --check --strict
 assert_equals "$RUN_STATUS" 1 'strict check fails while the host keeps a differing value'
 assert_contains "$RUN_STDERR" 'host security values differ' 'strict check explains the host difference'
+assert_contains "$RUN_STDOUT" 'permissions.deny entry "Read(~/private/**)" (host only)' 'check names a host-only rule'
 
 edit_policy 'del data["permissions"]'
 run_policy
@@ -351,6 +353,26 @@ assert_equals "$(object_type "$MACHINE")" file 'legacy link becomes a regular fi
 assert_equals "$(json_field "$MACHINE" 'enabledPlugins.pstack@cursor-plugins')" true 'conversion keeps the machine write'
 cmp -s "$TEST_ROOT/dirty-tracked" "$CHECKOUT/$TRACKED" || fail 'conversion changed the tracked file'
 pass 'conversion leaves the tracked bytes for the owner to resolve'
+
+# Host-own controls written through a legacy link survive the owner restoring
+# the tracked file: conversion must not record the dirty file as policy.
+prepare_checkout "$POLICY_FIXTURE"
+ln -s "$CHECKOUT/$TRACKED" "$MACHINE"
+/usr/bin/python3 - "$MACHINE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["permissions"]["deny"].append("Read(~/.ssh/**)")
+data["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [{"type": "command", "command": "host-gate.sh"}]})
+json.dump(data, open(path, "w"), indent=2)
+PY
+run_policy
+assert_equals "$RUN_STATUS" 0 'install converts a legacy link carrying host controls'
+git_c checkout -q -- "$TRACKED"
+run_policy
+assert_equals "$RUN_STATUS" 0 'install succeeds after the owner restores the tracked file'
+assert_equals "$(json_field "$MACHINE" 'permissions.deny')" '["AskUserQuestion", "Read(~/.ssh/**)"]' 'host deny rule written through the legacy link survives'
+assert_equals "$(/usr/bin/python3 -c 'import json,sys;print(sum(1 for g in json.load(open(sys.argv[1]))["hooks"]["PreToolUse"] for h in g["hooks"] if h["command"]=="host-gate.sh"))' "$MACHINE")" 1 'host hook written through the legacy link survives'
 
 prepare_checkout "$POLICY_FIXTURE"
 printf '%s\n' '{"sentinel":"foreign"}' >"$TEST_ROOT/foreign.json"

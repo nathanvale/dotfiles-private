@@ -37,9 +37,9 @@ done
 
 ## Claude rewrites its user settings file
 
-Claude Code rewrites `~/.claude/settings.json` wholesale on every supported
-settings write: plugin install, enable or disable, marketplace add, `/model`,
-`/effort`. On a HOME without its one-time migration flags in
+Claude Code rewrites `~/.claude/settings.json` wholesale on user-scope
+settings writes. Plugin install, enable, disable and marketplace add were
+proven on 2.1.311. On a HOME without its one-time migration flags in
 `~/.claude.json`, even `claude plugin list` rewrites it (2.1.311 changed
 `model` to `opus[1m]` and dropped `skipAutoPermissionPrompt`).
 
@@ -65,14 +65,18 @@ the whole `skillOverrides` block, 73 entries.
 - Hooks and permissions merge three ways against
   `~/.claude/settings.dotfiles-policy.json`, the last-applied policy: policy
   edits and retirements apply, a host's own hooks, rules and `defaultMode`
-  stay, and a missing policy hook or rule is restored. A host's first run has
-  no record, so it keeps every existing value.
+  stay, and a missing policy hook or rule is restored. A host's first run, and
+  a legacy-link conversion, write no trusted record, so every existing host
+  value stays. A host rule the policy later adopts and then retires goes with
+  it.
 - `./verify_install.sh` fails on unapplied or missing policy and warns when a
   host keeps a security value that differs from it. `claude-settings.py
   --check` prints each `Host keeps …` value; port an intended one to the
   tracked file or change it on the host.
 - A host's in-place edit of a policy hook group leaves both groups after setup;
   `--check` names `hooks` first.
+- `~/.claude/settings.local.json` is HOME's project-local file: it applies
+  only when Claude runs from HOME, so it cannot hold user-level settings.
 - Plugin state also lives in untracked runtime files
   (`~/.claude/plugins/known_marketplaces.json`, `installed_plugins.json`).
   An `enabledPlugins` key with no matching install is inert: a session starts
