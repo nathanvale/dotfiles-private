@@ -167,6 +167,7 @@ invocation map and describes the process and qualification boundaries.
 | test | `bin/test/with-one-password-token-test.sh` | `bin/with-one-password-token` | Test source: this file. Run: `bin/test/with-one-password-token-test.sh`. |
 | test | `bin/test/work-profile-slug-parity-test.sh` | `.zshrc`, `work-profile-init.sh`, and `setup.sh` selector parity | Test source: this file. Run: `bin/test/work-profile-slug-parity-test.sh`. |
 | test | `bin/test/zsh-effective-behavior-test.sh` | `.zshenv`, `.zprofile`, and `.zshrc` effective behavior | Test source: this file. Run: `bin/test/zsh-effective-behavior-test.sh`. |
+| test | `bin/test/zsh-ssh-config-home-test.sh` | `.zshenv` canonical `XDG_CONFIG_HOME` for non-interactive SSH commands | Test source: this file. Run: `bin/test/zsh-ssh-config-home-test.sh`. |
 | test | `bin/test/zsh-startup-silence-test.sh` | zsh startup output and supported modes | Test source: this file. Run: `bin/test/zsh-startup-silence-test.sh`. |
 | test | `bin/test/zsh-work-profile-boundary-test.sh` | `.zshrc` work-profile selector boundary | Test source: this file. Run: `bin/test/zsh-work-profile-boundary-test.sh`. |
 
