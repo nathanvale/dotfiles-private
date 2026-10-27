@@ -183,6 +183,7 @@ exit 1
 STUB
 chmod 700 "$TEST_ROOT/discovery-ssh" "$TEST_ROOT/no-listener"
 env -u HERDR_REPORT_FORWARD_PORT \
+  HERDR_REPORT_FORWARD_POLL_SECONDS=0.1 \
   HERDR_REPORT_FORWARD_SSH_BIN="$TEST_ROOT/discovery-ssh" \
   HERDR_REPORT_FORWARD_LSOF_BIN="$TEST_ROOT/no-listener" \
   FORWARD_FIXTURE_SSH_ARGS="$TEST_ROOT/discovery.args" \
@@ -199,6 +200,35 @@ pass 'automatic discovery forwards all report-link ports to the current server'
   fail 'automatic discovery launch agent is valid' 'invalid plist'
 pass 'automatic discovery launch agent remains valid'
 
-expected=16
+# A held port must not prevent periodic page-server rediscovery.
+rm -f "$TEST_ROOT/listener.port"
+start_listener
+port="$(<"$TEST_ROOT/listener.port")"
+cat >"$TEST_ROOT/held-discovery-ssh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$FORWARD_FIXTURE_CURRENT_PORT"
+printf '%s\n' "$*" >>"$FORWARD_FIXTURE_SSH_ARGS"
+STUB
+chmod 700 "$TEST_ROOT/held-discovery-ssh"
+env -u HERDR_REPORT_FORWARD_PORT \
+  HERDR_REPORT_FORWARD_POLL_SECONDS=0.1 \
+  HERDR_REPORT_FORWARD_REDISCOVER_SECONDS=1 \
+  HERDR_REPORT_FORWARD_SSH_BIN="$TEST_ROOT/held-discovery-ssh" \
+  FORWARD_FIXTURE_CURRENT_PORT="$port" \
+  FORWARD_FIXTURE_SSH_ARGS="$TEST_ROOT/held-discovery.args" \
+  "$SUBJECT" >"$TEST_ROOT/held-discovery.log" 2>&1 &
+SUBJECT_PID=$!
+wait_for "$TEST_ROOT/held-discovery.log" 'status=rediscovering after=1s' ||
+  fail 'held port eventually rediscovers' "$(cat "$TEST_ROOT/held-discovery.log")"
+wait "$SUBJECT_PID" || fail 'rediscovery exits successfully for launchd restart' 'nonzero status'
+SUBJECT_PID=''
+pass 'held port exits successfully at the rediscovery deadline'
+kill -0 "$LISTENER_PID" || fail 'rediscovery preserves the existing listener' 'listener gone'
+[[ "$(wc -l <"$TEST_ROOT/held-discovery.args" | tr -d ' ')" == 1 &&
+   "$(<"$TEST_ROOT/held-discovery.args")" != *'-L '* ]] ||
+  fail 'held-port rediscovery avoids new forwards' 'unexpected SSH request'
+pass 'rediscovery preserves the held listener and opens no forwarding session'
+
+expected=18
 [[ "$PASSED" -eq "$expected" ]] || fail 'assertion count is pinned' "expected $expected, observed $PASSED"
 printf '1..%d\n' "$PASSED"
