@@ -58,7 +58,12 @@ def normalize_config_path(path):
     return os.path.abspath(os.path.expanduser(path))
 
 
-def load_lock():
+def load_lock(declared_third_party=()):
+    """Merge reviewed vendor records with the machine lock.
+
+    A machine-lock entry is installer-owned unless topology still declares the
+    name as a reviewed vendor (pending migration to the installer route).
+    """
     reviewed = {
         name: metadata
         for name, metadata in load_json(REVIEWED_LOCK_PATH).get("skills", {}).items()
@@ -69,12 +74,13 @@ def load_lock():
         if os.path.exists(MACHINE_LOCK_PATH)
         else {}
     )
-    native = {
+    declared = set(declared_third_party)
+    installer = {
         name: metadata
         for name, metadata in machine.items()
-        if metadata.get("source") == "mattpocock/skills"
+        if name not in reviewed and name not in declared
     }
-    return {**reviewed, **native}, (
+    return {**reviewed, **installer}, set(installer), (
         os.path.realpath(MACHINE_LOCK_PATH)
         if os.path.exists(MACHINE_LOCK_PATH)
         else REVIEWED_LOCK_PATH
@@ -178,6 +184,7 @@ class Inventory:
         self,
         topology,
         locked,
+        installer,
         lock_path,
         skill_overrides,
         codex_skill_registrations,
@@ -189,10 +196,7 @@ class Inventory:
         self.app_owned = topology.get("appOwned", {})
         self.locked = locked
         self.lock_path = lock_path
-        self.native = {
-            name for name, metadata in locked.items()
-            if metadata.get("source") == "mattpocock/skills"
-        }
+        self.installer = installer
         self.skill_overrides = skill_overrides
         self.codex_skill_registrations = codex_skill_registrations
         self.protected_harness = None
@@ -418,8 +422,8 @@ class Inventory:
                 content_agreement="owned",
             )
             return
-        if name in self.native:
-            self.classify_native(row)
+        if name in self.installer:
+            self.classify_installer(row)
             return
         if name in self.third_party:
             declaration = self.third_party[name]
@@ -530,10 +534,10 @@ class Inventory:
                 return value.strip().strip("\"'") == row["name"]
         return False
 
-    def classify_native(self, row):
+    def classify_installer(self, row):
         row.update(
             provenance="third-party-installer-owned",
-            source_owner="mattpocock/skills",
+            source_owner=self.locked[row["name"]].get("source", "unknown"),
             source_path=row["resolved_target"],
             content_agreement="installer-owned",
             lock_hash=self.locked[row["name"]].get("skillFolderHash"),
@@ -541,7 +545,7 @@ class Inventory:
         )
 
     def classify_codex(self, row):
-        if row["name"] in self.native:
+        if row["name"] in self.installer:
             self.classify_live(row)
             return
         if row["filesystem_kind"] == "symlink" and not os.path.exists(
@@ -659,7 +663,7 @@ class Inventory:
                             "project-only skill must not have a user-scope live address",
                         )
         declared_third_party = set(self.third_party)
-        for name in sorted(set(self.locked) - declared_third_party - self.native):
+        for name in sorted(set(self.locked) - declared_third_party - self.installer):
             self.issue(
                 "undeclared-third-party-lock",
                 "third-party-lock",
@@ -824,7 +828,7 @@ class Inventory:
         codex_names = {
             row["name"] for row in self.entries if row["address"] == "codex"
         }
-        for name in sorted((agents_names & codex_names) - self.native):
+        for name in sorted((agents_names & codex_names) - self.installer):
             self.issue(
                 "codex-duplicate-name",
                 "codex",
@@ -906,7 +910,7 @@ def main():
     args = parse_args()
     try:
         topology = load_json(TOPOLOGY_PATH)
-        locked, lock_path = load_lock()
+        locked, installer, lock_path = load_lock(topology.get("thirdParty", {}))
         claude_settings = load_json(CLAUDE_SETTINGS_PATH)
         codex_config = load_toml(CODEX_CONFIG_PATH)
     except (OSError, ValueError) as error:
@@ -915,6 +919,7 @@ def main():
     inventory = Inventory(
         topology,
         locked,
+        installer,
         lock_path,
         claude_settings.get("skillOverrides", {}),
         codex_config.get("skills", {}).get("config", []),

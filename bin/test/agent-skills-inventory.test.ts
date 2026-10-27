@@ -606,4 +606,79 @@ describe('agent-skills-inventory public process', () => {
 		expect(report.topology_path).toBe(realpathSync(join(fixture.dotfiles, 'config', 'agents', 'skills', 'topology.json')))
 		expect(report.lock_path).toBe(realpathSync(join(fixture.home, '.agents', '.skill-lock.json')))
 	})
+
+	describe('installer-owned skills from any upstream source', () => {
+		function installNonMattSkill(fixture: ReturnType<typeof makeFixture>, name: string) {
+			write(join(fixture.home, '.agents', '.skill-lock.json'), JSON.stringify({ version: 3, skills: {
+				[name]: {
+					source: 'vercel/turborepo',
+					sourceType: 'github',
+					ref: '8003ff0fe919160f68367cd08465b179410e0692',
+					skillFolderHash: 'a1bae26a81bbc79e6eb14b4e7ec4d36694e6e94a',
+				},
+			} }))
+			skill(join(fixture.agents, name, 'SKILL.md'), name)
+			symlinkSync(join('..', '..', '.agents', 'skills', name), join(fixture.claude, name))
+		}
+
+		test('accepts a non-Matt locked skill at its installer addresses without declarations', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			const result = run(fixture.home, '--json')
+			expect(result.stderr.toString()).toBe('')
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues).toEqual([])
+			expect(result.exitCode).toBe(0)
+			const rows = report.entries.filter((row: { name: string }) => row.name === 'turborepo-fixture')
+			expect(rows.map((row: { address: string }) => row.address)).toEqual(['agents', 'claude'])
+			for (const row of rows) {
+				expect(row).toMatchObject({ provenance: 'third-party-installer-owned', source_owner: 'vercel/turborepo', content_agreement: 'installer-owned' })
+			}
+			expect(rows[0].filesystem_kind).toBe('directory')
+			expect(rows[1].filesystem_kind).toBe('symlink')
+		})
+
+		test('still flags an unlocked, undeclared skill beside a locked one', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.agents, 'unlocked-one', 'SKILL.md'), 'unlocked-one')
+			symlinkSync(join('..', '..', '.agents', 'skills', 'unlocked-one'), join(fixture.claude, 'unlocked-one'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues.map((issue: { code: string, address: string, name: string }) => [issue.code, issue.address, issue.name])).toEqual([
+				['unknown-provenance', 'agents', 'unlocked-one'],
+				['unknown-provenance', 'claude', 'unlocked-one'],
+			])
+		})
+
+		test('still flags a locked skill whose link is broken', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues.map((issue: { code: string, address: string, name: string }) => [issue.code, issue.address, issue.name])).toEqual([
+				['dangling-symlink', 'claude', 'turborepo-fixture'],
+			])
+		})
+
+		test('keeps a declared reviewed vendor on its reviewed checks until it migrates', () => {
+			const fixture = makeFixture()
+			// The machine lock also records locked-one, which topology declares as a reviewed vendor.
+			rmSync(join(fixture.agents, 'locked-one'))
+			skill(join(fixture.agents, 'locked-one', 'SKILL.md'), 'locked-one')
+			write(join(fixture.home, '.agents', '.skill-lock.json'), JSON.stringify({ version: 3, skills: {
+				'locked-one': { source: 'fixture/skills' },
+			} }))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues.map((issue: { code: string, name: string }) => [issue.code, issue.name])).toContainEqual(['wrong-third-party-target', 'locked-one'])
+		})
+	})
 })
