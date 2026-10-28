@@ -1,0 +1,12 @@
+{
+  "server": "1.42.1",
+  "bridge": "1.41.5",
+  "distributionIntegrity": "sha512-4vLXGOiC+iRpAjnvd2d8VnkwX75/vd9VWBnmkIA8mRyU5HlXzE3+mQEER9oDrKyVBIzonxmJ7ChkrHYYDOlTaQ==",
+  "runtimeTreeSha256": "205dafc79feb9d94175fd2bfc711bf77c2a4fd9d8f592013cf96105aed33fd46",
+  "payload": {
+    "manifest.json": "8e032d6ce2c935ca2c93983f59db79733d3d1a7336b865bcd717a994d47a3291",
+    "code.js": "0c1bd1254d5ca855e90ab14e5c28f8e37ceaaee21f6608b85ba9796566606ea5",
+    "ui.html": "b2bc7abc4a7a0688c24467123a98b44ca1235b65cedda79a3d0aee6f73bf08ee",
+    "icon.png": "cb4b7eb99450e1b84c89516f7eadc428322b0b69cd77ffe4764a4da30dacc766"
+  }
+}

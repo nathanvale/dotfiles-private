@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/fallow/schema.json",
   "ignorePatterns": [
+    "config/agents/plugins/connectors/skills/figma-console/payload/**",
     ".claude/worktrees/**",
     ".worktrees/**",
     "config/raycast/extensions/**",

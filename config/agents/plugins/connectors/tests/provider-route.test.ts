@@ -27,6 +27,60 @@ function oauthFixture(oauth: unknown = "mcporter", registryAuth: unknown = "oaut
 	return entry;
 }
 
+// A route that opts into an owned MCPorter daemon. Independent oracle: the
+// accepted daemon verbs are start, status and stop only, and only an
+// explicitly owned dispatcher route may name them.
+function daemonFixture(route: Record<string, unknown>): string {
+	const skills = path.join(harness.root, "daemon-skills");
+	const config = path.join(skills, "daemon-skill", "config");
+	mkdirSync(config, { recursive: true });
+	writeFileSync(path.join(config, "route.json"), JSON.stringify({ defaultProvider: "probe", selectors: { selection: "PROBE_SELECTION" }, ...route }));
+	writeFileSync(path.join(config, "mcporter.json"), readFileSync(path.join(FIXTURES, "probe-skill", "config", "mcporter.json"), "utf8"));
+	return skills;
+}
+function routeRefusal(plan: () => unknown): { code: string; exit: number } | "accepted" {
+	try { plan(); } catch (error) { if (error instanceof RouteError) return { code: error.code, exit: error.exitCode }; throw error; }
+	return "accepted";
+}
+const daemonArgv = (verb: string, ...flags: string[]) => ["daemon-skill", "--select", "selection=example", "--", "daemon", verb, ...flags];
+
+describe("owned daemon route (in-process)", () => {
+	test("an explicitly owned dispatcher route plans exactly start, status and stop, without the keep-alive opt-out", () => {
+		const skills = daemonFixture({ dispatcherOwned: true, ownedDaemon: true });
+		const config = path.join(skills, "daemon-skill", "config", "mcporter.json");
+		for (const verb of ["start", "status", "stop"]) {
+			const plan = planDispatcherRoute(daemonArgv(verb, "--json"), skills, { PATH: "/bin", AMBIENT_SENTINEL }, "context-v1");
+			expect(plan.argv).toEqual(["--config", config, "daemon", verb, "--json"]);
+			expect(plan.env).toEqual({ PATH: "/bin", PROBE_SELECTION: "example", [INTERNAL_INVOCATION_CONTEXT_ENV]: "context-v1" });
+		}
+		const call = planDispatcherRoute(["daemon-skill", "--select", "selection=example", "--", "call", "probe", "--output", "json"], skills, { PATH: "/bin" }, "context-v1");
+		expect(call.argv.slice(2)).toEqual(["call", "probe.probe", "--output", "json", "--no-oauth"]);
+		expect(Object.keys(call.env)).not.toContain("MCPORTER_NO_KEEPALIVE");
+	});
+
+	test("daemon refuses every other verb, flag, route shape and the public launcher", () => {
+		const owned = daemonFixture({ dispatcherOwned: true, ownedDaemon: true });
+		for (const [verb, flags] of [["restart", []], ["migrate", []], ["start", ["--foreground"]], ["start", ["--log"]], ["status", ["extra"]]] as const) {
+			expect(routeRefusal(() => planDispatcherRoute(daemonArgv(verb, ...flags), owned, {}, "context-v1"))).not.toBe("accepted");
+		}
+		expect(routeRefusal(() => planRoute(daemonArgv("status"), owned, {}))).toEqual({ code: "command-invalid", exit: 2 });
+		for (const route of [{ dispatcherOwned: true }, { ownedDaemon: true }, { dispatcherOwned: false, ownedDaemon: true }]) {
+			harness.dispose(); harness = createHarness({});
+			const skills = daemonFixture(route);
+			expect(routeRefusal(() => planDispatcherRoute(daemonArgv("status"), skills, {}, "context-v1"))).toEqual({ code: "command-invalid", exit: 2 });
+		}
+		harness.dispose(); harness = createHarness({});
+		const invalid = daemonFixture({ dispatcherOwned: true, ownedDaemon: "yes" });
+		expect(routeRefusal(() => planDispatcherRoute(daemonArgv("status"), invalid, {}, "context-v1"))).toEqual({ code: "config-invalid", exit: 4 });
+	});
+
+	test("a route without ownedDaemon keeps disabling keep-alive for every planned call", () => {
+		const skills = daemonFixture({ dispatcherOwned: true });
+		const plan = planDispatcherRoute(["daemon-skill", "--select", "selection=example", "--", "call", "probe"], skills, { PATH: "/bin" }, "context-v1");
+		expect(plan.env.MCPORTER_NO_KEEPALIVE).toBe("*");
+	});
+});
+
 describe("route plan (in-process)", () => {
 	test("composes the explicit config, verb, target, and disabled OAuth", () => {
 		const plan = planRoute(["probe-skill", "--select", "selection=example", "--", "list", "--status", "--json"], FIXTURES, { PATH: "/bin", AMBIENT_SENTINEL });
@@ -262,7 +316,7 @@ describe("route source and skill registries", () => {
 		const skills = readdirSync(SKILLS_ROOT)
 			.filter((name) => existsSync(path.join(SKILLS_ROOT, name, "config", "mcporter.json")))
 			.sort();
-		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid", "notion"]);
+		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "figma-console", "firecrawl", "mermaid", "notion"]);
 		for (const skill of skills) {
 			const registry = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "mcporter.json"), "utf8")) as { imports: unknown; mcpServers: Record<string, unknown> };
 			const route = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "route.json"), "utf8")) as { defaultProvider: string };

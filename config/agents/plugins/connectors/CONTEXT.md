@@ -181,3 +181,17 @@ settles an unknown Write Outcome only on evidence found or proven absent. A
 Write Receipt from a Retired Provider has no such route and is refused. It is
 never a retry and never a manual mark of success.
 _Avoid_: Retry, override, manual resolve, recovery run
+
+## Figma Console routing
+
+**Desktop Bridge**:
+The pinned local Figma plugin that relays Figma Console's fixed scripts into
+the file open in Figma Desktop. Its file and account are checked inside each
+script, never assumed from the selection.
+_Avoid_: Figma plugin, Desktop connection, hosted Figma
+
+**Owned Session**:
+The one MCPorter daemon a Figma Console account and file keep in their own
+private namespace, started and stopped only by journaled lifecycle writes.
+Ordinary reads never start it.
+_Avoid_: Server, keep-alive, connection
