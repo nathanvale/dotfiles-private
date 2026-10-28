@@ -163,3 +163,10 @@ config/herdr-web-ui/
 
 # Private employer credential routing belongs to the local work configuration.
 config/monash-tools/
+
+# Private gateway configuration and Herdr-installed OpenCode integration.
+/config/ovis-gateway/
+/config/opencode/cli.json
+/config/opencode/herdr-opencode/
+/config/opencode/herdr-tui-session.js
+/config/opencode/plugins/herdr-agent-state.js

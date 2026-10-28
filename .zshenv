@@ -34,6 +34,9 @@ setopt NOMATCH
 # Codex sandboxes block the default ~/.cache/clang path. Keep Swift module
 # compilation in OS-managed temporary storage available to sandboxed workers.
 export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/clang-module-cache"
+
+# Keep Projects report helpers on local links without starting Tailscale Serve.
+export HERDR_PROJECTS_LINKS=local
 #
 # Non-interactive SSH commands do not read .zshrc. Keep the package-manager
 # prefix available so remote tools resolve installed executables before

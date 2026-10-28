@@ -59,3 +59,23 @@ those operations. Herdr transport does not transfer their ownership.
   plugin action once. Do not edit the launcher by hand. `herdr-projects update`
   updates the downloaded CLI release; it does not change the plugin's recorded
   source ref.
+
+## Coordinator-managed worktrees
+
+- For direct workers managed by a coordinator, make Herdr the sole checkout
+  creator. Use `worktree create` with explicit `--cwd`, `--base` at the
+  admitted commit SHA, and `--path <repo>/.worktrees/<name>`. Reopen a retained
+  checkout with `worktree open`, supplying both `--cwd` and `--path`.
+- Record Herdr's returned workspace and pane identities, then verify the
+  actual checkout path, branch, HEAD and dirty state before worker writes.
+  Start or continue the worker in that checkout; do not request subsequent
+  Claude worktree isolation for the same assignment. Keep the Claude worktree
+  hook for Claude-managed isolation outside this route.
+- Keep source admission, repository bootstrap, independent review, evidence,
+  finite host-operation grants and publication with their declared owners.
+  Checkout creation proves none of those requirements complete. Preserve
+  existing assignments and retained candidates through their handback.
+- For native delegated tasks, keep the Projects lifecycle with the board.
+  For manually coordinated workers, record the owning task, worker and handback
+  without claiming native adoption or automatic checks and reviews. Verify a
+  supported adoption route before transferring lifecycle ownership.
