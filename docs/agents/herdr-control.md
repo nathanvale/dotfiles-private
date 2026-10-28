@@ -35,3 +35,27 @@ control for supporting inspection or recovery, preserving board ownership.
 
 Global authority, Git, WorkTree, browser, Google and vault routes still govern
 those operations. Herdr transport does not transfer their ownership.
+
+## Updates
+
+- Identify how Herdr is installed before updating it. Use `herdr update` only
+  for installs managed by Herdr's installer. Update Homebrew, mise, Nix, or
+  another package-managed install through that package manager (for example,
+  `brew upgrade herdr` for Homebrew).
+- After updating Herdr, check `herdr --version` and `herdr status --json`.
+  `herdr update` reports running servers and saved SSH machines still on an old
+  version. Update each saved machine on that machine; preserve live sessions
+  and review any printed server restart command before using it.
+- Update one GitHub plugin with `herdr plugin update <plugin-id>`. A plugin
+  installed without `--ref` tracks the repository's default branch; installing
+  with `--ref <tag-or-commit>` records a deliberate pin. Plugin updates fetch
+  the recorded ref, so updating a pinned plugin does not remove its pin.
+- Existing plugin panes and processes keep their original files after an
+  update; new invocations use the new installation. Do not restart Herdr just
+  to refresh a plugin.
+- For Herdr Projects, use `herdr-projects doctor` after a plugin update to
+  check the CLI and agent/hook launcher. If it reports a launcher mismatch,
+  follow the exact repair command it prints or open the board from the updated
+  plugin action once. Do not edit the launcher by hand. `herdr-projects update`
+  updates the downloaded CLI release; it does not change the plugin's recorded
+  source ref.

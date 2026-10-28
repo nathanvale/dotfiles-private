@@ -22,7 +22,7 @@
     },
     {
       "name": "personal",
-      "version": "0.4.41",
+      "version": "0.4.42",
       "source": {
         "source": "local",
         "path": "./personal"
@@ -35,7 +35,7 @@
     },
     {
       "name": "connectors",
-      "version": "0.7.1",
+      "version": "0.7.2",
       "source": {
         "source": "local",
         "path": "./connectors"

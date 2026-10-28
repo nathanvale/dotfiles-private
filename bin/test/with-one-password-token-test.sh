@@ -9,6 +9,13 @@ SUBJECT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)/with-one-password-token"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
+# The wrapper prefers the login Keychain under HOME. A test-owned HOME keeps
+# every run away from the real Keychain; its placeholder file only satisfies
+# the existence check, and the fixture's fake security answers the read.
+export HOME="$TEST_ROOT/home"
+mkdir -p "$HOME/Library/Keychains"
+: >"$HOME/Library/Keychains/login.keychain-db"
+
 pass_count=0
 
 pass() {
@@ -195,6 +202,11 @@ if [[ "${OP_SERVICE_ACCOUNT_TOKEN:-}" == 'ops_SERVICE_SENTINEL' ]]; then
 else
   printf 'token_matches=\n'
 fi
+if [[ "${OP_SERVICE_ACCOUNT_TOKEN:-}" == 'ops_KEYCHAIN_SENTINEL' ]]; then
+  printf 'keychain_token_matches=yes\n'
+else
+  printf 'keychain_token_matches=\n'
+fi
 printf 'unrelated_present=%s\n' "${UNRELATED_SECRET:+yes}"
 if /usr/bin/env | grep -q '^  --ansi='; then
   printf 'invalid_name_present=yes\n'
@@ -213,6 +225,31 @@ esac
 printf 'args=%s\n' "$*"
 EOF
   chmod +x "$fixture/bin/op"
+
+  # Stands in for macOS security. Modes come from a fixture file because the
+  # wrapper scrubs the environment before any helper runs.
+  cat >"$fixture/bin/security" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_bin="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
+printf '%s\n' "$*" >>"$fixture_bin/security-argv"
+mode="$(cat "$fixture_bin/security-mode" 2>/dev/null || printf 'item-missing')"
+case "$mode" in
+  token) printf 'ops_KEYCHAIN_SENTINEL\n' ;;
+  item-missing)
+    printf 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n' >&2
+    exit 44
+    ;;
+  interaction-denied)
+    printf 'security: User interaction is not allowed.\n' >&2
+    exit 36
+    ;;
+  hang) exec sleep 30 ;;
+  malformed) printf 'KEYCHAIN_MALFORMED_SENTINEL\n' ;;
+  *) exit 64 ;;
+esac
+EOF
+  chmod +x "$fixture/bin/security"
 
   cat >"$fixture/bin/hold-target" <<'EOF'
 #!/usr/bin/env bash
@@ -623,5 +660,87 @@ set -e
 [[ "$key_status" -eq 2 ]] || fail 'invalid environment key exits with usage status'
 pass 'invalid environment key exits with usage status'
 assert_contains "$key_error" 'environment-key-invalid' 'invalid environment key fails closed'
+
+# Keychain preference. The fixture .env token stays present throughout, so
+# every row also shows which source the wrapper chose.
+keychain_fixture="$TEST_ROOT/keychain"
+make_fixture "$keychain_fixture"
+printf 'token' >"$keychain_fixture/bin/security-mode"
+keychain_check="$(DOTFILES_DIR="$keychain_fixture" PATH="$keychain_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+assert_contains "$keychain_check" '"status":"ok","token_source":"login-keychain","keychain_status":"read"' 'check prefers a readable login Keychain token'
+assert_not_contains "$keychain_check" 'KEYCHAIN_SENTINEL' 'check redacts the Keychain token'
+expected_security_argv="find-generic-password -s connectors.1password.service-account -a connectors -w $HOME/Library/Keychains/login.keychain-db"
+[[ "$(cat "$keychain_fixture/bin/security-argv")" == "$expected_security_argv" ]] || fail 'Keychain read names only the registered service, account and login Keychain'
+pass 'Keychain read names only the registered service, account and login Keychain'
+
+keychain_op="$(DOTFILES_DIR="$keychain_fixture" PATH="$keychain_fixture/bin:$PATH" OP_SERVICE_ACCOUNT_TOKEN=ops_AMBIENT_SENTINEL "$SUBJECT" op item get known-item --vault known-vault 2>&1)"
+assert_contains "$keychain_op" 'keychain_token_matches=yes' 'op receives the Keychain token'
+assert_not_contains "$keychain_op" $'\ntoken_matches=yes' 'op does not receive the .env token when the Keychain is readable'
+assert_contains "$keychain_op" 'argv_has_token=' 'Keychain token is absent from op process arguments'
+assert_not_contains "$keychain_op" 'KEYCHAIN_SENTINEL' 'op output does not expose Keychain token bytes'
+
+# shellcheck disable=SC2016
+keychain_child="$(DOTFILES_DIR="$keychain_fixture" PATH="$keychain_fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/known-item/credential -- bash -c 'printf "upload_present=%s\n" "${EXPERIENCE_EXTENSION_UPLOAD_TOKEN:+yes}"; printf "service_present=%s\n" "${OP_SERVICE_ACCOUNT_TOKEN:+yes}"; /usr/bin/env' 2>&1)"
+assert_contains "$keychain_child" 'upload_present=yes' 'inject still delivers the requested secret with a Keychain token'
+assert_contains "$keychain_child" 'service_present=' 'inject target never receives the Keychain token'
+assert_not_contains "$keychain_child" 'KEYCHAIN_SENTINEL' 'inject target environment and output carry no Keychain token bytes'
+
+keychain_argv_result="$TEST_ROOT/keychain-argv-result"
+fixture="$keychain_fixture" run_held_launches 'ops_KEYCHAIN_SENTINEL' "$keychain_argv_result" op hold
+[[ ! -e "$keychain_argv_result" ]] || fail 'Keychain token never appears in process arguments during held op launches'
+pass 'Keychain token never appears in process arguments during held op launches'
+
+# Fallback: each unavailable Keychain names its reason and keeps the .env route.
+assert_env_fallback() {
+  local mode="$1"
+  local expected="$2"
+  local label="$3"
+  local fallback_fixture="$TEST_ROOT/fallback-$mode"
+  local output
+  make_fixture "$fallback_fixture"
+  printf '%s' "$mode" >"$fallback_fixture/bin/security-mode"
+  output="$(DOTFILES_DIR="$fallback_fixture" PATH="$fallback_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+  assert_contains "$output" "\"status\":\"ok\",\"token_source\":\"dotfiles-env\",$expected" "$label"
+  assert_not_contains "$output" 'SENTINEL' "$label without token bytes"
+  output="$(DOTFILES_DIR="$fallback_fixture" PATH="$fallback_fixture/bin:$PATH" "$SUBJECT" op item get known-item --vault known-vault 2>&1)"
+  assert_contains "$output" $'\ntoken_matches=yes' "$label still gives op the .env token"
+  assert_not_contains "$output" 'security:' "$label keeps reader stderr private"
+}
+assert_env_fallback item-missing '"keychain_status":"item-missing","keychain_reader_exit":44' 'missing Keychain item falls back to .env'
+assert_env_fallback interaction-denied '"keychain_status":"unavailable","keychain_reader_exit":36' 'refused Keychain interaction falls back to .env'
+
+hang_started="$SECONDS"
+assert_env_fallback hang '"keychain_status":"timeout","keychain_reader_exit":null' 'stalled Keychain reader times out to .env'
+(( SECONDS - hang_started < 25 )) || fail 'Keychain reader timeout is bounded'
+pass 'Keychain reader timeout is bounded'
+
+no_keychain_fixture="$TEST_ROOT/no-keychain"
+make_fixture "$no_keychain_fixture"
+printf 'token' >"$no_keychain_fixture/bin/security-mode"
+no_keychain_output="$(HOME="$TEST_ROOT/empty-home" DOTFILES_DIR="$no_keychain_fixture" PATH="$no_keychain_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+assert_contains "$no_keychain_output" '"token_source":"dotfiles-env","keychain_status":"keychain-missing","keychain_reader_exit":null' 'absent login Keychain falls back to .env'
+[[ ! -e "$no_keychain_fixture/bin/security-argv" ]] || fail 'absent login Keychain is never queried'
+pass 'absent login Keychain is never queried'
+
+malformed_fixture="$TEST_ROOT/keychain-malformed"
+make_fixture "$malformed_fixture"
+printf 'malformed' >"$malformed_fixture/bin/security-mode"
+set +e
+malformed_error="$(DOTFILES_DIR="$malformed_fixture" PATH="$malformed_fixture/bin:$PATH" "$SUBJECT" op item get known-item --vault known-vault 2>&1)"
+malformed_status=$?
+set -e
+[[ "$malformed_status" -eq 3 ]] || fail 'malformed Keychain token exits with custody status instead of switching to .env'
+pass 'malformed Keychain token exits with custody status instead of switching to .env'
+assert_contains "$malformed_error" 'token-keychain-shape' 'malformed Keychain token fails closed'
+assert_not_contains "$malformed_error" 'token_present=' 'malformed Keychain token never reaches op'
+assert_not_contains "$malformed_error" 'MALFORMED_SENTINEL' 'malformed Keychain value stays redacted'
+
+blocked_fixture="$TEST_ROOT/keychain-and-env-missing"
+make_fixture "$blocked_fixture"
+rm "$blocked_fixture/.env"
+set +e
+blocked_error="$(DOTFILES_DIR="$blocked_fixture" PATH="$blocked_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+set -e
+assert_contains "$blocked_error" '"status":"blocked","command":"check","code":"token-file-missing","keychain_status":"item-missing","keychain_reader_exit":44' 'blocked check names the Keychain reason behind the .env failure'
 
 printf '1..%d\n' "$pass_count"

@@ -1,2 +1,4 @@
+# Git analysis uses the repository-pinned companion, not an editor extension.
+unset FALLOW_TYPE_AWARE_BIN FALLOW_TYPE_AWARE_SCRIPT FALLOW_TYPE_AWARE_BIN_SOURCE
 bunx --no-install lint-staged || exit $?
 exec ./node_modules/.bin/fallow audit --base origin/main --format json --quiet --type-aware --type-aware-require best-effort --gate-marker pre-commit

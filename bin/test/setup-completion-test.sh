@@ -529,7 +529,7 @@ for coordinator_profile in desktop server; do
   /usr/bin/python3 - "$FIXTURE_HOME/.herdr-projects/settings/config.json" <<'PYTEST'
 import json, sys
 value = json.load(open(sys.argv[1]))["coordinator"]["instructions"]
-assert "$HOME/code/dotfiles/config/agents/plugins/my-second-brain-playground/skills/stage-manager/references/delivery.md" in value
+assert "$HOME/code/dotfiles/docs/agents/herdr-projects.md" in value
 assert "/Users/" not in value and value.count("At coordinator startup") == 1
 PYTEST
   pass "$coordinator_profile installs the portable coordinator default"

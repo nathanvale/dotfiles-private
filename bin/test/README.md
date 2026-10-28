@@ -20,6 +20,7 @@ bin/test/claude-native-install-test.sh
 bin/test/codex-managed-install-test.sh
 bin/test/zsh-effective-behavior-test.sh
 bin/test/zsh-startup-silence-test.sh
+bin/test/zsh-ssh-config-home-test.sh
 bin/test/git-effective-behavior-test.sh
 bin/test/zsh-work-profile-boundary-test.sh
 bin/test/codex-ambient-credential-boundary-test.sh
@@ -35,6 +36,7 @@ bin/test/setup-state-recovery-test.sh
 bin/test/profile-link-parity-test.sh
 bin/test/bun-core-install-test.sh
 bin/test/lm-studio-ensure-test.sh
+bin/test/herdr-report-forward-test.sh
 bin/test/atuin-agent-history-test.sh
 bin/test/symlinks-manage-test.sh
 bin/test/symlinks-real-directory-test.sh
@@ -187,6 +189,11 @@ unproven lane, not as a green one.
 Replaying a snapshot captured before the repair fails these rows on
 `extendedglob`, which is what makes the passing case a measurement rather than a
 description. A snapshot that predates the repair is not evidence for it.
+
+`zsh-ssh-config-home-test.sh` proves that a non-interactive SSH command gets the
+resolved `~/.config` path in `XDG_CONFIG_HOME` (so the Herdr web bridge registers
+under the canonical socket path), and that local, interactive and caller-set
+values are untouched.
 
 `zsh-startup-silence-test.sh` is the companion contract for startup noise. It
 claims what the file above deliberately leaves out: every startup mode exits

@@ -1,1 +1,1 @@
-At coordinator startup or resume, and before dispatch or accepting a Handback, read and apply `$HOME/code/dotfiles/config/agents/plugins/my-second-brain-playground/skills/stage-manager/references/delivery.md`, resolving $HOME on the coordinator's execution machine.
+At coordinator startup or resume, and before project creation, dispatch or accepting a Handback, read and apply `$HOME/code/dotfiles/docs/agents/herdr-projects.md`, resolving $HOME on the coordinator's execution machine.
