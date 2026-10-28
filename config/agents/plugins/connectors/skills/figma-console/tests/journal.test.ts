@@ -10,7 +10,7 @@ import path from "node:path";
 import { cause, consoleCli, document, textNode, UPDATE, USER } from "./fixtures/console-cli.ts";
 
 const cli = consoleCli();
-const FILES = ["guardsfile1", "applyfile01", "lostreply01", "storagefile", "crashfile01", "markerfile1", "concurrent1", "expiredfile", "corruptfile", "fencefile01", "unrelated01", "orphanfile1", "floatfile01", "lateapply01", "fontaxes01", "wrongfont1", "mixedfont1"];
+const FILES = ["guardsfile1", "applyfile01", "lostreply01", "storagefile", "crashfile01", "markerfile1", "concurrent1", "expiredfile", "corruptfile", "fencefile01", "unrelated01", "orphanfile1", "floatfile01", "lateapply01", "fontaxes01", "wrongfont1", "mixedfont1", "scopeorder1", "scopemiss1", "scopeextra", "scopewrong"];
 beforeAll(async () => {
 	for (const file of FILES) expect((await cli.configure(file)).code).toBe(0);
 }, 120000);
@@ -64,6 +64,19 @@ test("Figma font variation metadata preserves exact text success; wrong or mixed
 		const result = await apply(file, id);
 		expect([result.code, result.envelope?.result.causeCode, cli.state().effects, cli.mutations().length]).toEqual([expected === "SUCCESS_RUN_APPLIED" ? 0 : 3, expected, 1, 1]);
 		expect(cli.state().document.node.characters).toBe("After");
+		expect(cli.receipt(file, id).status).toBe(expected === "SUCCESS_RUN_APPLIED" ? "applied" : "unknown");
+	}
+}, 60000);
+
+test("created token scopes verify as an exact set after Figma reorders them", async () => {
+	const input = { collection: "Fixture tokens", tokens: [{ name: "probe/spacing", type: "FLOAT", value: 24, scopes: ["GAP"] }, { name: "probe/color", type: "COLOR", value: { r: 0.12549, g: 0.309804, b: 0.533333, a: 1 }, scopes: ["TEXT_FILL", "FRAME_FILL"] }] };
+	for (const [file, tokenScopeReadback, expected] of [["scopeorder1", "reorder", "SUCCESS_RUN_APPLIED"], ["scopemiss1", "missing", "DOMAIN_RUN_EFFECT_UNKNOWN"], ["scopeextra", "extra", "DOMAIN_RUN_EFFECT_UNKNOWN"], ["scopewrong", "wrong", "DOMAIN_RUN_EFFECT_UNKNOWN"]] as const) {
+		cli.setMachine({ document: document(file), faults: { tokenScopeReadback } });
+		const previewed = await cli.write(file, "create_tokens", input, "--preview");
+		expect([previewed.code, previewed.envelope?.result.causeCode]).toEqual([0, "SUCCESS_RUN_RECORDED"]);
+		const id = previewed.envelope?.result.data?.previewId as string;
+		const result = await cli.write(file, "create_tokens", input, "--apply", id);
+		expect([result.code, result.envelope?.result.causeCode, cli.state().effects, cli.mutations().length]).toEqual([expected === "SUCCESS_RUN_APPLIED" ? 0 : 3, expected, 1, 1]);
 		expect(cli.receipt(file, id).status).toBe(expected === "SUCCESS_RUN_APPLIED" ? "applied" : "unknown");
 	}
 }, 60000);

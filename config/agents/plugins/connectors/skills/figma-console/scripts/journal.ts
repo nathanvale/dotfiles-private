@@ -251,7 +251,12 @@ function tokenMatches(receipt: Pick<Receipt, "input" | "baseline">, after: Data)
 	const c = collections[0];
 	if (collections.length !== 1 || !c || !Array.isArray(after.variables)) return false;
 	const variables = after.variables.filter(record);
-	return (receipt.input.tokens as Data[]).every((t) => variables.filter((v) => v.variableCollectionId === c.id && v.name === t.name && v.resolvedType === t.type && canonical(v.scopes) === canonical(t.scopes) && record(v.valuesByMode) && sameValue(v.valuesByMode[String(c.defaultModeId)], t.value)).length === 1);
+	return (receipt.input.tokens as Data[]).every((t) => variables.filter((v) => v.variableCollectionId === c.id && v.name === t.name && v.resolvedType === t.type && sameScopes(v.scopes, t.scopes) && record(v.valuesByMode) && sameValue(v.valuesByMode[String(c.defaultModeId)], t.value)).length === 1);
+}
+
+function sameScopes(observed: unknown, requested: unknown): boolean {
+	if (!Array.isArray(observed) || !Array.isArray(requested) || !observed.every((scope) => typeof scope === "string") || !requested.every((scope) => typeof scope === "string")) return false;
+	return new Set(observed).size === observed.length && new Set(requested).size === requested.length && canonical([...observed].sort()) === canonical([...requested].sort());
 }
 
 // After a won attempt, the request may have left: every path from here,

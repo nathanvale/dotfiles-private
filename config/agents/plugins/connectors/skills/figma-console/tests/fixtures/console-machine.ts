@@ -29,7 +29,7 @@ export interface Machine {
 	storage: Record<string, unknown>;
 	held: string[];
 	heldOutcomes: string[];
-	faults: { holdMutation?: boolean; releaseHeld?: boolean; mutationDelayMs?: number; failDaemonStartNoEffect?: boolean; dropAfterEffect?: boolean; killAfterEffect?: boolean; breakJournalAfterEffect?: boolean; snapshotDelayMs?: number; failDaemonStart?: boolean; changeOnExport?: boolean; fontReadback?: "variation" | "wrong" | "mixed" };
+	faults: { holdMutation?: boolean; releaseHeld?: boolean; mutationDelayMs?: number; failDaemonStartNoEffect?: boolean; dropAfterEffect?: boolean; killAfterEffect?: boolean; breakJournalAfterEffect?: boolean; snapshotDelayMs?: number; failDaemonStart?: boolean; changeOnExport?: boolean; fontReadback?: "variation" | "wrong" | "mixed"; tokenScopeReadback?: "reorder" | "missing" | "extra" | "wrong" };
 	effects: number;
 	starts: number;
 	autostarts: number;
@@ -57,6 +57,8 @@ function figmaFor(machine: Machine): Data {
 		fileKey: document.fileKey,
 		get currentUser() { if (document.userId === undefined) throw new Error("currentuser permission absent"); return { id: document.userId, name: "Fixture user" }; },
 		variables: {
+			createVariableCollection(name: string) { const c = { id: `VariableCollectionId:9:${document.collections.length + 1}`, name, defaultModeId: "9:0", modes: [{ modeId: "9:0", name: "Mode 1" }] }; document.collections.push(c); return c; },
+			createVariable(name: string, collection: Data, type: string) { const v = { id: `VariableID:9:${document.variables.length + 1}`, name, resolvedType: type, scopes: [] as string[], valuesByMode: {} as Data, variableCollectionId: collection.id, setValueForMode(mode: string, value: unknown) { this.valuesByMode[mode] = stored(value); } }; document.variables.push(v); return v; },
 			async getLocalVariablesAsync() { return document.variables; },
 			async getLocalVariableCollectionsAsync() { return document.collections; },
 			async getVariableByIdAsync(id: string) { const v = document.variables.find((item) => item.id === id); return v ? { ...v, setValueForMode(mode: string, value: unknown) { (v.valuesByMode as Data)[mode] = stored(value); } } : null; },
@@ -107,6 +109,19 @@ function shapeFontReadback(machine: Machine, mutation: boolean): void {
 	if (machine.faults.fontReadback === "mixed") node.fontName = { kind: "mixed" };
 }
 
+function shapeTokenScopes(machine: Machine, mutation: boolean): void {
+	if (!mutation || !machine.faults.tokenScopeReadback) return;
+	const color = machine.document.variables.find((v) => v.name === "probe/color");
+	if (!color) return;
+	const scopes = {
+		reorder: ["FRAME_FILL", "TEXT_FILL"],
+		missing: ["TEXT_FILL"],
+		extra: ["FRAME_FILL", "TEXT_FILL", "SHAPE_FILL"],
+		wrong: ["FRAME_FILL", "SHAPE_FILL"],
+	};
+	color.scopes = scopes[machine.faults.tokenScopeReadback];
+}
+
 // Held mutations land late, in a later process, exactly as code the bridge
 // timed out on keeps running in Desktop.
 async function releaseHeld(root: string, machine: Machine): Promise<void> {
@@ -133,6 +148,7 @@ async function execute(root: string, machine: Machine, invocation: Invocation, c
 		const result: unknown = await run(machine, code);
 		strip(machine.document.node);
 		shapeFontReadback(machine, mutation);
+		shapeTokenScopes(machine, mutation);
 		if (JSON.stringify(machine.storage) !== storage) save(root, machine);
 		if (JSON.stringify(machine.document) === before) return { exit: 0, stdout: text({ success: true, result, resultAnalysis: { type: typeof result, warning: null }, fileContext: { fileName: "Fixture", fileKey: machine.document.fileKey } }) };
 		machine.effects += 1;
