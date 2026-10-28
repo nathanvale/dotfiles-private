@@ -97,10 +97,10 @@ MCPorter daemon session, because it alone satisfies every driver.
 - Positive: agents get fresh variables, export and guarded edits without any
   generic code path; wrong file or account refuses inside Desktop.
 - Positive: the shared route change is opt-in; existing routes are unchanged.
-- Negative: writes refuse until Figma's `currentuser` permission is added to
-  the vendored bridge manifest, its pin updated, and the bridge re-imported.
-  That permission exposes the current user's profile fields to plugin code;
-  admitting it is Nathan's decision and is not part of this candidate.
+- Negative: the source manifest and pin now include Figma's `currentuser`
+  permission, but writes still refuse until Root re-imports the bridge and
+  verifies the Desktop account. The permission exposes the current user's
+  profile fields to plugin code; the connector reads only the id.
 - Negative: MCPorter's client starts a daemon for a call on a stopped
   namespace. The transport checks status before every call, so only a stop
   racing a call could start an unjournaled session in the same namespace.
@@ -147,15 +147,15 @@ MCPorter daemon session, because it alone satisfies every driver.
   freshness refusals, custody and immutable registration.
 - Shared route regression tests in `tests/provider-route.test.ts`.
 - Live canaries are Root-owned and outside this candidate: schema, session
-  start, fresh reads and export, and one disposable write each, after the
-  permission decision.
+  start, fresh reads and export, and one disposable write each after attended
+  bridge re-import and account verification.
 - Revisit when MCPorter offers a call that refuses to start a daemon, or when
   upstream Console publishes a freshness contract.
 
 ## Authority
 
-Nathan owns acceptance, the `currentuser` permission decision, bridge
-re-import and every live effect.
+Nathan approved the `currentuser` source permission on 28 October 2026. Root
+owns attended bridge re-import and every live effect.
 
 ## References
 

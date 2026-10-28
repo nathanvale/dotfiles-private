@@ -24,7 +24,7 @@ Report each state separately, and only what a command just proved:
 1. **Registered**: `"$CONNECTORS" auth status figma-console "${SELECT[@]}"` shows `configured: true`. It never probes the session or Desktop.
 2. **Session running**: `run figma-console "${SELECT[@]}" session_status` shows a non-null `session`.
 3. **Bridge connected to this file**: a guarded read succeeds. Every write and every read except `status` and `session_status` first runs a fixed guard that the bridge's file is the selected file key.
-4. **Desktop account verified**: writes also require `figma.currentUser.id` to equal the registered user id. The shipped bridge manifest lacks Figma's `currentuser` permission, so every preview and write refuses `desktop-identity-unverified` until Nathan admits that permission and the bridge is re-imported. Report that refusal; there is no fallback.
+4. **Desktop account verified**: writes also require `figma.currentUser.id` to equal the registered user id. The source manifest declares `currentuser`, but that does not prove the Desktop bridge was re-imported. Report `desktop-identity-unverified` if the running bridge cannot supply the identity; there is no fallback.
 
 ## Register
 
@@ -86,7 +86,7 @@ Adjudication first sets a fence for the receipt in the bridge's device-local sto
 
 ## Guard refusals
 
-These come from the fixed script in Desktop and mean nothing changed: `file-mismatch` (another file is open), `desktop-identity-unverified` (no `currentuser` permission), `desktop-identity-mismatch` (another Figma account), `snapshot-incomplete` (subtree deeper than 8), `node-missing`. Report the cause with the file key; open the right file or account rather than widening the route.
+These come from the fixed script in Desktop and mean nothing changed: `file-mismatch` (another file is open), `desktop-identity-unverified` (the running bridge did not provide `currentUser`), `desktop-identity-mismatch` (another Figma account), `snapshot-incomplete` (subtree deeper than 8), `node-missing`. Report the cause with the file key; open the right file or account rather than widening the route.
 
 ## Not admitted
 

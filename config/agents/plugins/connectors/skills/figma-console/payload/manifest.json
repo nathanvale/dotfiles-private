@@ -15,7 +15,8 @@
   ],
   "enablePrivatePluginApi": true,
   "permissions": [
-    "teamlibrary"
+    "teamlibrary",
+    "currentuser"
   ],
   "documentAccess": "dynamic-page",
   "networkAccess": {
