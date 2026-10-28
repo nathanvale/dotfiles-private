@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "figma-console",
+  "transport": {
+    "registry": "./mcporter.json"
+  },
+  "selectors": {
+    "account": {
+      "required": true,
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+    },
+    "file": {
+      "required": true,
+      "pattern": "^[A-Za-z0-9]{8,64}$"
+    }
+  },
+  "requirements": [
+    "mcporter",
+    "op"
+  ],
+  "adapter": "figma-console",
+  "credentials": {
+    "reference": "API Credentials / configured item / credential"
+  }
+}

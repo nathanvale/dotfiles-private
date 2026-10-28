@@ -1,0 +1,36 @@
+{
+  "imports": [],
+  "mcpServers": {
+    "figma-console-local": {
+      "description": "Pinned local-only Figma Console; owned lifecycle",
+      "command": "../../../bin/connectors",
+      "args": [
+        "__internal",
+        "figma-console",
+        "provider"
+      ],
+      "env": {
+        "FIGMA_CONSOLE_ACCOUNT": "${FIGMA_CONSOLE_ACCOUNT}",
+        "FIGMA_CONSOLE_FILE": "${FIGMA_CONSOLE_FILE}",
+        "CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+      },
+      "lifecycle": {
+        "mode": "keep-alive"
+      },
+      "allowedTools": [
+        "figma_execute",
+        "figma_get_status",
+        "figma_get_variables",
+        "figma_get_file_data",
+        "figma_get_component",
+        "figma_analyze_component_set",
+        "figma_lint_design",
+        "figma_audit_component_accessibility",
+        "figma_get_design_changes",
+        "figma_get_file_versions",
+        "figma_take_screenshot",
+        "figma_export_tokens"
+      ]
+    }
+  }
+}

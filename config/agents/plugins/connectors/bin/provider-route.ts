@@ -36,6 +36,7 @@ const ALLOWED_FLAGS = {
 		"--no-oauth",
 	]),
 	call: new Set(["--args", "--params", "--timeout", "--output", "--no-oauth", "--raw-strings", "--no-coerce"]),
+	daemon: new Set(["--json"]),
 } as const;
 const VALUE_FLAGS = new Set(["--timeout", "--args", "--params", "--output"]);
 const OUTPUT_FORMATS = new Set(["text", "markdown", "json", "raw"]);
@@ -94,6 +95,7 @@ interface RouteDeclaration {
 	selectors: Map<string, string>;
 	dispatcherOwned: boolean;
 	oauth: "mcporter" | undefined;
+	ownedDaemon: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -129,7 +131,7 @@ function parseInvocation(argv: string[]): Invocation {
 	if (!skill || !NAME_PATTERN.test(skill)) {
 		throw new RouteError("skill-invalid", "the first argument must be a Connector Skill name matching ^[a-z][a-z0-9-]*$");
 	}
-	if (verb !== "auth" && verb !== "list" && verb !== "call") throw new RouteError("command-invalid", "only auth, list and call are supported");
+	if (verb !== "auth" && verb !== "list" && verb !== "call" && verb !== "daemon") throw new RouteError("command-invalid", "only declared MCPorter verbs are supported");
 	return { skill, ...parseRouteOptions(options), verb, rest };
 }
 
@@ -178,28 +180,35 @@ function checkOAuthEntry(configPath: string, server: string, entry: Record<strin
 	}
 }
 
+function declaredSelectors(routePath: string, declared: unknown): Map<string, string> {
+	const selectors = new Map<string, string>();
+	if (declared === undefined) return selectors;
+	if (!isRecord(declared)) throw new RouteError("config-invalid", `${routePath} selectors must be an object`, 4);
+	for (const [name, envKey] of Object.entries(declared)) {
+		if (typeof envKey !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(envKey)) {
+			throw new RouteError("config-invalid", `${routePath} selector ${name} must map to an environment key`, 4);
+		}
+		selectors.set(name, envKey);
+	}
+	return selectors;
+}
+
+function checkOptionalBoolean(routePath: string, declaration: Record<string, unknown>, key: "dispatcherOwned" | "ownedDaemon"): void {
+	if (declaration[key] !== undefined && typeof declaration[key] !== "boolean") throw new RouteError("config-invalid", `${routePath} ${key} must be a boolean`, 4);
+}
+
 function readDeclaration(routePath: string): RouteDeclaration {
 	const declaration = readJson(routePath, "skill-route-missing");
 	if (!isRecord(declaration) || typeof declaration.defaultProvider !== "string") {
 		throw new RouteError("config-invalid", `${routePath} must declare defaultProvider`, 4);
 	}
-	const selectors = new Map<string, string>();
-	if (declaration.selectors !== undefined) {
-		if (!isRecord(declaration.selectors)) throw new RouteError("config-invalid", `${routePath} selectors must be an object`, 4);
-		for (const [name, envKey] of Object.entries(declaration.selectors)) {
-			if (typeof envKey !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(envKey)) {
-				throw new RouteError("config-invalid", `${routePath} selector ${name} must map to an environment key`, 4);
-			}
-			selectors.set(name, envKey);
-		}
-	}
-	if (declaration.dispatcherOwned !== undefined && typeof declaration.dispatcherOwned !== "boolean") {
-		throw new RouteError("config-invalid", `${routePath} dispatcherOwned must be a boolean`, 4);
-	}
+	const selectors = declaredSelectors(routePath, declaration.selectors);
+	checkOptionalBoolean(routePath, declaration, "dispatcherOwned");
 	if (declaration.oauth !== undefined && declaration.oauth !== "mcporter") {
 		throw new RouteError("config-invalid", `${routePath} oauth must be mcporter`, 4);
 	}
-	return { defaultProvider: declaration.defaultProvider, selectors, dispatcherOwned: declaration.dispatcherOwned === true, oauth: declaration.oauth };
+	checkOptionalBoolean(routePath, declaration, "ownedDaemon");
+	return { defaultProvider: declaration.defaultProvider, selectors, dispatcherOwned: declaration.dispatcherOwned === true, oauth: declaration.oauth, ownedDaemon: declaration.ownedDaemon === true };
 }
 
 function selectionEnvironment(skill: string, declared: Map<string, string>, given: Map<string, string>): Record<string, string> {
@@ -219,6 +228,11 @@ function selectionEnvironment(skill: string, declared: Map<string, string>, give
 }
 
 function targetAndFlags(verb: Verb, server: string, rest: string[]): { target: string; flags: string[] } {
+	if (verb === "daemon") {
+		const target = rest[0];
+		if (target !== "start" && target !== "status" && target !== "stop") throw new RouteError("command-invalid", "owned daemon supports start, status and stop only");
+		return { target, flags: rest.slice(1) };
+	}
 	if (verb === "list" || verb === "auth") return { target: server, flags: rest };
 	const tool = rest[0];
 	if (!tool || tool.startsWith("-") || !/^[A-Za-z0-9_-]+$/.test(tool)) {
@@ -301,7 +315,21 @@ function checkFlags(verb: Verb, flags: string[]): string[] {
 		checkToolArgument(token);
 		index += 1;
 	}
-	return verb === "auth" || flags.includes("--no-oauth") ? flags : [...flags, "--no-oauth"];
+	return verb === "auth" || verb === "daemon" || flags.includes("--no-oauth") ? flags : [...flags, "--no-oauth"];
+}
+
+// The route declaration admits each verb: daemon only on an explicitly owned
+// dispatcher route, provider transport on a dispatcher-owned route only
+// through its dispatcher, and auth only with MCPorter OAuth.
+function checkVerbAdmitted(invocation: Invocation, declaration: RouteDeclaration, dispatcherTransport: boolean): void {
+	// Usage class, as before daemon existed: an undeclared verb for this route.
+	if (invocation.verb === "daemon" && (!declaration.ownedDaemon || !dispatcherTransport || !declaration.dispatcherOwned)) throw new RouteError("command-invalid", "daemon requires an explicitly owned dispatcher route");
+	if (declaration.dispatcherOwned && !dispatcherTransport) {
+		throw new RouteError("dispatcher-owned", `skill ${invocation.skill} accepts provider transport only through its semantic dispatcher`, 3);
+	}
+	if (invocation.verb === "auth" && declaration.oauth !== "mcporter") {
+		throw new RouteError("command-invalid", `skill ${invocation.skill} does not declare MCPorter OAuth`);
+	}
 }
 
 function plan(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, dispatcherTransport: boolean, internalContext?: string): RoutePlan {
@@ -310,12 +338,7 @@ function plan(argv: string[], skillsRoot: string, env: Record<string, string | u
 	const configPath = path.join(configDir, "mcporter.json");
 	if (!existsSync(configPath)) throw new RouteError("skill-config-missing", `${configPath} is missing`, 3);
 	const declaration = readDeclaration(path.join(configDir, "route.json"));
-	if (declaration.dispatcherOwned && !dispatcherTransport) {
-		throw new RouteError("dispatcher-owned", `skill ${invocation.skill} accepts provider transport only through its semantic dispatcher`, 3);
-	}
-	if (invocation.verb === "auth" && declaration.oauth !== "mcporter") {
-		throw new RouteError("command-invalid", `skill ${invocation.skill} does not declare MCPorter OAuth`);
-	}
+	checkVerbAdmitted(invocation, declaration, dispatcherTransport);
 	const servers = readRegistry(configPath);
 	const server = invocation.provider ?? declaration.defaultProvider;
 	if (!servers.has(server)) {
@@ -324,7 +347,7 @@ function plan(argv: string[], skillsRoot: string, env: Record<string, string | u
 	if (invocation.verb === "auth") checkOAuthEntry(configPath, server, servers.get(server)!);
 	const selections = selectionEnvironment(invocation.skill, declaration.selectors, invocation.selections);
 	const { target, flags } = targetAndFlags(invocation.verb, server, invocation.rest);
-	const routeEnv: Record<string, string> = { MCPORTER_NO_KEEPALIVE: "*", ...safeEnvironment(env) };
+	const routeEnv: Record<string, string> = declaration.ownedDaemon ? safeEnvironment(env) : { MCPORTER_NO_KEEPALIVE: "*", ...safeEnvironment(env) };
 	Object.assign(routeEnv, selections);
 	if (internalContext !== undefined) {
 		if (!dispatcherTransport || !validInternalContext(internalContext)) throw new RouteError("internal-context-invalid", "the dispatcher context must be one non-empty single-line value", 3);

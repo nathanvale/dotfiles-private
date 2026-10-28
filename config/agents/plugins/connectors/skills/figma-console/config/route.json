@@ -1,0 +1,9 @@
+{
+  "defaultProvider": "figma-console-local",
+  "dispatcherOwned": true,
+  "ownedDaemon": true,
+  "selectors": {
+    "account": "FIGMA_CONSOLE_ACCOUNT",
+    "file": "FIGMA_CONSOLE_FILE"
+  }
+}
