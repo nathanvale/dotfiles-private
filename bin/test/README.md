@@ -31,6 +31,10 @@ bin/test/generic-credential-consumer-test.sh
 bin/test/toolchain-status-test.sh
 bin/test/toolchain-apply-test.sh
 bin/test/toolchain-bootstrap-test.sh
+bin/test/husky-toolchain-guard-test.sh
+bin/test/husky-direct-pins-test.sh
+bin/test/pnpm-provision-test.sh
+bin/test/mise-config-review-test.sh
 bin/test/setup-completion-test.sh
 bin/test/setup-state-recovery-test.sh
 bin/test/profile-link-parity-test.sh

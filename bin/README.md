@@ -98,6 +98,8 @@ class says so, or through the owner that names them.
 | Status | File | Intended invocation | Path class | Source owner and covering route |
 | --- | --- | --- | --- | --- |
 | public | `bin/dotfiles/symlinks/symlinks_manage.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh --link\|--unlink\|--status [--force]` | `DIRECT` | Source owner and single mapping owner: this script. Routes: `setup.sh:240-247`, `setup.sh:299-302`, `verify_install.sh:475-477`; covering commands: `bin/test/symlinks-manage-test.sh` and `bin/test/symlinks-real-directory-test.sh`. |
+| public | `bin/dotfiles/mise-config-review` | `bin/dotfiles/mise-config-review <file.toml>` | `DIRECT` | Source owner: this script. Records the exact content digest of a reviewed Mise config for the Husky guard; routes: the guard's refusal message; covering command: `bin/test/mise-config-review-test.sh`. |
+| public | `bin/dotfiles/pnpm-provision` | `bin/dotfiles/pnpm-provision <x.y.z>` | `DIRECT` | Source owner: this script. Explicit setup step that installs one exact pnpm with Mise for the Husky guard; routes: the guard's repair message; covering command: `bin/test/pnpm-provision-test.sh`. |
 | public | `bin/dotfiles/toolchain` | `bin/dotfiles/toolchain status\|update [--json]` | `DIRECT` | Source owner: this script. Routes: `setup.sh:642`, `verify_install.sh:165`, `config/toolchain/README.md:45`; covering commands: `bin/test/toolchain-status-test.sh`, `bin/test/toolchain-apply-test.sh`, and `bin/test/toolchain-bootstrap-test.sh`. |
 | unqualified | `bin/env/sync-docker-mcp` | `sync-docker-mcp [--dry-run\|--setup\|--filter PATTERN]` | `ENV` | Source: self help. It is available as `HOME/bin/env/sync-docker-mcp` in interactive zsh; current tracked caller and covering test are unverified. |
 | unqualified | `bin/system/fonts/nerd_fonts_manage.sh` | `bash bin/system/fonts/nerd_fonts_manage.sh [--add\|--remove]` | `DIRECT` | Source: self plus `bin/colour_log.sh`. No external caller or dedicated covering test is verified. |
@@ -160,6 +162,10 @@ invocation map and describes the process and qualification boundaries.
 | test | `bin/test/setup-state-recovery-test.sh` | `setup locking, state validation and interruption` | Test source: this file. Run: `bin/test/setup-state-recovery-test.sh`. |
 | test | `bin/test/profile-link-parity-test.sh` | `profile prerequisites and exact managed links` | Test source: this file. Run: `bin/test/profile-link-parity-test.sh`. |
 | test | `bin/test/symlinks-manage-test.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh` | Test source: this file. Run: `bin/test/symlinks-manage-test.sh`. |
+| test | `bin/test/mise-config-review-test.sh` | `bin/dotfiles/mise-config-review` | Test source: this file. Run: `bin/test/mise-config-review-test.sh`. |
+| test | `bin/test/pnpm-provision-test.sh` | `bin/dotfiles/pnpm-provision` | Test source: this file. Run: `bin/test/pnpm-provision-test.sh`. |
+| test | `bin/test/husky-direct-pins-test.sh` | `config/husky/direct-pins.sh` via `config/husky/init.sh` | Test source: this file. Run: `bin/test/husky-direct-pins-test.sh`. |
+| test | `bin/test/husky-toolchain-guard-test.sh` | `config/husky/toolchain-guard.sh` via `config/husky/init.sh` | Test source: this file. Run: `bin/test/husky-toolchain-guard-test.sh`. |
 | test | `bin/test/symlinks-real-directory-test.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh` replacement and recovery | Test source: this file. Run: `bin/test/symlinks-real-directory-test.sh`. |
 | test | `bin/test/toolchain-apply-test.sh` | `bin/dotfiles/toolchain update --apply` | Test source: this file. Run: `bin/test/toolchain-apply-test.sh`. |
 | test | `bin/test/toolchain-bootstrap-test.sh` | `config/mise/bootstrap.sh` and zsh startup | Test source: this file. Run: `bin/test/toolchain-bootstrap-test.sh`. |

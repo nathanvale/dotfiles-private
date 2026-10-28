@@ -60,7 +60,7 @@ if [ -n "$dotfiles_mise_home" ] &&
   [ ! -L "$dotfiles_mise_state" ] &&
   [ ! -L "$dotfiles_mise_state/revisions" ] &&
   [ -L "$dotfiles_mise_current" ]; then
-  dotfiles_mise_target=$(readlink "$dotfiles_mise_current" 2>/dev/null) || dotfiles_mise_target=
+  dotfiles_mise_target=$(command -p readlink "$dotfiles_mise_current" 2>/dev/null) || dotfiles_mise_target=
   case "$dotfiles_mise_target" in
     revisions/*) dotfiles_mise_revision=${dotfiles_mise_target#revisions/} ;;
     *) dotfiles_mise_revision= ;;

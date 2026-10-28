@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Record that one Mise TOML config was read and accepted in its exact content.
+#
+# The Husky toolchain guard refuses any loaded Mise config whose sha256 digest
+# is not recorded here, because Mise's own path trust keeps accepting a trusted
+# file after it is edited. The record is the digest, so any change needs a new
+# review, and the same reviewed content is accepted in every linked worktree.
+# This command only records; it never changes the config or Mise's own trust.
+# Contract: bin/test/mise-config-review-test.sh
+
+set -euo pipefail
+set -C # A record appearing after the checks must not be overwritten or followed.
+
+[[ $# -eq 1 && "$1" == *.toml && -f "$1" && ! -L "$1" ]] || {
+	printf 'Usage: mise-config-review <path-to-regular-file.toml>\n' >&2
+	exit 2
+}
+file="$1"
+
+home="$(CDPATH='' cd -P "$HOME" && pwd)"
+state="$home/.dotfiles_state"
+toolchain="$state/toolchain"
+ledger="$toolchain/reviewed-configs"
+for dir in "$state" "$toolchain" "$ledger"; do
+	[[ ! -L "$dir" ]] || {
+		printf '%s is a symlink. Next action: replace it with a real directory yourself.\n' "$dir" >&2
+		exit 1
+	}
+done
+
+digest="$(/usr/bin/shasum -a 256 "$file" | /usr/bin/cut -d' ' -f1)"
+mkdir -p "$ledger"
+if [[ -f "$ledger/$digest" && ! -L "$ledger/$digest" ]]; then
+	printf 'Already reviewed: sha256 %s\n' "$digest"
+	exit 0
+fi
+[[ ! -e "$ledger/$digest" && ! -L "$ledger/$digest" ]] || {
+	printf '%s exists but is not a regular file. Next action: inspect it yourself.\n' "$ledger/$digest" >&2
+	exit 1
+}
+printf 'path=%s\nreviewed=%s\n' "$file" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$ledger/$digest"
+printf 'Recorded review: sha256 %s for %s\n' "$digest" "$file"

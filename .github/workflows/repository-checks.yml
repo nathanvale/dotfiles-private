@@ -72,6 +72,10 @@ jobs:
             bin/test/setup-completion-test.sh
             bin/test/setup-state-recovery-test.sh
             bin/test/symlinks-manage-test.sh
+            bin/test/husky-toolchain-guard-test.sh
+            bin/test/husky-direct-pins-test.sh
+            bin/test/pnpm-provision-test.sh
+            bin/test/mise-config-review-test.sh
             bin/test/symlinks-real-directory-test.sh
             bin/test/toolchain-apply-test.sh
             bin/test/toolchain-bootstrap-test.sh

@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Provision one exact pnpm release for the Husky toolchain guard.
+#
+# The guard binds each checkout to $MISE_INSTALLS_DIR/pnpm/<pin>/pnpm and never
+# downloads; this is the explicit step that installs that file with Mise (aqua
+# checksums) and proves its version with manager switching off.
+# Contract: bin/test/pnpm-provision-test.sh
+
+set -euo pipefail
+
+usage() {
+	printf 'Usage: pnpm-provision <x.y.z>\n'
+}
+
+[[ $# -eq 1 && "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+	usage >&2
+	printf 'pnpm-provision needs one exact pnpm version such as 10.32.1.\n' >&2
+	exit 2
+}
+version="$1"
+
+# shellcheck source=/dev/null
+. "$HOME/.config/mise/bootstrap.sh"
+if [[ "${DOTFILES_MISE_ACTIVE:-}" != 1 || -z "${MISE_INSTALLS_DIR:-}" ]]; then
+	printf 'No applied Mise state is active. Next action: bin/dotfiles/toolchain update --apply\n' >&2
+	exit 1
+fi
+
+# Mise is the executable the applied shim chain ends at, never whatever "mise"
+# PATH offers: PATH can carry a checkout-local copy. It must be absolute, a
+# regular executable, and outside the directory this runs from.
+mise_bin="$MISE_SHIMS_DIR/node"
+hops=0
+while [[ -L "$mise_bin" ]]; do
+	hops=$((hops + 1))
+	[[ "$hops" -le 16 ]] || {
+		printf 'The Mise shim %s has a link chain longer than 16. Next action: bin/dotfiles/toolchain update --apply\n' "$MISE_SHIMS_DIR/node" >&2
+		exit 1
+	}
+	link="$(/usr/bin/readlink "$mise_bin")"
+	[[ "$link" == /* ]] || link="${mise_bin%/*}/$link"
+	mise_dir="$(CDPATH='' cd -P "${link%/*}" 2>/dev/null && pwd)" || mise_dir=''
+	[[ -n "$mise_dir" ]] || {
+		printf 'The Mise shim chain reaches %s, whose directory does not exist. Next action: bin/dotfiles/toolchain update --apply\n' "$link" >&2
+		exit 1
+	}
+	mise_bin="$mise_dir/${link##*/}"
+done
+here="$(CDPATH='' cd -P . && pwd)"
+# The calling checkout is the Git toplevel, not just this directory: a Mise
+# elsewhere in the same checkout is just as checkout-owned.
+top="$(/usr/bin/git rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -z "$top" ]] || top="$(CDPATH='' cd -P "$top" && pwd)"
+if [[ "$hops" -eq 0 || ! -f "$mise_bin" || ! -x "$mise_bin" || "$mise_bin" == "$here"/* || ( -n "$top" && "$mise_bin" == "$top"/* ) ]]; then
+	printf 'The Mise shim %s does not end at an installed Mise outside %s and its checkout (reached %s). Next action: bin/dotfiles/toolchain update --apply\n' "$MISE_SHIMS_DIR/node" "$here" "$mise_bin" >&2
+	exit 1
+fi
+
+target_dir="$MISE_INSTALLS_DIR/pnpm/$version"
+target="$target_dir/pnpm"
+
+# The guard refuses a symlinked version directory or binary, so success here
+# would leave a refusal that this step cannot repair. Replacing it is the
+# human's call; this step never removes anything.
+if [[ -L "$target_dir" || -L "$target" ]]; then
+	printf '%s is a symlink, which the Husky guard refuses. Next action: replace it with a real directory yourself, then rerun pnpm-provision %s\n' "$target_dir" "$version" >&2
+	exit 1
+fi
+
+# A link higher up (installs/pnpm, or the installs directory itself) can send
+# the install into the calling checkout, which the guard refuses. Resolve the
+# nearest existing directory physically and refuse a location in the checkout;
+# the finished install is checked again below. The checkout is the Git
+# toplevel: a plain directory such as $HOME is not one, and the installs
+# directory normally lives below it.
+in_checkout() {
+	[[ -n "$top" && ( "$1" == "$top" || "$1" == "$top"/* ) ]]
+}
+refuse_redirect() {
+	printf '%s resolves to %s, inside the calling checkout, which the Husky guard refuses. Next action: point the Mise installs directory outside the checkout yourself, then rerun pnpm-provision %s\n' "$target_dir" "$1" "$version" >&2
+	exit 1
+}
+nearest="$target_dir"
+while [[ ! -d "$nearest" ]]; do
+	nearest="${nearest%/*}"
+	[[ -n "$nearest" ]] || nearest=/
+done
+nearest_phys="$(CDPATH='' cd -P "$nearest" 2>/dev/null && pwd)" || {
+	printf 'Cannot resolve %s, the nearest existing directory above %s. Next action: make it a readable directory, then rerun pnpm-provision %s\n' "$nearest" "$target_dir" "$version" >&2
+	exit 1
+}
+! in_checkout "$nearest_phys" || refuse_redirect "$nearest_phys"
+
+# Every pnpm run happens in this private empty directory: pnpm reads the
+# caller's package.json (a dotfiles checkout pins bun, and ancestors count) and
+# could refuse or forward, which says nothing about the installed file.
+# A fixed system mktemp under a system base: PATH or TMPDIR must not place the
+# directory below a project, because pnpm also reads ancestor manifests. The
+# base is overridable only for tests, and an ancestor manifest still refuses.
+work="$(/usr/bin/mktemp -d "${PNPM_PROVISION_WORK_BASE:-/tmp}/pnpm-provision.XXXXXX")" || {
+	printf 'Cannot create a private work directory under %s. Next action: make it writable (or unset PNPM_PROVISION_WORK_BASE), then rerun pnpm-provision %s\n' "${PNPM_PROVISION_WORK_BASE:-/tmp}" "$version" >&2
+	exit 1
+}
+trap 'case "$work" in */pnpm-provision.*) rm -rf "$work" ;; esac' EXIT
+ancestor="$(CDPATH='' cd -P "$work" && pwd)"
+while :; do
+	for manifest in package.json package.yaml package.json5; do
+		if [[ -e "$ancestor/$manifest" ]]; then
+			printf 'The private work directory %s is below %s/%s, which pnpm would read. Next action: unset PNPM_PROVISION_WORK_BASE.\n' "$work" "$ancestor" "$manifest" >&2
+			exit 1
+		fi
+	done
+	[[ "$ancestor" == / ]] && break
+	ancestor="${ancestor%/*}"
+	[[ -n "$ancestor" ]] || ancestor=/
+done
+: >"$work/config.toml"
+
+verify() {
+	[[ -f "$target" && ! -L "$target" && -x "$target" ]] &&
+		[[ "$(cd "$work" && npm_config_manage_package_manager_versions=false "$target" --version 2>/dev/null)" == "$version" ]]
+}
+
+if verify; then
+	printf 'pnpm %s already provisioned at %s\n' "$version" "$target"
+	exit 0
+fi
+
+# An existing regular file that does not report the pin cannot be repaired
+# here: Mise treats the version as installed and skips it, and overwriting or
+# removing an existing tool is the owner's decision. Say exactly what is there.
+if [[ -e "$target" ]]; then
+	reported="$(cd "$work" && npm_config_manage_package_manager_versions=false "$target" --version 2>&1 | tail -n 1 || true)"
+	checksum="$(/usr/bin/shasum -a 256 "$target" | /usr/bin/cut -d' ' -f1)"
+	printf '%s exists but is not pnpm %s (it reported [%s]; sha256 %s).\n' "$target" "$version" "$reported" "$checksum" >&2
+	printf 'Next action: inspect it, and if it is wrong move %s aside yourself, then rerun pnpm-provision %s. This step never overwrites or removes an installed tool.\n' "$target_dir" "$version" >&2
+	exit 1
+fi
+
+# Install in a protected environment: nothing inherited (no MISE_* config
+# selector such as MISE_SYSTEM_CONFIG_FILE, no XDG location, no user config)
+# can steer which config Mise loads, because Mise sees only a private HOME, an
+# empty global and system configuration, and a ceiling at the work directory.
+# The applied data, installs and shims directories are passed explicitly, so
+# only the Mise installs directory changes. Proxy and certificate variables are
+# passed through for the download.
+mkdir "$work/home" "$work/etc" || {
+	printf 'Cannot prepare the private work directory %s. Next action: check that it is writable, then rerun pnpm-provision %s\n' "$work" "$version" >&2
+	exit 1
+}
+: >"$work/system.toml"
+passthrough=()
+for name in HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY http_proxy https_proxy no_proxy all_proxy SSL_CERT_FILE SSL_CERT_DIR; do
+	[[ -z "${!name:-}" ]] || passthrough+=("$name=${!name}")
+done
+(
+	cd "$work"
+	/usr/bin/env -i HOME="$work/home" PATH=/usr/bin:/bin \
+		MISE_DATA_DIR="$MISE_DATA_DIR" MISE_INSTALLS_DIR="$MISE_INSTALLS_DIR" MISE_SHIMS_DIR="$MISE_SHIMS_DIR" \
+		MISE_GLOBAL_CONFIG_FILE="$work/config.toml" MISE_SYSTEM_CONFIG_FILE="$work/system.toml" \
+		MISE_SYSTEM_CONFIG_DIR="$work/etc" MISE_CEILING_PATHS="$work" \
+		${passthrough[@]+"${passthrough[@]}"} \
+		"$mise_bin" install "pnpm@$version"
+) || {
+	printf 'Mise could not install pnpm %s (its error is above). Next action: fix the cause it reports (network, proxy or checksum), then rerun pnpm-provision %s\n' "$version" "$version" >&2
+	exit 1
+}
+
+target_phys="$(CDPATH='' cd -P "$target_dir" 2>/dev/null && pwd)" || target_phys=''
+[[ -z "$target_phys" ]] || ! in_checkout "$target_phys" || refuse_redirect "$target_phys"
+
+verify || {
+	printf 'pnpm %s did not install as a regular executable reporting %s at %s.\n' "$version" "$version" "$target" >&2
+	printf 'Next action: inspect %s (an empty or partial version directory makes Mise skip the install); if it is wrong, move it aside yourself, then rerun pnpm-provision %s\n' "$target_dir" "$version" >&2
+	exit 1
+}
+printf 'pnpm %s provisioned at %s\n' "$version" "$target"

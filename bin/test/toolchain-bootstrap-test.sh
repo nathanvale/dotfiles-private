@@ -258,6 +258,9 @@ assert_equals "$(grep -E '^(installs|shims)=' <<<"$bootstrap_out" | tr '\n' '|')
 SHIMS_DIR="$HOME_CANONICAL/.local/share/mise/shims"
 DECOY_BIN="$HOME_FIXTURE/.local/bin"
 mkdir -p "$HOME_FIXTURE/.local/share/mise/shims" "$DECOY_BIN"
+# Login path_helper can put a real host Mise ahead of FAKE_BIN. Keep the
+# test-owned executable in the user bin that interactive startup prioritizes.
+cp "$FAKE_BIN/mise" "$DECOY_BIN/mise"
 APPLIED_RUNTIMES=(node bun python bd npm)
 expected_shim_resolution=''
 for runtime in "${APPLIED_RUNTIMES[@]}"; do
@@ -379,6 +382,7 @@ husky_out="$({
     MISE_DATA_DIR="$EXTERNAL/mise" MISE_INSTALLS_DIR="$EXTERNAL/installs" \
     MISE_SHIMS_DIR="$EXTERNAL/direct-shims" \
     RECORD_DIR="$RECORD_DIR" /bin/sh -c '
+      cd "$HOME"
       . "$HOME/.config/husky/init.sh"
       printf "active=%s\n" "${DOTFILES_MISE_ACTIVE-unset}"
       printf "data=%s\n" "${MISE_DATA_DIR-unset}"
@@ -421,6 +425,7 @@ rm -f "$RECORD_DIR"/*
 # shellcheck disable=SC2016
 husky_launchd_out="$(env -i HOME="$HOME_FIXTURE" PATH="/usr/bin:/bin" \
   RECORD_DIR="$RECORD_DIR" /bin/sh -c '
+    cd "$HOME"
     . "$HOME/.config/husky/init.sh"
     printf "active=%s\n" "${DOTFILES_MISE_ACTIVE-unset}"
   ' 2>/dev/null)"
