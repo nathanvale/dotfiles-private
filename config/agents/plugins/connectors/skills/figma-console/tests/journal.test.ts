@@ -10,7 +10,7 @@ import path from "node:path";
 import { cause, consoleCli, document, textNode, UPDATE, USER } from "./fixtures/console-cli.ts";
 
 const cli = consoleCli();
-const FILES = ["guardsfile1", "applyfile01", "lostreply01", "storagefile", "crashfile01", "markerfile1", "concurrent1", "expiredfile", "corruptfile", "fencefile01", "unrelated01", "orphanfile1", "floatfile01", "lateapply01"];
+const FILES = ["guardsfile1", "applyfile01", "lostreply01", "storagefile", "crashfile01", "markerfile1", "concurrent1", "expiredfile", "corruptfile", "fencefile01", "unrelated01", "orphanfile1", "floatfile01", "lateapply01", "fontaxes01", "wrongfont1", "mixedfont1"];
 beforeAll(async () => {
 	for (const file of FILES) expect((await cli.configure(file)).code).toBe(0);
 }, 120000);
@@ -55,6 +55,17 @@ test("preview binds exact input; one apply sends once and verifies real fields; 
 	expect(cli.receipt(file, id).status).toBe("applied");
 	const replay = await apply(file, id);
 	expect([replay.code, cause(replay.envelope), cli.mutations().length, cli.state().effects]).toEqual([3, "baseline-changed", 1, 1]);
+}, 60000);
+
+test("Figma font variation metadata preserves exact text success; wrong or mixed fonts stay unknown", async () => {
+	for (const [file, fontReadback, expected] of [["fontaxes01", "variation", "SUCCESS_RUN_APPLIED"], ["wrongfont1", "wrong", "DOMAIN_RUN_EFFECT_UNKNOWN"], ["mixedfont1", "mixed", "DOMAIN_RUN_EFFECT_UNKNOWN"]] as const) {
+		cli.setMachine({ document: document(file), faults: { fontReadback } });
+		const id = await preview(file);
+		const result = await apply(file, id);
+		expect([result.code, result.envelope?.result.causeCode, cli.state().effects, cli.mutations().length]).toEqual([expected === "SUCCESS_RUN_APPLIED" ? 0 : 3, expected, 1, 1]);
+		expect(cli.state().document.node.characters).toBe("After");
+		expect(cli.receipt(file, id).status).toBe(expected === "SUCCESS_RUN_APPLIED" ? "applied" : "unknown");
+	}
 }, 60000);
 
 test("a lost reply after the effect stays unknown and blocks the object across fresh processes; adjudication reads without resending", async () => {

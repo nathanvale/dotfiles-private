@@ -29,7 +29,7 @@ export interface Machine {
 	storage: Record<string, unknown>;
 	held: string[];
 	heldOutcomes: string[];
-	faults: { holdMutation?: boolean; releaseHeld?: boolean; mutationDelayMs?: number; failDaemonStartNoEffect?: boolean; dropAfterEffect?: boolean; killAfterEffect?: boolean; breakJournalAfterEffect?: boolean; snapshotDelayMs?: number; failDaemonStart?: boolean; changeOnExport?: boolean };
+	faults: { holdMutation?: boolean; releaseHeld?: boolean; mutationDelayMs?: number; failDaemonStartNoEffect?: boolean; dropAfterEffect?: boolean; killAfterEffect?: boolean; breakJournalAfterEffect?: boolean; snapshotDelayMs?: number; failDaemonStart?: boolean; changeOnExport?: boolean; fontReadback?: "variation" | "wrong" | "mixed" };
 	effects: number;
 	starts: number;
 	autostarts: number;
@@ -99,6 +99,14 @@ const save = (root: string, machine: Machine) => writeFileSync(machineFile(root)
 
 const run = (machine: Machine, code: string): Promise<unknown> => new Function("figma", `return (async function() {\n${code}\n})()`)(figmaFor(machine));
 
+function shapeFontReadback(machine: Machine, mutation: boolean): void {
+	if (!mutation) return;
+	const node = machine.document.node;
+	if (machine.faults.fontReadback === "variation") node.fontName = { family: "Inter", style: "Regular", variationSettings: { slnt: 0, wght: 400 } };
+	if (machine.faults.fontReadback === "wrong") node.fontName = { family: "Wrong", style: "Regular", variationSettings: { slnt: 0, wght: 400 } };
+	if (machine.faults.fontReadback === "mixed") node.fontName = { kind: "mixed" };
+}
+
 // Held mutations land late, in a later process, exactly as code the bridge
 // timed out on keeps running in Desktop.
 async function releaseHeld(root: string, machine: Machine): Promise<void> {
@@ -124,6 +132,7 @@ async function execute(root: string, machine: Machine, invocation: Invocation, c
 	try {
 		const result: unknown = await run(machine, code);
 		strip(machine.document.node);
+		shapeFontReadback(machine, mutation);
 		if (JSON.stringify(machine.storage) !== storage) save(root, machine);
 		if (JSON.stringify(machine.document) === before) return { exit: 0, stdout: text({ success: true, result, resultAnalysis: { type: typeof result, warning: null }, fileContext: { fileName: "Fixture", fileKey: machine.document.fileKey } }) };
 		machine.effects += 1;

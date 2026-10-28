@@ -218,7 +218,7 @@ const RGB = ["r", "g", "b"];
 const rgba = (value: unknown): unknown => record(value) && RGB.every((key) => typeof value[key] === "number") && Object.keys(value).every((key) => [...RGB, "a"].includes(key)) ? { a: 1, ...value } : value;
 const sameValue = (observed: unknown, requested: unknown): boolean => near(rgba(observed), rgba(requested));
 function textMatches(node: Data, input: Data): boolean {
-	return node.type === "TEXT" && node.characters === input.text && near(node.fontSize, input.fontSize) && canonical(node.fontName) === canonical({ family: input.fontFamily, style: input.fontStyle });
+	return node.type === "TEXT" && node.characters === input.text && near(node.fontSize, input.fontSize) && record(node.fontName) && node.fontName.family === input.fontFamily && node.fontName.style === input.fontStyle;
 }
 
 // Observable, operation-specific marks; a changed digest alone never passes.
