@@ -7,11 +7,19 @@ export GOG_HOME="${GOG_HOME:-$HOME/.local/state/gogcli}"
 
 if [[ -z "${GOG_ACCOUNT:-}" ]]; then
   account=""
-  if account="$(git config --get gog.account)"; then
+  if account="$(LC_ALL=C git config --local --get gog.account 2>&1)"; then
     :
   else
     status=$?
-    [[ "$status" -eq 1 ]] || exit "$status"
+    if [[ "$status" -eq 128 && "$account" == \
+      "fatal: --local can only be used inside a git repository" ]]; then
+      account=""
+    elif [[ "$status" -eq 1 ]]; then
+      account=""
+    else
+      printf '%s\n' "$account" >&2
+      exit "$status"
+    fi
   fi
 
   default_file="$GOG_HOME/config/default-account"
@@ -42,7 +50,7 @@ if [[ -f "$reference_file" && -z "${GOG_ACCESS_TOKEN:-}" &&
       # The credential launcher scrubs ambient variables. Carry only gog's
       # nonsecret configuration and safety controls across that boundary.
       delivery_env=(GOG_KEYRING_BACKEND=file)
-      for variable in GOG_HOME GOG_ACCOUNT GOG_CONFIG_DIR GOG_QUOTA_PROJECT \
+      for variable in GOG_HOME GOG_ACCOUNT GOG_CONFIG_DIR GOG_DATA_DIR GOG_QUOTA_PROJECT \
         GOG_GMAIL_NO_SEND GOG_ENABLE_COMMANDS GOG_ENABLE_COMMANDS_EXACT \
         GOG_DISABLE_COMMANDS GOG_READONLY GOG_NO_INPUT GOG_JSON GOG_COLOR \
         GOG_GMAIL_AUTO_FROM_ADDRESSED_ALIAS GOG_GMAIL_INCLUDE_ATTACHMENTS \
