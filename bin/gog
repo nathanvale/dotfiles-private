@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Select an account, then preserve the installed gog CLI's arguments and output.
+# Repository-local `git config gog.account` overrides the machine default.
+set -euo pipefail
+
+export GOG_HOME="${GOG_HOME:-$HOME/.local/state/gogcli}"
+
+if [[ -z "${GOG_ACCOUNT:-}" ]]; then
+  account=""
+  if account="$(git config --get gog.account)"; then
+    :
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+  fi
+
+  default_file="$GOG_HOME/config/default-account"
+  if [[ -z "$account" && -r "$default_file" ]]; then
+    IFS= read -r account < "$default_file" || [[ -n "$account" ]]
+  fi
+  if [[ -n "$account" ]]; then
+    export GOG_ACCOUNT="$account"
+  fi
+fi
+
+exec /opt/homebrew/bin/gog "$@"
