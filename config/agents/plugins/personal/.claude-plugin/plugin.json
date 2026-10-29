@@ -1,6 +1,6 @@
 {
   "name": "personal",
-  "version": "0.4.42",
+  "version": "0.4.43",
   "description": "Nathan's personal workflows for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -21,6 +21,7 @@
     "./library/codex-code-review",
     "./library/context-advisor",
     "./library/design-parity-session",
+    "./library/draft-message",
     "./library/gh-account-switch",
     "./library/home-assistant-use",
     "./library/imazing-archive",

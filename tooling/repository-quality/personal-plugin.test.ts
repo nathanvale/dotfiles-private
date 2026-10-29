@@ -9,7 +9,7 @@ const pluginRoot = join(repoRoot, "config/agents/plugins/personal");
 const codexNames = [
 	"agent-reliability-guardrails", "apple-reminders", "bestie", "bestie-chapter-design", "ci-testbed",
 	"classic-cinema", "codex-code-review", "context-advisor", "context-unhobble-audit",
-	"design-parity-session", "figma", "gh-account-switch", "heal-skill", "home-assistant-use",
+	"design-parity-session", "draft-message", "figma", "gh-account-switch", "heal-skill", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "mcp-doctor", "notion", "one-password",
 	"pattern-referee", "peekaboo", "resume-handoff", "retro-scrum-master", "session-picker",
 	"session-recovery", "storybook-matrix", "stream-deck-author", "stream-deck-use", "summarize",
@@ -18,7 +18,7 @@ const codexNames = [
 ];
 const claudeNames = [
 	"bestie", "bestie-chapter-design", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor",
-	"design-parity-session", "fix-microphone", "gh-account-switch", "home-assistant-use",
+	"design-parity-session", "draft-message", "fix-microphone", "gh-account-switch", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "one-password", "pattern-referee",
 	"peekaboo", "resume-handoff", "session-picker", "storybook-matrix", "summarize",
 	"test-design", "test-runner", "timesheets", "work-music", "worktree", "xero", "xero-cash-coding",
