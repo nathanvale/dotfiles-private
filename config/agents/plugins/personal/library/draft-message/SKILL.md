@@ -15,14 +15,14 @@ when invoked without arguments; ask only for missing context that changes the as
    claims provisional. Respect a request not to collect samples; use the accepted
    writing rules below and mark voice matching unverified.
 2. Identify the audience, relationship, one main point and action Nathan wants
-   from the recipient. Match the warmth and formality to that relationship.
-   Keep the tone authentic and purposeful; use optimism when the facts support it.
+   from the recipient. For professional correspondence, including friendly
+   messages to colleagues, read [comms style](references/comms-style.md) before
+   drafting. Personal catch-ups and social messages keep their conversational tone.
    Finish this step when the recipient's next action is clear, or the update is
    explicitly for information.
 3. Draft the visible outcome first, using "I" for Nathan's work and "we" only
    for sourced shared work. Keep sentences direct and paragraphs short. Name
-   concrete changes and useful next steps. Follow Nathan's current communications
-   guidance in `$HOME/code/dotfiles/config/agents/global.md`. Use verified links
+   concrete changes and useful next steps. Use verified links
    where they help the reader act. Add labelled images or a small table only
    when they make the review or decision easier. Give email a specific subject;
    keep Jira context attached to its issue and Slack or Teams updates compact.
