@@ -23,4 +23,39 @@ if [[ -z "${GOG_ACCOUNT:-}" ]]; then
   fi
 fi
 
+# Background macOS sessions cannot read the desktop login Keychain. An opt-in
+# reference enables gog's encrypted file backend through the credential owner.
+reference_file="$GOG_HOME/config/keyring-password-reference"
+if [[ -f "$reference_file" && -z "${GOG_ACCESS_TOKEN:-}" &&
+  "${GOG_KEYRING_BACKEND:-}" != keychain ]]; then
+  manager="$(launchctl managername 2>/dev/null || true)"
+  if [[ "${GOG_KEYRING_BACKEND:-}" == file || "$manager" != Aqua ]]; then
+    export GOG_KEYRING_BACKEND=file
+    if [[ -z "${GOG_KEYRING_PASSWORD:-}" ]]; then
+      reference=""
+      IFS= read -r reference < "$reference_file" || true
+      if [[ "$reference" != op://* ]]; then
+        printf 'gog: expected a 1Password reference in %s\n' "$reference_file" >&2
+        exit 64
+      fi
+
+      # The credential launcher scrubs ambient variables. Carry only gog's
+      # nonsecret configuration and safety controls across that boundary.
+      delivery_env=(GOG_KEYRING_BACKEND=file)
+      for variable in GOG_HOME GOG_ACCOUNT GOG_CONFIG_DIR GOG_QUOTA_PROJECT \
+        GOG_GMAIL_NO_SEND GOG_ENABLE_COMMANDS GOG_ENABLE_COMMANDS_EXACT \
+        GOG_DISABLE_COMMANDS GOG_READONLY GOG_NO_INPUT GOG_JSON GOG_COLOR \
+        GOG_GMAIL_AUTO_FROM_ADDRESSED_ALIAS GOG_GMAIL_INCLUDE_ATTACHMENTS \
+        GOG_GMAIL_INLINE_MAX_BYTES GOG_GMAIL_USE_INDEXED_ATTACHMENT_IDS; do
+        if [[ "${!variable+x}" == x ]]; then
+          delivery_env+=("$variable=${!variable}")
+        fi
+      done
+      exec "$HOME/code/dotfiles/bin/with-one-password-token" \
+        inject GOG_KEYRING_PASSWORD "$reference" -- \
+        /usr/bin/env "${delivery_env[@]}" /opt/homebrew/bin/gog "$@"
+    fi
+  fi
+fi
+
 exec /opt/homebrew/bin/gog "$@"
