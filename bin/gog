@@ -7,7 +7,7 @@ export GOG_HOME="${GOG_HOME:-$HOME/.local/state/gogcli}"
 
 if [[ -z "${GOG_ACCOUNT:-}" ]]; then
   account=""
-  if account="$(LC_ALL=C git config --local --get gog.account 2>&1)"; then
+  if account="$(LC_ALL=C git config --local --includes --get gog.account 2>&1)"; then
     :
   else
     status=$?
