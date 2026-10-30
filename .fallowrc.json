@@ -100,7 +100,8 @@
     "config/agents/plugins/personal/library/session-recovery/src/cli.ts",
     "config/agents/plugins/personal/library/test-runner/src/test-runner.ts",
     "config/agents/plugins/personal/library/test-runner/src/test-runner.benchmark.ts",
-    "config/agents/plugins/personal/library/worktree/src/worktree.ts"
+    "config/agents/plugins/personal/library/worktree/src/worktree.ts",
+    "config/agents/plugins/personal/library/one-password/scripts/agent-browser-provider.mjs"
   ],
   "ignoreDependencies": [
     "vscode",

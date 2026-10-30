@@ -74,12 +74,40 @@ function assertOrigin(url, expected) {
 }
 
 /** @param {LoginEntry} entry @returns {Promise<unknown>} */
-async function readItem(entry) {
+async function readItem(entry, timeout = 20_000) {
 	const wrapper = join(homedir(), "code/dotfiles/bin/with-one-password-token");
 	const { stdout } = await runFile(wrapper, [
 		"op", "item", "get", entry.itemId, "--vault", entry.vault, "--format", "json",
-	], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+	], { timeout, maxBuffer: 1024 * 1024 });
 	return JSON.parse(stdout);
+}
+
+/** @param {unknown} input */
+export async function resolveAgentBrowserCredential(input) {
+	const request = record(input);
+	const config = record(await loadWhitelist(join(homedir(), ".local/state/browser-automation/logins.json")));
+	requireValue(config.version === 1 && Array.isArray(config.logins), "invalid-whitelist");
+	const rows = config.logins.map(record).filter((row) => row.name === request.profileName);
+	requireValue(rows.length === 1 && request.itemRef === request.profileName, "login-not-allowlisted");
+	const row = rows[0];
+	requireValue(typeof row.profile === "string", "invalid-whitelist");
+	const entry = selectLogin(config, String(request.profileName), row.profile);
+	requireValue(entry.vault === "Agent Browsing" && request.url === entry.origin, "origin-not-approved");
+	const settings = record(row.agentBrowser);
+	requireValue(settings.enabled === true, "agent-browser-disabled");
+	for (const key of ["username", "usernameSelector", "passwordSelector", "submitSelector"]) {
+		requireValue(typeof settings[key] === "string" && settings[key].trim().length > 0, "invalid-agent-binding");
+	}
+	requireValue(typeof row.vaultId === "string" && /^[a-z0-9]{26}$/.test(row.vaultId), "invalid-vault");
+	const item = record(await readItem(entry, 12_000));
+	validateItem(item, entry);
+	requireValue(record(item.vault).id === row.vaultId, "item-mismatch");
+	const username = credential(item, "username", "STRING");
+	const password = credential(item, "password", "CONCEALED");
+	requireValue(username === settings.username, "account-mismatch");
+	return { username, password, url: entry.origin,
+		usernameSelector: settings.usernameSelector, passwordSelector: settings.passwordSelector,
+		submitSelector: settings.submitSelector };
 }
 
 /** @param {Record<string, unknown>} item @param {LoginEntry} entry */
@@ -97,11 +125,12 @@ function validateItem(item, entry) {
 	}), "item-origin-mismatch");
 }
 
-/** @param {Record<string, unknown>} item @param {string} id @returns {string} */
-function credential(item, id) {
+/** @param {Record<string, unknown>} item @param {string} id @param {string} [type] @returns {string} */
+function credential(item, id, type) {
 	requireValue(Array.isArray(item.fields), "missing-or-duplicate-field");
 	const matches = item.fields.map(record).filter((field) => field.id === id);
 	requireValue(matches.length === 1, "missing-or-duplicate-field");
+	requireValue(type === undefined || matches[0].type === type, "wrong-field-type");
 	const value = matches[0].value;
 	requireValue(typeof value === "string" && value.length > 0 && !value.includes("\0"),
 		"invalid-credential");
