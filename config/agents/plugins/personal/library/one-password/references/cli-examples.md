@@ -4,11 +4,13 @@ Use a known account, vault, item, and field from the owning capability. Keep sec
 
 ## Desktop identity check
 
-With app integration enabled, run directly:
+Use this for identity metadata:
 
 ```sh
 op whoami --account <known-account>
 ```
+
+Its signed-out result is not an app-integration readiness check. Verify app-backed access with an authorized exact-item operation, capture its result inside the consumer, and return only status or shape.
 
 For standalone authentication, follow [the session branch](get-started.md#standalone-session).
 

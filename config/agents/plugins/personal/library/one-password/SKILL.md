@@ -13,7 +13,7 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 ## Access Paths
 
 1. **Scoped service-account read (preferred, unattended).** Run non-interactive `op` through `$HOME/code/dotfiles/bin/with-one-password-token`, with an explicit `--vault` from the owning capability. Read the wrapper's `--help` before use. Never route through tmux or a persistent PTY.
-2. **Desktop app integration (user-present).** With CLI integration enabled, run the account-scoped native command directly. The app handles authentication; a separate `op signin` and persistent terminal are unnecessary. Use `op whoami` for a metadata-only check. Ask before switching to this path after a failed unattended check unless the user already authorized desktop verification.
+2. **Desktop app integration (user-present).** With CLI integration enabled, run the account-scoped native command directly. The app handles authentication; a separate `op signin` and persistent terminal are unnecessary. Verify authentication with an authorized exact-item operation whose consumer emits only status or shape. `op whoami` reports identity but can say the account is not signed in while app-backed reads succeed. Ask before switching to this path after a failed unattended check unless the user already authorized desktop verification.
 3. **Standalone session authentication (user-present).** When app integration is unavailable and this path is authorized, use native `op signin` in one trusted shell. Keep its `OP_SESSION_*` value within that shell for subsequent commands. Read [get-started](references/get-started.md) for this branch; it does not provide unattended SSH credentials.
 
 ## Token custody
@@ -34,7 +34,7 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 2. Choose the access path above.
 3. Service-account read: run `$HOME/code/dotfiles/bin/with-one-password-token check`. On success, deliver the declared reference to its consumer through `inject` or `inject-stdin`. For item JSON needed by an approved operation, capture it inside the consumer and emit only a redacted receipt; use the scoped examples in `references/cli-examples.md`. On failure, retain the wrapper-owned repair code and hint, then ask before using the fallback. Never treat missing token custody as healthy access.
 4. Process injection: run `$HOME/code/dotfiles/bin/with-one-password-token inject <ENV_KEY> <op://reference> -- <command>` when the declared capability needs one secret environment variable. The target receives the requested field, never the service-account token.
-5. User-present access: for app integration, run `op whoami` directly and continue with account-scoped commands. For standalone authentication, retain the session in its trusted shell. If either path replaces a failed unattended check, report desktop success separately from the unresolved service-account failure and retain the wrapper repair hint.
+5. User-present access: for app integration, verify an authorized account-scoped operation directly and redact its result inside the consumer. For standalone authentication, retain the session in its trusted shell. If either path replaces a failed unattended check, report desktop success separately from the unresolved service-account failure and retain the wrapper repair hint.
 6. Verify shape only: length, expected prefix, newline count. Never print values.
 
 ## Guardrails

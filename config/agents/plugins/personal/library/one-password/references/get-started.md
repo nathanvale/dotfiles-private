@@ -2,7 +2,7 @@
 
 ## Desktop app integration
 
-Enable CLI integration in the unlocked 1Password desktop app. On macOS, use Settings > Developer > Integrate with 1Password CLI. Run an account-scoped native command directly; the app handles authentication. `op whoami` provides a metadata-only check without listing vaults. Separate shells can use app integration without retaining an `OP_SESSION_*` variable.
+Enable CLI integration in the unlocked 1Password desktop app. On macOS, use Settings > Developer > Integrate with 1Password CLI. Run an account-scoped native command directly; the app handles authentication. Verify access with an authorized exact-item read and emit only status or shape. `op whoami` is an identity query; its signed-out result alone does not prove app integration failed. Separate shells can use app integration without retaining an `OP_SESSION_*` variable.
 
 ## Standalone session
 
