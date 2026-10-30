@@ -2,6 +2,7 @@ import { resolveAgentBrowserCredential } from "./browser-login.mjs";
 
 const protocol = "agent-browser.plugin.v1";
 
+/** Bound the private protocol request before any credential custody operation. */
 async function input() {
 	let body = "";
 	for await (const chunk of process.stdin) {
@@ -11,6 +12,7 @@ async function input() {
 	return JSON.parse(body);
 }
 
+/** Keep credential responses on private stdout and collapse failures to a secret-free result. */
 async function response() {
 	if (process.argv[2] === "--help") {
 		return { protocol, success: true, manifest: { name: "one-password", capabilities: ["credential.read"],

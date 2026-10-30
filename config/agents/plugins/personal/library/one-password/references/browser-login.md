@@ -50,7 +50,7 @@ It returns only status, cause and effect. It does not click Login.
 
 This alternative needs Codex's actual native browser runtime. Pi and Claude
 Code use the shared unattended route above. Pass credentials only through the
-provider's private transport; keep model-visible fill arguments secret-free.
+helper's in-memory path; keep model-visible fill arguments secret-free.
 
 The helper owns the exact `with-one-password-token op item get` subprocess and
 captures its output in memory. Keep raw item JSON, field values and subprocess
