@@ -14,6 +14,9 @@ project owner rather than in these reusable templates.
 For another message type, draft from the request and source evidence. Add a
 template when Nathan asks to retain that type; keep its selection here.
 
+For Jira comments, use [Jira comment templates](jira-comments.md) for platform
+formatting and choose the comment shape matching the reader's next action.
+
 ## Slack presentation
 
 - Use short paragraphs, descriptive section headings and numbered questions.

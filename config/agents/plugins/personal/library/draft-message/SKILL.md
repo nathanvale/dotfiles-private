@@ -20,6 +20,8 @@ when invoked without arguments; ask only for missing context that changes the as
    drafting. Personal catch-ups and social messages keep their conversational tone.
    For announcements, handovers, open questions or design feedback, choose the
    matching [message type](references/message-types.md) and read its template.
+   For Jira comments, read [Jira comment templates](references/jira-comments.md)
+   for issue context, formatting and comment-specific checks.
    Finish this step when the recipient's next action is clear, or the update is
    explicitly for information.
 3. Draft the visible outcome first, using the audience and voice guidance in
