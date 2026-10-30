@@ -25,15 +25,15 @@ The service account's effective vault grant is the access authority for a capabi
 _Avoid_: shadow vault allowlist, automatic cross-vault search, locally widened access
 
 **Persistent shell session**:
-A stable shell context reused for an interactive 1Password task so sign-in, verification, and follow-up commands share session state. Tmux is the usual CLI implementation; Codex desktop may use a persistent Codex PTY or start a dedicated tmux session.
+A trusted shell that retains an `OP_SESSION_*` value for standalone authentication. Desktop app integration authenticates direct native commands without this session variable or a persistent terminal.
 _Avoid_: tmux-only rule, fresh shell per `op` command, scattered sign-in
 
 **Direct service-account read**:
-A narrow, non-interactive 1Password read that uses scoped service-account access without relying on desktop sign-in state. It runs as a plain single command when the capability supplies the exact vault, item, field, and expected shape; unattended reads never route through tmux or a persistent PTY, which exist only to preserve interactive sign-in state.
+A narrow, non-interactive 1Password read that uses scoped service-account access without relying on desktop sign-in state. It runs as a plain single command when the capability supplies the exact vault, item, field, and expected shape; unattended reads never route through tmux or a persistent PTY, which exist only to preserve standalone session authentication.
 _Avoid_: ambient read, probing read, service-account enumeration, tmux-wrapped unattended read
 
 **Per-command token injection**:
-The custody rule that a service-account token reaches `op` only for the single command that needs it, supplied by a managed source such as a keychain-backed or 1Password-backed wrapper, or an owning runtime's helper. The token is never parked in profile files, shell rc, `.env` files, exported ambient env, or tmux/PTY environment.
+The custody rule that a service-account token reaches `op` only for the single command that needs it, supplied by a managed source such as a keychain-backed or 1Password-backed wrapper, or an owning runtime's helper. The launcher owns its bootstrap store and protected fallback; its help defines the supported locations and permissions. The token stays out of profile files, shell rc, exported ambient env, and tmux/PTY environment.
 _Avoid_: profile-exported token, ambient token, session-wide export, token in shell history
 
 **Targeted metadata check**:
@@ -71,10 +71,10 @@ Dev: "Should an agent unlock the desktop app first?"
 Domain expert: "No. Prefer scoped service-account access for declared mappings. Desktop app integration is the fallback when scoped access is unavailable or insufficient."
 
 Dev: "Does `one-password` literally require tmux in Codex desktop?"
-Domain expert: "No. It requires a persistent shell session for interactive 1Password work. Tmux is the common CLI implementation, but a persistent Codex PTY can satisfy the same session-state boundary."
+Domain expert: "No. Desktop app integration uses direct native commands. Only standalone authentication requires a trusted shell to retain its session value."
 
 Dev: "Can a service-account read run outside tmux?"
-Domain expert: "It must. Unattended service-account reads never route through tmux or a persistent PTY; those sessions exist only to preserve interactive desktop sign-in state."
+Domain expert: "It must. Unattended service-account reads never route through tmux or a persistent PTY; those sessions exist only to preserve standalone session authentication."
 
 Dev: "Can the agent export the service-account token from `~/.profile`?"
 Domain expert: "No. Per-command token injection is the custody rule: a managed source supplies the token for the one command that needs it, and it never lives in profile files or ambient env."
