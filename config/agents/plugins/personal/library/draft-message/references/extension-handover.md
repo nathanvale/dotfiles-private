@@ -10,7 +10,10 @@ readback; this template owns the readable announcement.
    artifact links from that delivery record. Retain its actual scope and gaps.
 2. Lead with what the recipient can use now. Pair the canonical review or
    journey link with its Jira delivery item; supply the package and migration
-   guide when they are part of this handover.
+   guide when they are part of this handover. Apply
+   [preview-link verification](message-types.md#verify-preview-links) to the
+   review link. Use the delivery owner's verified package and guide receipts;
+   omit artifact links that have not been supplied or published.
 3. Describe the contents and practical limits in plain language. Keep source
    hashes, commands and detailed qualification in the linked technical record.
 4. Name one next action, its owner and any genuine deadline. Tag only verified

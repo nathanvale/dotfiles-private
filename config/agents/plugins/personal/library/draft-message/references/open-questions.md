@@ -10,10 +10,11 @@ Use for a team update pointing readers to questions already on tickets.
    when the audience needs it.
 3. Group by the reader's work, such as the student form, design/content,
    review/approval and task/access. Use only relevant sections. Give each
-   numbered item its question, exact preview and ticket links on adjacent lines.
+   numbered item its question and ticket links on adjacent lines. Add preview
+   links using [preview-link verification](message-types.md#verify-preview-links).
 4. Ask for answers on the source tickets. Jira owns question status; this
-   announcement is a readable index, not another tracker. Retain sources with
-   no direct example using a clearly labelled related view or Docs page.
+   announcement is a readable index, not another tracker. Keep questions that
+   have no preview, with their missing-example note and ticket link.
 
 ## Draft shape
 

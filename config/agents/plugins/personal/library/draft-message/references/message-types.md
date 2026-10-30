@@ -35,9 +35,32 @@ template when Nathan asks to retain that type; keep its selection here.
   inspect the inserted tags. A typed name or copied Jira mention is not proof
   of a Slack tag. Use the requested channel or thread and preserve its drafts.
 - Before handoff, account for every requested question, paired link and tag.
-  Label a held state, related example or Docs fallback when no direct example
-  exists. Verify the URL's story or node, not merely its hostname or HTTP status.
-  Keep the skill's draft/send boundary and the service's write rules.
+  Apply the preview-link checks below. Keep the skill's draft/send boundary
+  and the service's write rules.
+
+## Verify preview links
+
+- Open every distinct preview URL and wait for its rendered content. Confirm
+  that the selected story shows the state or behaviour named beside the
+  question. An index entry, successful HTTP response or preserved URL proves
+  neither rendering nor relevance.
+- For an update, use the delivery record to establish which revision the
+  preview shows. Label unknown source or an older build explicitly rather
+  than presenting it as the new change.
+- Link directly to the specific story. For responsive comparisons, provide the
+  relevant desktop, tablet and mobile stories separately. Use Docs when the
+  documentation itself answers the reader's need; label it as documentation.
+- When no matching preview exists, write "No published Storybook example for
+  {behaviour}" beside the Jira link. Keep general overview links in the
+  introduction. A general page or unrelated example does not fill a missing
+  preview slot.
+- Label a held notice "Held notice: {topic} (no built screen)" after checking
+  its content. Describe provisional examples and partial coverage explicitly,
+  so readers can distinguish an example from an accepted product decision.
+- After an authorised post or edit, read back the saved link targets and
+  compare them with the rendered destinations checked above. Account for every
+  item, preserve ticket links and native mentions, and report any unverified
+  destination as a gap.
 
 ## Reusing examples
 
