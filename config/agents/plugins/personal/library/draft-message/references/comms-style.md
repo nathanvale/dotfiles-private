@@ -15,6 +15,11 @@ when the facts support it.
 When revising Nathan's own words, preserve his voice and intended level of
 formality while applying the requested edits.
 
+For project and extension updates, use "we", "us" and "our" unless Nathan asks
+for individual attribution. Use personal wording for personal correspondence.
+Collective voice does not establish another person's participation, agreement
+or approval; keep those claims tied to evidence.
+
 ## Punctuation
 
 Read the current communications guidance in

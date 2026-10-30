@@ -5,7 +5,7 @@ description: Draft or revise Nathan's work messages for Jira, Slack, Teams or em
 
 # Draft message
 
-Produce an unsent draft in Nathan's first-person voice. Use the current request
+Produce an unsent draft in Nathan's voice. Use the current request
 when invoked without arguments; ask only for missing context that changes the ask.
 
 1. Read the recipient's original request, relevant thread and source evidence.
@@ -18,10 +18,12 @@ when invoked without arguments; ask only for missing context that changes the as
    from the recipient. For professional correspondence, including friendly
    messages to colleagues, read [comms style](references/comms-style.md) before
    drafting. Personal catch-ups and social messages keep their conversational tone.
+   For announcements, handovers, open questions or design feedback, choose the
+   matching [message type](references/message-types.md) and read its template.
    Finish this step when the recipient's next action is clear, or the update is
    explicitly for information.
-3. Draft the visible outcome first, using "I" for Nathan's work and "we" only
-   for sourced shared work. Keep sentences direct and paragraphs short. Name
+3. Draft the visible outcome first, using the audience and voice guidance in
+   comms style. Keep sentences direct and paragraphs short. Name
    concrete changes and useful next steps. Use verified links
    where they help the reader act. Add labelled images or a small table only
    when they make the review or decision easier. Give email a specific subject;
