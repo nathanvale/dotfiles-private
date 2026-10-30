@@ -138,20 +138,20 @@ async function observeFields(tab, fields) {
 }
 
 /** @typedef {{url: () => Promise<string | undefined>, playwright: {evaluate: (fn: (targets: Array<{id: string, selector: string}>) => boolean, arg: Array<{id: string, selector: string}>) => Promise<boolean>, locator: (selector: string) => NativeLocator}}} NativeTab */
-/** @param {{login: string, cua: {listBrowsers: (options: {emit: boolean}) => Promise<Array<{id: string, profileName?: string}>>, getBrowser: (selector: {id: string}) => Promise<{tabs: {get: (id: string) => Promise<NativeTab>}}>}, browserId: string, tabId: string, fields: Array<{id: 'username' | 'password', selector: string}>}} options */
+/** @param {{login: string, agent: {browsers: {list: () => Promise<Array<{id: string, profileName?: string}>>, get: (id: string) => Promise<{tabs: {get: (id: string) => Promise<NativeTab>}}>}}, browserId: string, tabId: string, fields: Array<{id: 'username' | 'password', selector: string}>}} options */
 export async function fillBrowserLogin(options) {
 	let effect = "none";
 	let stage = "whitelist-read-failed";
 	try {
-		const { login, cua, browserId, tabId, fields } = options;
+		const { login, agent, browserId, tabId, fields } = options;
 		requireValue(Object.keys(options).every((key) =>
-			["login", "cua", "browserId", "tabId", "fields"].includes(key)), "invalid-options");
+			["login", "agent", "browserId", "tabId", "fields"].includes(key)), "invalid-options");
 		const whitelist = await loadWhitelist(join(homedir(), ".local/state/browser-automation/logins.json"));
 		stage = "native-observation-failed";
-		const matches = (await cua.listBrowsers({ emit: false })).filter((browser) => browser.id === browserId);
+		const matches = (await agent.browsers.list()).filter((browser) => browser.id === browserId);
 		requireValue(matches.length === 1, "wrong-profile");
 		const entry = selectLogin(whitelist, login, matches[0].profileName ?? "");
-		const browser = await cua.getBrowser({ id: browserId });
+		const browser = await agent.browsers.get(browserId);
 		const tab = await browser.tabs.get(tabId);
 		assertOrigin(await tab.url(), entry.origin);
 		validateFields(fields);

@@ -5,13 +5,39 @@ set -euo pipefail
 # CDPATH='' matches every sibling test here. Without it, an inherited CDPATH
 # makes `cd` echo the directory it resolved, and that extra line is captured
 # into SUBJECT, producing a two-line path that cannot be executed.
-SUBJECT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)/with-one-password-token"
+SOURCE_SUBJECT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)/with-one-password-token"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
+
+# Substitute native executables only in this private test copy. Production has
+# no environment override for its credential reader, op, or signature verifier.
+SUBJECT="$TEST_ROOT/with-one-password-token"
+python3 - "$SOURCE_SUBJECT" "$SUBJECT" <<'PY_COPY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+replacements = {
+    "OP_PATH='/opt/homebrew/bin/op'": 'OP_PATH="$DOTFILES_DIR/bin/op"',
+    "reader='/usr/bin/security'": 'reader="$DOTFILES_DIR/bin/security"',
+    '/usr/bin/sudo -n': '"$DOTFILES_DIR/bin/sudo" -n',
+    '/bin/launchctl asuser': '"$DOTFILES_DIR/bin/launchctl" asuser',
+    '/usr/bin/codesign --verify': '"$DOTFILES_DIR/bin/codesign" --verify',
+    '/usr/bin/stat ': '"$DOTFILES_DIR/bin/stat" ',
+    '$(/usr/bin/id -u)': '$("$DOTFILES_DIR/bin/id" -u)',
+}
+for old, new in replacements.items():
+    if old not in source:
+        raise SystemExit("native executable fixture no longer matches its owner")
+    source = source.replace(old, new)
+Path(sys.argv[2]).write_text(source)
+PY_COPY
+chmod 700 "$SUBJECT"
+
 
 # The wrapper prefers the login Keychain under HOME. A test-owned HOME keeps
 # every run away from the real Keychain; its placeholder file only satisfies
 # the existence check, and the fixture's fake security answers the read.
+unset SSH_CONNECTION
 export HOME="$TEST_ROOT/home"
 mkdir -p "$HOME/Library/Keychains"
 : >"$HOME/Library/Keychains/login.keychain-db"
@@ -226,6 +252,31 @@ printf 'args=%s\n' "$*"
 EOF
   chmod +x "$fixture/bin/op"
 
+  cat >"$fixture/bin/codesign" <<'EOF'
+#!/bin/bash
+[[ ! -f "${0%/*}/signature-refused" ]]
+EOF
+  chmod +x "$fixture/bin/codesign"
+
+  cat >"$fixture/bin/sudo" <<'EOF'
+#!/bin/bash
+[[ "$1" == -n ]] || exit 64
+shift
+if [[ "$1" == -u ]]; then shift 2; fi
+exec "$@"
+EOF
+  cat >"$fixture/bin/launchctl" <<'EOF'
+#!/bin/bash
+[[ "$1" == asuser && "$2" =~ ^[0-9]+$ ]] || exit 64
+shift 2
+# Model the desktop context only inside this private fake process.
+export FIXTURE_DESKTOP_CONTEXT=1
+exec "$@"
+EOF
+  chmod +x "$fixture/bin/sudo" "$fixture/bin/launchctl"
+
+
+
   # Stands in for macOS security. Modes come from a fixture file because the
   # wrapper scrubs the environment before any helper runs.
   cat >"$fixture/bin/security" <<'EOF'
@@ -239,6 +290,10 @@ case "$mode" in
   item-missing)
     printf 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n' >&2
     exit 44
+    ;;
+  desktop-only)
+    [[ "${FIXTURE_DESKTOP_CONTEXT:-}" == 1 ]] || exit 36
+    printf 'ops_KEYCHAIN_SENTINEL\n'
     ;;
   interaction-denied)
     printf 'security: User interaction is not allowed.\n' >&2
@@ -361,6 +416,20 @@ EOF
 
 fixture="$TEST_ROOT/happy"
 make_fixture "$fixture"
+
+# A rejected vendor signature must stop before any Keychain read.
+untrusted_fixture="$TEST_ROOT/untrusted-op"
+make_fixture "$untrusted_fixture"
+: >"$untrusted_fixture/bin/signature-refused"
+set +e
+untrusted_error="$(DOTFILES_DIR="$untrusted_fixture" PATH="$untrusted_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+untrusted_status=$?
+set -e
+[[ "$untrusted_status" -eq 4 ]] || fail 'untrusted op exits before custody'
+pass 'untrusted op exits before custody'
+assert_contains "$untrusted_error" 'op-untrusted' 'untrusted binary has a redacted repair cause'
+[[ ! -e "$untrusted_fixture/bin/security-argv" ]] || fail 'untrusted op must not trigger a Keychain read'
+pass 'untrusted op must not trigger a Keychain read'
 
 check_output="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" check)"
 assert_contains "$check_output" '"status":"ok"' 'check reports ready without token bytes'
@@ -742,5 +811,14 @@ set +e
 blocked_error="$(DOTFILES_DIR="$blocked_fixture" PATH="$blocked_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
 set -e
 assert_contains "$blocked_error" '"status":"blocked","command":"check","code":"token-file-missing","keychain_status":"item-missing","keychain_reader_exit":44' 'blocked check names the Keychain reason behind the .env failure'
+
+# SSH can use the existing desktop audit context without forwarding a token
+# through sudo or launchctl arguments.
+desktop_fixture="$TEST_ROOT/desktop-context"
+make_fixture "$desktop_fixture"
+printf 'desktop-only' >"$desktop_fixture/bin/security-mode"
+desktop_output="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+assert_contains "$desktop_output" '"token_source":"desktop-keychain"' 'SSH uses the desktop Keychain context after an interaction refusal'
+assert_not_contains "$desktop_output" 'KEYCHAIN_SENTINEL' 'desktop context output excludes the token'
 
 printf '1..%d\n' "$pass_count"

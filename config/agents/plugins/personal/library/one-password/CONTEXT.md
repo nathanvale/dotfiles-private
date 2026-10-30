@@ -33,7 +33,7 @@ A narrow, non-interactive 1Password read that uses scoped service-account access
 _Avoid_: ambient read, probing read, service-account enumeration, tmux-wrapped unattended read
 
 **Per-command token injection**:
-The custody rule that a service-account token reaches `op` only for the single command that needs it, supplied by a managed source such as a keychain-backed or 1Password-backed wrapper, or an owning runtime's helper. The token is never parked in profile files, shell rc, `.env` files, exported ambient env, or tmux/PTY environment.
+The custody rule that a service-account token reaches `op` only for the single command that needs it, supplied by its managed Keychain source. The launcher owns any legacy fallback and migration; prefer encrypted storage and keep tokens out of shell startup and persistent agent environments. This rule does not isolate a same-user agent.
 _Avoid_: profile-exported token, ambient token, session-wide export, token in shell history
 
 **Targeted metadata check**:
