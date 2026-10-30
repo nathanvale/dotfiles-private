@@ -36,6 +36,21 @@ Read [security](references/security.md) before changing grants, token storage, e
 5. User-present access: for app integration, verify an authorized account-scoped operation directly and redact its result inside the consumer. For standalone authentication, retain the session in its trusted shell. If either path replaces a failed unattended check, report desktop success separately from the unresolved service-account failure and retain the wrapper repair hint.
 6. Verify shape only: length, expected prefix, newline count. Never print values.
 
+## Missing credentials
+
+Distinguish a missing item from locked custody or denied access before asking
+Nathan to add anything. For a missing declared credential, ask him to add the
+API token or key to **API Credentials**, or the approved website Login to
+**Agent Browsing**, then provide its item name or ID. Keep secret values out of
+chat. Resume only when the exact item and required fields verify privately.
+
+A new website also needs Nathan's approval of its exact HTTPS origin, intended
+account and browser profile. Record that approved binding through the owning
+capability before filling. An item in Agent Browsing alone is not login
+authority. Keep unattended grants read-only; Nathan adds or moves items through
+his own 1Password session. Do not search other vaults or broaden access to
+resolve a missing credential.
+
 ## Guardrails
 
 - Never print secret values to logs, chat, or code; shape-only checks.

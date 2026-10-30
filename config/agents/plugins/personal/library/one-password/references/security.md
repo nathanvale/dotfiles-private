@@ -19,6 +19,28 @@ server-side grants and live reads, then cut over. Retain the old credential
 until the agreed checks pass; report any remaining active old token rather
 than claiming that its broader access has been removed.
 
+## Rotate the service-account token
+
+Use 1Password.com's native **Rotate Token** on the existing service account.
+Rotation preserves its permissions and offers an overlap before the previous
+token expires. The installed `op service-account` CLI has no rotate command.
+Nathan owns the website confirmation and private custody of the replacement;
+keep it outside chat, command arguments and captured terminal output.
+
+Before rotation, identify every consumer and choose enough overlap to update
+both Macs. The existing Connectors `setup --interactive` route accepts the token
+privately in a trusted desktop terminal and stores and verifies the shared
+Keychain item. Resolve that command from the installed Connectors skill. Do
+not assume an SSH shell has the desktop's Keychain context.
+
+After updating each Mac, verify the same service-account identity, exact vault
+scope, real credential delivery and each consumer's own authentication check.
+Connectors uses its own Keychain reader: a launcher pass does not prove its
+SSH route. Let the previous token expire or revoke it only after the agreed
+consumer checks pass. Rotating this service token does not rotate the API keys
+or website passwords it reads, or change their item bindings. This is a
+user-present maintenance procedure; unattended reads remain a separate route.
+
 ## Store and deliver
 
 Use the existing native macOS Keychain. The launcher's `--help` owns executable
