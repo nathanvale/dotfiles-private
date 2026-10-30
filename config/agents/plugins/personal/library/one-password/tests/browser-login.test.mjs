@@ -42,7 +42,7 @@ test("copied helper uses canonical state and default custody process with exact 
 	expect(run.result).toEqual({ status: "filled", effect: "filled", fields: ["username", "password"] });
 	expect(run.args).toEqual(["op", "item", "get", "gddtezlrknpqokylqxnikd4srm", "--vault", "Fixture Vault", "--format", "json"]);
 	expect(run.fills).toEqual([["#username", "fixture-user"], ["#password", "fixture-password-not-a-real-secret"]]);
-	expect(run.observations).toEqual({ inventory: { emit: false }, browser: { id: "personal-browser" }, tab: "login-tab" });
+	expect(run.observations).toEqual({ inventory: "native-agent", browser: "personal-browser", tab: "login-tab" });
 	expect(JSON.stringify(run.result)).not.toContain("fixture-");
 });
 

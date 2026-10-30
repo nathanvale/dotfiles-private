@@ -33,17 +33,17 @@ const tab = {
 		}),
 	},
 };
-const cua = {
-	listBrowsers: async (options) => {
-		observations.inventory = options;
+const agent = { browsers: {
+	list: async () => {
+		observations.inventory = "native-agent";
 		return scenario.missingBrowser ? [] : [{ id: "personal-browser", profileName: scenario.profile ?? "Personal" }];
 	},
-	getBrowser: async (selector) => {
-		observations.browser = selector;
+	get: async (id) => {
+		observations.browser = id;
 		return { tabs: { get: async (id) => { observations.tab = id; return tab; } } };
 	},
-};
-const options = { login: "example.login", cua, browserId: "personal-browser", tabId: "login-tab",
+} };
+const options = { login: "example.login", agent, browserId: "personal-browser", tabId: "login-tab",
 	fields: [{ id: "username", selector: "#username" }, { id: "password", selector: "#password" }] };
 if (scenario.usernameOnly) options.fields = options.fields.slice(0, 1);
 if (scenario.extraOption) options[scenario.extraOption] = "forbidden";

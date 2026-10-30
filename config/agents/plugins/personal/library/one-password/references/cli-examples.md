@@ -52,6 +52,10 @@ When an approved operation needs item JSON, capture native `op` output inside it
 
 Use JSON on standard input for native item create/edit operations. Keep secret assignments out of command arguments, and capture operation output before returning a receipt. The owning capability supplies input preparation and the exact account and vault.
 
+Creates and edits require an explicitly authorised user-present account. Keep
+the unattended service account read-only; a failed write is not a reason to
+widen its grants.
+
 ## Metadata search
 
 Only search when explicitly requested. Restrict listing to the declared vault, parse results inside the consumer, and emit only candidate titles, IDs, categories, and the vault name. After selecting a candidate, return to exact references.
