@@ -1,6 +1,6 @@
 {
   "name": "personal",
-  "version": "0.4.51",
+  "version": "0.4.53",
   "description": "Nathan's personal workflows for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Personal",
     "shortDescription": "Run Nathan's personal workflows",
-    "longDescription": "Nathan’s personal skills and workflows, shared by Codex and Claude Code.",
+    "longDescription": "Nathan\u2019s personal skills and workflows, shared by Codex and Claude Code.",
     "developerName": "Nathan Vale",
     "category": "Productivity",
     "capabilities": [

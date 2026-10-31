@@ -78,7 +78,9 @@ paid service; do not describe the existing wrapper as that boundary.
 ## Prefer supported capabilities
 
 1Password Service Accounts and CLI support unattended reads with vault-scoped
-permissions. Native browser autofill is the user-present fallback. Confirm
+permissions. Agent Browser uses its supported private credential-provider protocol for
+approved unattended website logins. Native browser autofill is the user-present
+fallback. Confirm
 current compatibility before adopting another product: 1Password for Agents
 has agent, vault and approval requirements; Credential Broker has workload
 identity and account requirements. Neither is assumed to be a drop-in local

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -90,6 +90,42 @@ for (const entry of bundleEntries) {
 		expect(result.stdout.toString().trim().length).toBeGreaterThan(0);
 	});
 }
+
+test("tracked provider payload runs the vendor protocol outside the checkout", () => {
+	const entry = "config/agents/plugins/personal/library/one-password/dist/agent-browser-one-password";
+	const trackedRoot = join(fixtureRoot, "tracked");
+	const extracted = Bun.spawnSync(["git", "checkout-index", `--prefix=${trackedRoot}/`, "--", entry], {
+		cwd: repoRoot,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	expect(extracted.exitCode, extracted.stderr.toString()).toBe(0);
+	const executable = join(trackedRoot, entry);
+	expect(statSync(executable).mode & 0o111).toBe(0o111);
+	// Independent oracle: the vendor's discovery and sanitized refusal contract.
+	for (const { input, output } of [
+		{
+			input: '{"protocol":"agent-browser.plugin.v1","type":"plugin.manifest"}',
+			output: '{"protocol":"agent-browser.plugin.v1","success":true,"manifest":{"name":"one-password","capabilities":["credential.read"]}}\n',
+		},
+		{
+			input: "malformed-private-request",
+			output: '{"protocol":"agent-browser.plugin.v1","success":false,"error":"approved-credential-unavailable"}\n',
+		},
+	]) {
+		const result = Bun.spawnSync([executable], {
+			cwd: trackedRoot,
+			env: { HOME: join(fixtureRoot, "isolated-home"), PATH: "/usr/bin:/bin" },
+			stdin: Buffer.from(input),
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: 15_000,
+		});
+		expect(result.exitCode, result.stderr.toString()).toBe(0);
+		expect(result.stdout.toString()).toBe(output);
+		expect(result.stderr.toString()).toBe("");
+	}
+});
 
 test("copied runner preflight executes a real passing fixture using its bundled runtime", () => {
 	writeFileSync(join(fixtureRoot, "copied.test.ts"), 'import { expect, test } from "bun:test"; test("copied fixture", () => expect(2 + 2).toBe(4));\n');

@@ -19,7 +19,7 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 ## Token custody
 
 - Let `$HOME/code/dotfiles/bin/with-one-password-token` own token custody and process-scoped injection. Never read, source, create, or export its token source from this workflow; never place the token in shell rc, tmux/PTY environment, or ambient env.
-- Browser login: read [browser-login](references/browser-login.md). Reuse a signed-in session first; use its approved unattended route only with a supported native browser runtime. Native 1Password autofill is the user-present fallback.
+- Browser login: read [browser-login](references/browser-login.md). Pi, Claude Code and Codex use the installed Agent Browser credential provider for approved unattended logins. Reuse its signed-in session first. Native 1Password autofill is the user-present fallback.
 - Keep browser secrets out of clipboard, adapter plans and model output.
 - Keep explicit vault listing and item create/update requests in this workflow.
 

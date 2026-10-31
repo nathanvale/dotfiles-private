@@ -14,7 +14,15 @@ Reuse the approved profile's signed-in session before filling anything. Verify
 the signed-in identity on a protected page; a successful navigation alone is
 not proof of the right account.
 
-## Unattended filling
+## Shared unattended route
+
+Use [Agent Browser setup and login](agent-browser.md) for Pi, Claude Code and
+Codex on either Mac. It uses Agent Browser's supported credential-provider
+protocol and the same scoped Keychain custody as API credential delivery.
+The provider reads only approved Agent Browsing Login items. Connectors keeps
+its own API Credentials route.
+
+## Native Codex filling
 
 In Codex Desktop, use this skill's `scripts/browser-login.mjs` in the native
 browser JavaScript session. Its Interface accepts the actual browser `agent`
@@ -40,12 +48,9 @@ It returns only status, cause and effect. It does not click Login.
    password field with another call, then click its login control once.
 4. Verify the signed-in identity on the workflow's canonical page before work.
 
-Pi and Claude Code can invoke the credential launcher's process-delivery
-commands, but that does not give them Codex's browser runtime. Qualify their
-actual native confidential-fill route separately. When it is unavailable,
-report the browser step as blocked. Do not invent an `agent` adapter, paste a
-password through a model-visible tool argument, or open another browser
-connection to make this helper appear compatible.
+This alternative needs Codex's actual native browser runtime. Pi and Claude
+Code use the shared unattended route above. Pass credentials only through the
+helper's in-memory path; keep model-visible fill arguments secret-free.
 
 The helper owns the exact `with-one-password-token op item get` subprocess and
 captures its output in memory. Keep raw item JSON, field values and subprocess
