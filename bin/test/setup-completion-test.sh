@@ -100,6 +100,9 @@ prepare_fixture() {
   cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$FIXTURE_DOTFILES/bin/dotfiles/herdr-defaults.py"
   mkdir -p "$FIXTURE_DOTFILES/config/herdr"
   cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$FIXTURE_DOTFILES/config/herdr/coordinator-instructions.txt"
+  cp "$REPO_ROOT/bin/dotfiles/claude-settings.py" "$FIXTURE_DOTFILES/bin/dotfiles/claude-settings.py"
+  mkdir -p "$FIXTURE_DOTFILES/config/agents/claude"
+  cp "$REPO_ROOT/config/agents/claude/settings.json" "$FIXTURE_DOTFILES/config/agents/claude/settings.json"
   chmod +x "$FIXTURE_DOTFILES/setup.sh"
 
   mkdir -p "$FIXTURE_DOTFILES/bin/dotfiles/symlinks"
@@ -454,6 +457,9 @@ cp "$REPO_ROOT/verify_install.sh" "$actual_verifier_dotfiles/verify_install.sh"
 mkdir -p "$actual_verifier_dotfiles/bin/dotfiles" "$actual_verifier_dotfiles/config/herdr"
 cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$actual_verifier_dotfiles/bin/dotfiles/"
 cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$actual_verifier_dotfiles/config/herdr/"
+cp "$REPO_ROOT/bin/dotfiles/claude-settings.py" "$actual_verifier_dotfiles/bin/dotfiles/"
+mkdir -p "$actual_verifier_dotfiles/config/agents/claude"
+cp "$REPO_ROOT/config/agents/claude/settings.json" "$actual_verifier_dotfiles/config/agents/claude/"
 chmod +x "$actual_verifier_dotfiles/verify_install.sh"
 set +e
 env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" \
@@ -474,6 +480,12 @@ assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✗ Herdr coordinator 
   'real verifier reports the missing coordinator default'
 assert_file_absent "$actual_verifier_home/.herdr-projects/settings/config.json" \
   'real verifier does not install a missing coordinator default'
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✗ Claude settings policy' \
+  'real verifier reports the missing Claude settings policy'
+assert_file_absent "$actual_verifier_home/.claude/settings.json" \
+  'real verifier does not install the Claude settings policy'
+env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" /usr/bin/python3 \
+  "$actual_verifier_dotfiles/bin/dotfiles/claude-settings.py" >"$TEST_ROOT/claude-install-output"
 env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" /usr/bin/python3 \
   "$actual_verifier_dotfiles/bin/dotfiles/herdr-defaults.py" >"$TEST_ROOT/default-install-output"
 cp "$actual_verifier_home/.herdr-projects/settings/config.json" "$TEST_ROOT/verified-settings-before"
@@ -488,6 +500,10 @@ p.write_text(re.sub(r"\x1b\[[0-9;]*m", "", p.read_text()))
 PYTEST
 assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✓ Herdr coordinator default' \
   'real verifier reports the installed coordinator default'
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✓ Claude settings policy' \
+  'real verifier reports the installed Claude settings policy'
+assert_file_contains "$TEST_ROOT/actual-verifier-stdout" '✓ Claude host security values' \
+  'real verifier reports matching Claude host security values'
 cmp -s "$TEST_ROOT/verified-settings-before" "$actual_verifier_home/.herdr-projects/settings/config.json" || fail 'verification changed settings'
 pass 'real verifier leaves coordinator settings unchanged'
 
@@ -533,11 +549,75 @@ assert "$HOME/code/dotfiles/docs/agents/herdr-projects.md" in value
 assert "/Users/" not in value and value.count("At coordinator startup") == 1
 PYTEST
   pass "$coordinator_profile installs the portable coordinator default"
+  [[ -f "$FIXTURE_HOME/.claude/settings.json" && ! -L "$FIXTURE_HOME/.claude/settings.json" ]] ||
+    fail "$coordinator_profile setup installs a regular Claude settings file"
+  pass "$coordinator_profile setup installs a regular Claude settings file"
+  /usr/bin/python3 - "$FIXTURE_HOME/.claude/settings.json" "$REPO_ROOT/config/agents/claude/settings.json" <<'PYTEST'
+import json, sys
+machine, policy = (json.load(open(path)) for path in sys.argv[1:])
+assert machine["hooks"] == policy["hooks"] and machine["permissions"] == policy["permissions"]
+PYTEST
+  pass "$coordinator_profile setup installs the tracked Claude hooks and permissions"
   cp "$FIXTURE_HOME/.herdr-projects/settings/config.json" "$TEST_ROOT/settings-before"
   run_setup '' pass "--$coordinator_profile" --start-phase 6
   [[ "$RUN_EXIT" -eq 0 ]] && cmp -s "$TEST_ROOT/settings-before" "$FIXTURE_HOME/.herdr-projects/settings/config.json" || fail 'repeat setup preserves settings bytes'
   pass "$coordinator_profile repeat setup preserves settings bytes"
 done
+
+# Public setup converts a legacy Claude settings link without writing through it.
+reset_fixture
+rm -f "$FIXTURE_HOME/.claude/settings.json"
+ln -s "$FIXTURE_DOTFILES/config/agents/claude/settings.json" "$FIXTURE_HOME/.claude/settings.json"
+cp "$FIXTURE_DOTFILES/config/agents/claude/settings.json" "$TEST_ROOT/tracked-before"
+write_verifier pass
+run_setup '' pass --desktop --start-phase 6
+[[ "$RUN_EXIT" -eq 0 ]] || fail 'legacy Claude link setup exits zero'
+pass 'legacy Claude link setup exits zero'
+[[ -f "$FIXTURE_HOME/.claude/settings.json" && ! -L "$FIXTURE_HOME/.claude/settings.json" ]] ||
+  fail 'setup replaces the legacy Claude link with a regular file'
+pass 'setup replaces the legacy Claude link with a regular file'
+cmp -s "$TEST_ROOT/tracked-before" "$FIXTURE_DOTFILES/config/agents/claude/settings.json" ||
+  fail 'legacy conversion changed the tracked Claude settings'
+pass 'legacy conversion leaves the tracked Claude settings unchanged'
+
+# Repeated public setup before the owner cleans the tracked file keeps
+# host-only controls written through the legacy link.
+reset_fixture
+git -C "$FIXTURE_DOTFILES" init -q -b main
+git -C "$FIXTURE_DOTFILES" -c user.name=test -c user.email=test@invalid -c commit.gpgsign=false \
+  add config/agents/claude/settings.json
+git -C "$FIXTURE_DOTFILES" -c user.name=test -c user.email=test@invalid -c commit.gpgsign=false \
+  commit -qm policy
+rm -f "$FIXTURE_HOME/.claude/settings.json" "$FIXTURE_HOME/.claude/settings.dotfiles-policy.json"
+ln -s "$FIXTURE_DOTFILES/config/agents/claude/settings.json" "$FIXTURE_HOME/.claude/settings.json"
+/usr/bin/python3 - "$FIXTURE_HOME/.claude/settings.json" <<'PYTEST'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["permissions"]["deny"].append("Read(~/private/**)")
+data["hooks"].setdefault("PreToolUse", []).append(
+    {"matcher": "Bash", "hooks": [{"type": "command", "command": "host-gate.sh"}]})
+json.dump(data, open(path, "w"), indent=2)
+PYTEST
+write_verifier pass
+for attempt in first second; do
+  run_setup '' pass --desktop --start-phase 6
+  [[ "$RUN_EXIT" -eq 0 ]] || fail "$attempt setup before tracked cleanup exits zero"
+  pass "$attempt setup before tracked cleanup exits zero"
+done
+git -C "$FIXTURE_DOTFILES" checkout -q -- config/agents/claude/settings.json
+run_setup '' pass --desktop --start-phase 6
+[[ "$RUN_EXIT" -eq 0 ]] || fail 'setup after tracked cleanup exits zero'
+pass 'setup after tracked cleanup exits zero'
+/usr/bin/python3 - "$FIXTURE_HOME/.claude/settings.json" <<'PYTEST' ||
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert "Read(~/private/**)" in data["permissions"]["deny"], data["permissions"]["deny"]
+assert any(h["command"] == "host-gate.sh" for g in data["hooks"]["PreToolUse"] for h in g["hooks"])
+PYTEST
+  fail 'repeated setup before tracked cleanup keeps host-only deny rule and gate'
+pass 'repeated setup before tracked cleanup keeps host-only deny rule and gate'
+rm -rf "$FIXTURE_DOTFILES/.git"
 
 cat >"$FIXTURE_HOME/.herdr-projects/settings/config.json" <<'JSON'
 {"coordinator":{"instructions":" Keep my custom words. ","effort":"high"},"coordinators":{"projects":{"example":{"coordinator":{"instructions":"project words"}}}},"merge":{"by":"you"}}
@@ -655,7 +735,7 @@ done
 TEST_HERDR_PROJECTS_HOME=''
 TEST_HERDR_PROJECTS_CONFIG_DIR=''
 
-expected_assertions=98
+expected_assertions=113
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

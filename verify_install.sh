@@ -679,6 +679,8 @@ phase_end "Phase 5: Applications"
 phase_start
 verify_managed_symlinks
 verify "Herdr coordinator default" "/usr/bin/python3 '$DOTFILES/bin/dotfiles/herdr-defaults.py' --check"
+verify "Claude settings policy" "/usr/bin/python3 '$DOTFILES/bin/dotfiles/claude-settings.py' --check"
+verify_warn "Claude host security values" "/usr/bin/python3 '$DOTFILES/bin/dotfiles/claude-settings.py' --check --strict"
 verify_warn "Full Disk Access" "plutil -lint /Library/Preferences/com.apple.TimeMachine.plist"
 verify "Profile saved" "[[ -f '$STATE_DIR/profile' ]]"
 phase_end "Phase 6: Configuration"
@@ -783,6 +785,11 @@ if [[ $FAIL_COUNT -gt 0 || $WARN_COUNT -gt 0 ]]; then
                         "Check: env -i HOME=\"$HOME\" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /bin/sh -c '. \"$DOTFILES/config/mise/bootstrap.sh\"; \"$DOTFILES/bin/dotfiles/toolchain\" status --json'" \
                         "Repair: $DOTFILES/bin/dotfiles/toolchain update --apply --retry --json"
                     ;;
+                "Claude settings policy")
+                    action "$RED" "Claude settings policy" "~/.claude/settings.json lacks the tracked policy or is still a legacy symlink" \
+                        "Check: /usr/bin/python3 $DOTFILES/bin/dotfiles/claude-settings.py --check" \
+                        "Repair: cd ~/code/dotfiles && ./setup.sh symlinks"
+                    ;;
                 "Managed symlink status contract")
                     action "$RED" "Managed symlink status contract" "missing, malformed, or inconsistent" \
                         "Fix: cd ~/code/dotfiles && bin/dotfiles/symlinks/symlinks_manage.sh --status --machine" \
@@ -861,6 +868,11 @@ if [[ $FAIL_COUNT -gt 0 || $WARN_COUNT -gt 0 ]]; then
                 "Optional managed symlink:"*)
                     action "$YELLOW" "$item" "optional managed destination is broken or missing" \
                         "Fix: cd ~/code/dotfiles && bin/dotfiles/symlinks/symlinks_manage.sh --link"
+                    ;;
+                "Claude host security values")
+                    action "$YELLOW" "Claude host security values" "this host keeps a hook or permission value that differs from policy" \
+                        "Check: /usr/bin/python3 $DOTFILES/bin/dotfiles/claude-settings.py --check" \
+                        "Fix: port each 'Host keeps' value to config/agents/claude/settings.json, or change it on this host"
                     ;;
                 "VS Code")
                     action "$YELLOW" "VS Code" "not installed" \
