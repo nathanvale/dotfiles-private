@@ -1,0 +1,4 @@
+interface:
+  display_name: "NotebookLM"
+  short_description: "Read NotebookLM and inspect safe readiness through Connectors"
+  default_prompt: "Use $notebooklm to check readiness before accessing the requested notebook."

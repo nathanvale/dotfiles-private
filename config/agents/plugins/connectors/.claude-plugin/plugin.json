@@ -1,6 +1,6 @@
 {
   "name": "connectors",
-  "version": "0.7.2",
+  "version": "0.8.3",
   "description": "Nathan's service connectors for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -13,6 +13,7 @@
     "jira",
     "confluence",
     "notion",
-    "mcporter"
+    "mcporter",
+    "notebooklm"
   ]
 }

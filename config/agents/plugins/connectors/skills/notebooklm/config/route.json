@@ -1,0 +1,7 @@
+{
+  "defaultProvider": "notebooklm-connectors",
+  "selectors": {
+    "profile": "NLM_PROFILE"
+  },
+  "dispatcherOwned": true
+}
