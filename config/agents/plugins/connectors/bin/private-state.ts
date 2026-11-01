@@ -6,12 +6,12 @@
 // no path or content is carried in it. This is not a framework: consumers
 // keep their own record formats and their own recovery policy.
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, type Stats, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, type Stats, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { EnvironmentSource } from "./safe-environment.ts";
 
-export type PrivateStateReason = "absent" | "symlink" | "not-regular" | "not-directory" | "not-owned" | "mode-invalid" | "write-failed";
+export type PrivateStateReason = "absent" | "symlink" | "not-regular" | "not-directory" | "not-owned" | "mode-invalid" | "write-failed" | "too-large" | "encoding-invalid";
 export type PrivateStateResult<T> = ({ ok: true } & T) | { ok: false; reason: PrivateStateReason };
 
 const DIRECTORY_MODE = 0o700;
@@ -163,8 +163,24 @@ function readOwnedFile<T>(file: string, read: (fd: number, mode: number) => Priv
 }
 
 // Read a regular file this user owns whose mode is exactly 0600.
-export function readPrivateFile(file: string): PrivateStateResult<{ text: string }> {
-	return readOwnedFile(file, (fd, mode) => (mode === FILE_MODE ? { ok: true, text: readFileSync(fd, "utf8") } : { ok: false, reason: "mode-invalid" }));
+function boundedText(fd: number, maxBytes: number): PrivateStateResult<{ text: string }> {
+ if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || fstatSync(fd).size > maxBytes) return { ok: false, reason: "too-large" };
+ const bytes = Buffer.alloc(maxBytes + 1);
+ let size = 0;
+ while (size < bytes.length) {
+  const count = readSync(fd, bytes, size, bytes.length - size, null);
+  if (count === 0) break;
+  size += count;
+ }
+ if (size > maxBytes) return { ok: false, reason: "too-large" };
+ try { return { ok: true, text: new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size)) }; }
+ catch { return { ok: false, reason: "encoding-invalid" }; }
+}
+export function readPrivateFile(file: string, maxBytes?: number): PrivateStateResult<{ text: string }> {
+ return readOwnedFile(file, (fd, mode) => {
+  if (mode !== FILE_MODE) return { ok: false, reason: "mode-invalid" };
+  return maxBytes === undefined ? { ok: true, text: readFileSync(fd, "utf8") } : boundedText(fd, maxBytes);
+ });
 }
 
 // Write content to a fresh exact-0600 temp file beside the target, fsync it,

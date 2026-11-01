@@ -1,0 +1,9 @@
+{
+ "schemaVersion": 1,
+ "id": "jev",
+ "transport": { "registry": "./mcporter.json" },
+ "selectors": {},
+ "requirements": ["mcporter", "op"],
+ "adapter": "jev",
+ "credentials": { "reference": "1Password:API Credentials" }
+}

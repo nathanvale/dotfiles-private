@@ -131,6 +131,9 @@ export type RecordedEffect = "write-preview" | "write-adjudication" | "write-unl
 
 // failed: a read that did not complete, with no external effect.
 // recorded: one journal record completed, and nothing was sent.
+// inference-completed: a paid inference answered with a durable receipt.
+// inference-unknown: its reserved receipt blocks replay; inference or billing
+// may have happened without a verified complete reply.
 // applied: the write receipt and the Provider write both completed.
 // effect-unknown: the write receipt completed and the Provider write may have
 // happened; the object stays blocked until recovery settles it.
@@ -141,6 +144,8 @@ export type Executed =
 	| { readonly kind: "refused"; readonly refusal: AdapterRefusal }
 	| { readonly kind: "failed"; readonly connectorCause: string; readonly repair: string; readonly localEffects?: readonly LocalEffect[] }
 	| { readonly kind: "recorded"; readonly effect: RecordedEffect; readonly data: Record<string, unknown> }
+	| { readonly kind: "inference-completed"; readonly data: Record<string, unknown> }
+	| { readonly kind: "inference-unknown"; readonly data: Record<string, unknown>; readonly repair: string }
 	| { readonly kind: "applied"; readonly data: Record<string, unknown> }
 	| { readonly kind: "effect-unknown"; readonly data: Record<string, unknown>; readonly repair: string }
 	| { readonly kind: "failed-after-record"; readonly connectorCause: string; readonly data: Record<string, unknown>; readonly repair: string };
@@ -210,6 +215,7 @@ export type CustodyResolution =
 
 export interface Adapter {
 	readonly id: string;
+	readonly privateInput?: "staged";
 	readonly internalRoles?: Readonly<Record<string, InternalRole>>;
 	attemptAuth?(manifest: ConnectorManifest): Promise<AuthAttempt>;
 	resolveCustody?(request: SchemaRequest): CustodyResolution;

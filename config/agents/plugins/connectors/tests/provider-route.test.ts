@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { stagePrivateInput } from "../bin/private-input.ts";
 import { planDispatcherRoute, planRoute, RouteError } from "../bin/provider-route.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV } from "../bin/safe-environment.ts";
 import { AMBIENT_SENTINEL, assertCustody, createHarness, FIXTURE_ROUTE, FIXTURES, type Harness, PLUGIN_ROOT, ROUTE } from "./harness.ts";
@@ -28,6 +29,30 @@ function oauthFixture(oauth: unknown = "mcporter", registryAuth: unknown = "oaut
 }
 
 describe("route plan (in-process)", () => {
+	test("only the dispatcher-owned route admits its exact private staged argument", () => {
+		const env = { HOME: harness.home, XDG_STATE_HOME: harness.root };
+		const staged = stagePrivateInput(env, { synthetic: "private fixture" });
+		if (staged === null) throw new Error("private staging unavailable");
+		const argv = ["jev", "--", "call", "system_one", `requestJson=@${staged.file}`, "--no-coerce"];
+		const admission = { name: "requestJson", file: staged.file };
+		try {
+			expect(() => planRoute(argv, SKILLS_ROOT, env)).toThrow("semantic dispatcher");
+			expect(() => planDispatcherRoute(argv, SKILLS_ROOT, env, "context")).toThrow("cannot read a local file");
+			expect(planDispatcherRoute(argv, SKILLS_ROOT, env, "context", admission).argv).toContain(`requestJson=@${staged.file}`);
+			expect(() => planDispatcherRoute(argv, SKILLS_ROOT, env, "context", { ...admission, name: "other" })).toThrow("cannot read a local file");
+			const outside = path.join(harness.root, "outside.json");
+			writeFileSync(outside, "{}", { mode: 0o600 });
+			expect(() => planDispatcherRoute(argv, SKILLS_ROOT, env, "context", { ...admission, file: outside })).toThrow("not admitted");
+			chmodSync(staged.file, 0o644);
+			expect(() => planDispatcherRoute(argv, SKILLS_ROOT, env, "context", admission)).toThrow("not admitted");
+			chmodSync(staged.file, 0o600);
+			const link = path.join(path.dirname(staged.file), `${crypto.randomUUID()}.json`);
+			symlinkSync(staged.file, link);
+			expect(() => planDispatcherRoute(argv, SKILLS_ROOT, env, "context", { ...admission, file: link })).toThrow("not admitted");
+			const ordinary = ["probe-skill", "--select", "selection=example", "--", "call", "probe", `requestJson=@${staged.file}`];
+			expect(() => planDispatcherRoute(ordinary, FIXTURES, env, "context", admission)).toThrow("not admitted");
+		} finally { staged.dispose(); }
+	});
 	test("composes the explicit config, verb, target, and disabled OAuth", () => {
 		const plan = planRoute(["probe-skill", "--select", "selection=example", "--", "list", "--status", "--json"], FIXTURES, { PATH: "/bin", AMBIENT_SENTINEL });
 		expect(plan.server).toBe("probe");
@@ -262,7 +287,7 @@ describe("route source and skill registries", () => {
 		const skills = readdirSync(SKILLS_ROOT)
 			.filter((name) => existsSync(path.join(SKILLS_ROOT, name, "config", "mcporter.json")))
 			.sort();
-		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid", "notebooklm", "notion"]);
+		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl", "jev", "mermaid", "notebooklm", "notion"]);
 		for (const skill of skills) {
 			const registry = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "mcporter.json"), "utf8")) as { imports: unknown; mcpServers: Record<string, unknown> };
 			const route = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "route.json"), "utf8")) as { defaultProvider: string };

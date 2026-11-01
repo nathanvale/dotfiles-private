@@ -1,0 +1,12 @@
+{
+ "imports": [],
+ "mcpServers": {
+  "jev": {
+   "description": "TypeSafe JEV through the scoped credential Provider",
+   "command": "../../../bin/connectors",
+   "args": ["__internal", "jev", "provider"],
+   "env": {"CONNECTORS_INTERNAL_INVOCATION_CONTEXT":"${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"},
+   "allowedTools": ["list_models", "system_one"]
+  }
+ }
+}
