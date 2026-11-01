@@ -1,0 +1,1624 @@
+#!/usr/bin/env python3
+"""Select and coordinate direct Monash native-agent panes through Herdr.
+
+This frontend owns the local sibling-pane lifecycle. Named host profiles and
+remote-cwd policy are deliberately delegated to ``monash_hosts``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any, Sequence
+from uuid import uuid4
+
+from monash_hosts import HostProfile, HostProfileError, HostProfileRegistry
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+FOUNDRY = SCRIPT_DIR / "monash-foundry"
+REMOTE_HELPER = SCRIPT_DIR / "monash_remote.py"
+DEFAULT_CONFIG = SCRIPT_DIR / "config.json"
+STATE_FILE = "last-success.json"
+SCHEMA_VERSION = 1
+BILLING_IDENTITY = "monash-foundry"
+READY_TIMEOUT_SECONDS = 5.0
+MANAGED_START_TIMEOUT_MS = 60_000
+SHIM_RESOLUTION_TIMEOUT_MS = 5_000
+VERIFY_TIMEOUT_MS = 120_000
+VERIFY_RECONCILE_INTERVAL_SECONDS = 0.25
+ATTACH_TIMEOUT_SECONDS = 5.0
+REMOTE_SSH_COMMAND_TIMEOUT_SECONDS = 20.0
+# monash_remote.py currently has thirteen bounded 20-second SSH calls around
+# its one 60-second managed start call. Keep the frontend deadline outside
+# that complete helper budget, including process and scheduling overhead.
+REMOTE_START_TIMEOUT_SECONDS = (
+    REMOTE_SSH_COMMAND_TIMEOUT_SECONDS * 13 + MANAGED_START_TIMEOUT_MS / 1000 + 15
+)
+# A helper prompt observes the remote agent and native process before and after
+# the bounded prompt call.
+REMOTE_VERIFY_TIMEOUT_SECONDS = (
+    VERIFY_TIMEOUT_MS / 1000 + REMOTE_SSH_COMMAND_TIMEOUT_SECONDS * 4 + 10
+)
+
+
+class LaunchExpectation:
+    """The dry-run plan facts required to verify a subsequently native process."""
+
+    def __init__(self, native_executable: str, deployment: str, model_id: str, agent: str):
+        self.native_executable = native_executable
+        self.deployment = deployment
+        self.model_id = model_id
+        self.agent = agent
+
+
+class MonashError(Exception):
+    """A safe, structured command refusal."""
+
+    def __init__(self, code: str, message: str, repair: str, exit_code: int = 3,
+                 pane_id: str | None = None, running_agent: dict[str, object] | None = None,
+                 agent_observation: dict[str, object] | None = None,
+                 herdr_error_code: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.repair = repair
+        self.exit_code = exit_code
+        self.pane_id = pane_id
+        self.running_agent = running_agent
+        self.agent_observation = agent_observation
+        self.herdr_error_code = herdr_error_code
+
+
+def state_path() -> Path:
+    root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+    return root / "monash" / STATE_FILE
+
+
+def emit(value: dict[str, object]) -> None:
+    print(json.dumps(value, sort_keys=True))
+
+
+def configuration_path(args: argparse.Namespace) -> Path:
+    return Path(args.config).expanduser().resolve() if args.config else DEFAULT_CONFIG
+
+
+def host_registry(args: argparse.Namespace) -> HostProfileRegistry:
+    try:
+        return HostProfileRegistry.load(configuration_path(args))
+    except HostProfileError as error:
+        raise MonashError(error.code, str(error), "repair config.json host_profiles and retry") from error
+
+
+def subprocess_error(error: OSError | subprocess.TimeoutExpired, command: str) -> MonashError:
+    if isinstance(error, FileNotFoundError):
+        return MonashError("required_binary_missing", f"Required executable is unavailable: {command}",
+                           f"install or repair {command}, then run monash doctor")
+    return MonashError("command_timed_out", f"Timed out while running {command}",
+                       "run monash doctor, inspect Herdr, and retry")
+
+
+def _herdr_error_code(text: str) -> str | None:
+    """Read Herdr's documented JSON error code without exposing diagnostics."""
+    for candidate in (text,):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict) and isinstance(error.get("code"), str):
+            return error["code"]
+        if isinstance(error, str):
+            return error
+    return None
+
+
+def run_json(argv: Sequence[str], *, timeout: float = 15) -> dict[str, Any]:
+    try:
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, check=False, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise subprocess_error(error, argv[0]) from error
+    if result.returncode != 0:
+        herdr_error_code = _herdr_error_code(result.stderr) or _herdr_error_code(result.stdout)
+        raise MonashError("herdr_command_failed", "Herdr rejected a local-pane operation",
+                          "run monash doctor and retry after Herdr is ready",
+                          herdr_error_code=herdr_error_code)
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise MonashError("herdr_protocol_invalid", "Herdr returned an unreadable response",
+                          "verify the installed Herdr client and server are compatible") from error
+    if not isinstance(value, dict) or not isinstance(value.get("result"), dict):
+        raise MonashError("herdr_protocol_invalid", "Herdr response has no result object",
+                          "verify the installed Herdr client and server are compatible")
+    return value["result"]
+
+
+def herdr(*args: str) -> dict[str, Any]:
+    return run_json(("herdr", *args))
+
+
+def herdr_pane_run(pane_id: str, command: str) -> None:
+    """Send command text and Enter.
+
+    Herdr 0.9.0 documents this as an atomic terminal write. Its successful CLI
+    response is intentionally empty, unlike query commands which return JSON.
+    """
+    try:
+        result = subprocess.run(("herdr", "pane", "run", pane_id, command), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise subprocess_error(error, "herdr") from error
+    if result.returncode != 0:
+        raise MonashError("herdr_command_failed", "Herdr rejected a local-pane operation",
+                          "run monash doctor and retry after Herdr is ready", pane_id=pane_id)
+
+
+def herdr_void(*args: str, pane_id: str | None = None) -> None:
+    """Run a Herdr mutation whose success contract has no JSON response body."""
+    try:
+        result = subprocess.run(("herdr", *args), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, check=False, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise subprocess_error(error, "herdr") from error
+    if result.returncode != 0:
+        raise MonashError("herdr_command_failed", "Herdr rejected a local-pane operation",
+                          "run monash doctor and retry after Herdr is ready", pane_id=pane_id)
+
+
+def require_directory(value: str) -> str:
+    path = Path(value).expanduser()
+    if not path.is_absolute() or not path.is_dir():
+        raise MonashError("invalid_cwd", "--cwd must name an existing absolute directory",
+                          "pass an existing absolute working directory", exit_code=2)
+    return str(path.resolve())
+
+
+def launcher_argv(args: argparse.Namespace, dry_run: bool) -> list[str]:
+    argv = [str(FOUNDRY)]
+    if args.config is not None:
+        argv.extend(("--config", str(configuration_path(args))))
+    if dry_run:
+        argv.append("--dry-run")
+    argv.extend(("launch", "--model", args.model, "--agent", args.agent))
+    if args.qualification:
+        argv.append("--qualification")
+    native_args = args.native_args[1:] if args.native_args and args.native_args[0] == "--" else args.native_args
+    if native_args:
+        argv.extend(("--", *native_args))
+    return argv
+
+
+def validate_selection(args: argparse.Namespace) -> LaunchExpectation:
+    try:
+        result = subprocess.run(launcher_argv(args, dry_run=True), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise subprocess_error(error, str(FOUNDRY)) from error
+    if result.returncode != 0:
+        raise MonashError("selection_refused", "Monash Foundry refused the selected model or native agent",
+                          "run monash models or monash doctor, then choose a compatible qualified route")
+    native_match = re.search(r"^native_cli=(.+?) source=\S+\s*$", result.stdout, re.MULTILINE)
+    status_match = re.search(r"\bagent=(\S+)\b.*\bdeployment=(\S+)\b.*\bmodel=(\S+)", result.stdout)
+    if native_match is None or status_match is None:
+        raise MonashError("launcher_protocol_invalid", "Monash Foundry did not disclose the native launch identity",
+                          "install the matching Monash Foundry snapshot and retry")
+    native_path = Path(native_match.group(1)).expanduser().resolve()
+    if not native_path.is_absolute() or not native_path.is_file() or not os.access(native_path, os.X_OK):
+        raise MonashError("native_executable_unavailable", "Monash Foundry selected an unavailable native executable",
+                          "repair the selected native executable and rerun monash-foundry check")
+    selected_agent, deployment, model_id = status_match.groups()
+    if selected_agent != args.agent or model_id != args.model:
+        raise MonashError("launcher_protocol_invalid", "Monash Foundry dry-run identity disagrees with the requested route",
+                          "repair the installed Monash Foundry snapshot and retry")
+    return LaunchExpectation(str(native_path), deployment, model_id, selected_agent)
+
+
+def remote_helper_base_argv(args: argparse.Namespace, profile: HostProfile) -> list[str]:
+    return [str(REMOTE_HELPER), "--config", str(configuration_path(args)), "--host", profile.profile_id]
+
+
+def remote_start_argv(args: argparse.Namespace, profile: HostProfile, requested_cwd: str,
+                      run_id: str | None = None) -> list[str]:
+    run_id = run_id or uuid4().hex
+    argv = remote_helper_base_argv(args, profile)
+    argv.extend((
+        "start", "--run-id", run_id, "--agent", args.agent, "--model", args.model,
+    ))
+    if args.qualification:
+        argv.append("--qualification")
+    argv.extend(("--cwd", requested_cwd))
+    if args.remote_cwd is not None:
+        argv.extend(("--remote-cwd", args.remote_cwd))
+    native = native_args(args)
+    if native:
+        argv.extend(("--", *native))
+    return argv
+
+
+def helper_recovery_fields(payload: dict[str, Any], pane_id: str) -> dict[str, object]:
+    """Validate and preserve helper-owned recovery fields without proving readiness."""
+    available: dict[str, object] = {}
+    if "run_id" in payload:
+        if not isinstance(payload["run_id"], str) or not payload["run_id"]:
+            raise MonashError("remote_helper_protocol_invalid", "The remote helper returned an invalid recovery run_id",
+                              "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+        available["run_id"] = payload["run_id"]
+
+    remote_identity = payload.get("remote_identity")
+    if remote_identity is not None:
+        if not isinstance(remote_identity, dict):
+            raise MonashError("remote_helper_protocol_invalid", "The remote helper returned an invalid remote recovery identity",
+                              "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+        for name in ("workspace_id", "tab_id", "pane_id", "terminal_id", "intended_agent_name", "agent_name"):
+            if name in remote_identity and (not isinstance(remote_identity[name], str) or not remote_identity[name]):
+                raise MonashError("remote_helper_protocol_invalid", f"The remote helper returned an invalid {name}",
+                                  "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+        if remote_identity:
+            available["remote_identity"] = dict(remote_identity)
+
+    observation = payload.get("observation")
+    if observation is not None:
+        if not isinstance(observation, dict):
+            raise MonashError("remote_helper_protocol_invalid", "The remote helper returned an invalid recovery observation",
+                              "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+        available["observation"] = dict(observation)
+    return available
+
+
+def recovery_repair(run_id: str | None) -> str:
+    if run_id:
+        return f"inspect recovery state for run_id {run_id} before taking any further action; do not blindly retry spawn"
+    return "inspect recovery state before taking any further action; do not blindly retry spawn"
+
+
+def timeout_error(*values: object) -> bool:
+    text = " ".join(str(value) for value in values).casefold()
+    return "timeout" in text or "timed out" in text or "timed_out" in text
+
+
+def run_remote_helper(argv: Sequence[str], pane_id: str, *, timeout_seconds: float,
+                      run_id: str | None = None) -> dict[str, Any]:
+    try:
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, check=False, timeout=timeout_seconds)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        if isinstance(error, FileNotFoundError):
+            raise MonashError("remote_helper_unavailable", "The remote helper executable is unavailable",
+                              "install and qualify scripts/foundry/monash_remote.py", pane_id=pane_id) from error
+        raise MonashError("remote_helper_timed_out", "The remote helper did not return before its managed timeout",
+                          recovery_repair(run_id), pane_id=pane_id) from error
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise MonashError("remote_helper_protocol_invalid", "The remote helper returned unreadable JSON",
+                          "install the matching qualified monash_remote.py helper", pane_id=pane_id) from error
+    if not isinstance(payload, dict):
+        raise MonashError("remote_helper_protocol_invalid", "The remote helper returned a non-object JSON value",
+                          "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+    if result.returncode != 0 or payload.get("status") == "refused":
+        error = payload.get("error")
+        if (isinstance(error, dict) and isinstance(error.get("code"), str)
+                and isinstance(error.get("message"), str) and isinstance(error.get("repair"), str)):
+            available = helper_recovery_fields(payload, pane_id)
+            repair = error["repair"]
+            if run_id and (error["code"] == "remote_native_not_ready"
+                           or timeout_error(error["code"], error["message"], error["repair"])):
+                repair = recovery_repair(run_id)
+            raise MonashError(error["code"], error["message"], repair, pane_id=pane_id,
+                              running_agent=available or None)
+        raise MonashError("remote_helper_protocol_invalid", "The remote helper refusal was not structured",
+                          "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+    return payload
+
+
+def required_remote_string(value: object, field: str, pane_id: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise MonashError("remote_helper_protocol_invalid", f"The remote helper omitted {field}",
+                          "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+    return value
+
+
+def validate_remote_receipt(payload: dict[str, Any], profile: HostProfile, args: argparse.Namespace,
+                            requested_cwd: str, pane_id: str, expected_command: str = "start",
+                            expected_run_id: str | None = None) -> dict[str, Any]:
+    if payload.get("status") != "ready":
+        raise MonashError("remote_not_ready", "The remote helper did not report a ready native agent",
+                          "inspect the remote Herdr session and retry after native readiness is observed",
+                          pane_id=pane_id)
+    if payload.get("command") != expected_command:
+        raise MonashError("remote_helper_protocol_invalid", "The remote helper returned the wrong command receipt",
+                          "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+    run_id = required_remote_string(payload.get("run_id"), "run_id", pane_id)
+    if expected_run_id is not None and run_id != expected_run_id:
+        raise MonashError("remote_identity_mismatch", "The remote helper changed the run identity during verification",
+                          "inspect the remote session and do not reuse this run_id", pane_id=pane_id)
+    if payload.get("profile_id") != profile.profile_id or payload.get("transport") != "ssh":
+        raise MonashError("remote_identity_mismatch", "The remote helper receipt does not match the selected SSH profile",
+                          "repair the selected host profile and remote helper, then retry", pane_id=pane_id)
+    if payload.get("agent") != args.agent or payload.get("requested_cwd") != requested_cwd:
+        raise MonashError("remote_identity_mismatch", "The remote helper receipt does not match the requested route",
+                          "inspect the remote helper invocation and retry", pane_id=pane_id)
+
+    expected_cwd = required_remote_string(payload.get("expected_cwd"), "expected_cwd", pane_id)
+    expected_cwd_source = required_remote_string(payload.get("expected_cwd_source"), "expected_cwd_source", pane_id)
+    observed_cwd = required_remote_string(payload.get("observed_cwd"), "observed_cwd", pane_id)
+    execution_host = payload.get("execution_host")
+    if (not isinstance(execution_host, dict)
+            or not all(isinstance(execution_host.get(name), str) and execution_host[name]
+                       for name in ("value", "source", "observed_at"))):
+        raise MonashError("remote_helper_protocol_invalid", "The remote helper omitted its execution-host observation",
+                          "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+
+    observation = payload.get("observation")
+    if not isinstance(observation, dict) or observation.get("source") != "remote.herdr.agent.get":
+        raise MonashError("remote_helper_protocol_invalid", "The remote helper omitted its remote Herdr observation",
+                          "install the matching qualified monash_remote.py helper", pane_id=pane_id)
+    if observation.get("agent") != args.agent or observation.get("interactive_ready") is not True:
+        raise MonashError("remote_not_ready", "The remote Herdr observation is not interactively ready",
+                          "inspect the remote Herdr session and retry after native readiness is observed",
+                          pane_id=pane_id)
+    agent_status = required_remote_string(observation.get("agent_status"), "agent_status", pane_id)
+    if agent_status == "blocked":
+        raise MonashError("remote_not_ready", "The remote Herdr observation reports a blocked native agent",
+                          "inspect the remote pane and resolve the native prompt explicitly", pane_id=pane_id)
+    if observation.get("cwd") != observed_cwd or observed_cwd != expected_cwd:
+        raise MonashError("remote_identity_mismatch", "The remote Herdr cwd disagrees with its execution receipt",
+                          "inspect the remote helper observation and retry", pane_id=pane_id)
+
+    session = observation.get("agent_session")
+    if (not isinstance(session, dict)
+            or not all(isinstance(session.get(name), str) and session[name]
+                       for name in ("source", "agent", "kind", "value"))):
+        raise MonashError("remote_not_ready", "The remote helper did not report a complete native session tuple",
+                          "wait for the remote native session identity and retry", pane_id=pane_id)
+    if session["agent"] != args.agent or session["source"] != f"herdr:{args.agent}":
+        raise MonashError("remote_identity_mismatch", "The remote native session tuple does not match the agent",
+                          "inspect the remote Herdr session identity and retry", pane_id=pane_id)
+    session_id = required_remote_string(payload.get("session_id"), "session_id", pane_id)
+    if session_id != session["value"]:
+        raise MonashError("remote_identity_mismatch", "The remote session_id disagrees with agent_session.value",
+                          "inspect the remote helper receipt and retry", pane_id=pane_id)
+
+    remote_identity_fields = ("workspace_id", "tab_id", "pane_id", "terminal_id", "agent_name")
+    remote_identity = {
+        name: required_remote_string(payload.get(name), name, pane_id)
+        for name in remote_identity_fields
+    }
+    if any(observation.get(name) != remote_identity[name] for name in remote_identity_fields[:4]):
+        raise MonashError("remote_identity_mismatch", "The remote observation disagrees with its pane identity",
+                          "inspect the remote Herdr session and retry", pane_id=pane_id)
+
+    ssh_alias = profile.ssh_alias
+    herdr_session = profile.herdr_session
+    herdr_executable = profile.herdr_executable
+    if (not isinstance(ssh_alias, str) or not ssh_alias
+            or not isinstance(herdr_session, str) or not herdr_session
+            or herdr_executable is None or not str(herdr_executable)):
+        raise MonashError("remote_profile_invalid", "The selected SSH profile has incomplete attach identity",
+                          "repair config.json host_profiles and retry", pane_id=pane_id)
+    expected_attach = [
+        "ssh", "-tt", ssh_alias, str(herdr_executable), "--session", herdr_session,
+        "agent", "attach", remote_identity["agent_name"],
+    ]
+    attach_argv = payload.get("attach_argv")
+    if attach_argv != expected_attach:
+        raise MonashError("remote_attach_mismatch", "The remote helper returned an unexpected attach command",
+                          "repair the remote helper or selected SSH profile; do not attach", pane_id=pane_id)
+
+    return {
+        "run_id": run_id,
+        "expected_cwd": expected_cwd,
+        "expected_cwd_source": expected_cwd_source,
+        "observed_cwd": observed_cwd,
+        "execution_host": execution_host,
+        "observation": observation,
+        "session": session,
+        "session_id": session_id,
+        "remote_identity": remote_identity,
+        "attach_argv": expected_attach,
+    }
+
+
+def remote_recovery_identity(profile: HostProfile, args: argparse.Namespace, requested_cwd: str,
+                             local_identity: dict[str, str], payload: dict[str, Any]) -> dict[str, object]:
+    remote_fields = ("workspace_id", "tab_id", "pane_id", "terminal_id", "agent_name")
+    nested_identity = payload.get("remote_identity")
+    if isinstance(nested_identity, dict):
+        remote_identity = dict(nested_identity)
+    else:
+        remote_identity = {
+            name: payload[name]
+            for name in remote_fields
+            if isinstance(payload.get(name), str) and payload[name]
+        }
+    observation = payload.get("observation")
+    if (not isinstance(nested_identity, dict)
+            and isinstance(observation, dict) and isinstance(observation.get("agent_session"), dict)):
+        remote_identity["agent_session"] = observation["agent_session"]
+    if isinstance(payload.get("session_id"), str) and payload["session_id"]:
+        remote_identity["session_id"] = payload["session_id"]
+    recovery: dict[str, object] = {
+        "host": profile.profile_id,
+        "transport": "ssh",
+        "model": args.model,
+        "agent": args.agent,
+        "requested_cwd": requested_cwd,
+        "local_identity": local_identity,
+        "remote_identity": remote_identity,
+    }
+    for name in ("run_id", "expected_cwd", "expected_cwd_source", "observed_cwd"):
+        if isinstance(payload.get(name), str) and payload[name]:
+            recovery[name] = payload[name]
+    if isinstance(observation, dict):
+        recovery["observation"] = observation
+    if isinstance(payload.get("agent_name"), str) and payload["agent_name"]:
+        recovery["agent_name"] = payload["agent_name"]
+    return recovery
+
+
+def pane_from_result(result: dict[str, Any]) -> dict[str, Any]:
+    pane = result.get("pane")
+    if not isinstance(pane, dict) or not isinstance(pane.get("pane_id"), str):
+        raise MonashError("herdr_protocol_invalid", "Herdr did not return a pane identity",
+                          "verify the installed Herdr client and server are compatible")
+    return pane
+
+
+def resolve_target(pane_id: str | None) -> dict[str, Any]:
+    if pane_id is None:
+        return pane_from_result(herdr("pane", "current", "--current"))
+    return pane_from_result(herdr("pane", "get", pane_id))
+
+
+def local_sibling_identity(pane: dict[str, Any]) -> dict[str, str]:
+    identity = {
+        name: pane.get(name)
+        for name in ("pane_id", "tab_id", "terminal_id")
+    }
+    if not all(isinstance(value, str) and value for value in identity.values()):
+        raise MonashError("herdr_protocol_invalid", "Herdr did not return the local sibling terminal identity",
+                          "verify the installed Herdr client and server are compatible",
+                          pane_id=identity.get("pane_id") if isinstance(identity.get("pane_id"), str) else None)
+    return identity
+
+
+def await_shell_ready(pane_id: str) -> None:
+    """Poll the newly-created pane until its own shell owns the foreground."""
+    deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        result = herdr("pane", "process-info", "--pane", pane_id)
+        info = result.get("process_info")
+        if not isinstance(info, dict):
+            raise MonashError("herdr_protocol_invalid", "Herdr did not return pane process information",
+                              "verify the installed Herdr client and server are compatible", pane_id=pane_id)
+        shell_pid = info.get("shell_pid")
+        foreground = info.get("foreground_processes")
+        foreground_pid = (foreground[0].get("pid") if isinstance(foreground, list) and foreground
+                          and isinstance(foreground[0], dict) else None)
+        if isinstance(shell_pid, int) and foreground_pid == shell_pid:
+            return
+        time.sleep(0.1)
+    raise MonashError("shell_not_ready", "The new sibling pane is not foregrounded by its shell",
+                      "inspect the pane with herdr pane process-info and retry", pane_id=pane_id)
+
+
+def await_attach_process(pane_id: str, requested_cwd: str, attach_argv: list[str]) -> dict[str, Any]:
+    """Require fresh process-info evidence for the exact dispatched SSH attach."""
+    deadline = time.monotonic() + ATTACH_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        result = herdr("pane", "process-info", "--pane", pane_id)
+        info = result.get("process_info")
+        processes = info.get("foreground_processes") if isinstance(info, dict) else None
+        if not isinstance(processes, list):
+            raise MonashError("herdr_protocol_invalid", "Herdr did not return local attach process information",
+                              "verify the installed Herdr client and server are compatible", pane_id=pane_id)
+        for process in processes:
+            if (isinstance(process, dict) and process.get("argv0") == attach_argv[0]
+                    and process.get("argv") == attach_argv and process.get("cwd") == requested_cwd):
+                return process
+        time.sleep(0.1)
+    raise MonashError("local_attach_unverified", "The local sibling did not foreground the exact SSH attach process",
+                      "inspect the local sibling with herdr pane process-info; do not rerun spawn", pane_id=pane_id)
+
+
+def agent_observation(detail: dict[str, Any]) -> dict[str, object]:
+    """Expose only direct Herdr observations, without deriving lifecycle state."""
+    observation: dict[str, object] = {
+        name: detail[name]
+        for name in ("pane_id", "tab_id", "agent", "agent_status", "cwd", "interactive_ready")
+        if name in detail
+    }
+    session = detail.get("agent_session")
+    if isinstance(session, dict):
+        observation["agent_session"] = session
+        if isinstance(session.get("value"), str):
+            observation["session_id"] = session["value"]
+    observation["source"] = "herdr.agent.get"
+    return observation
+
+
+def native_args(args: argparse.Namespace) -> list[str]:
+    return args.native_args[1:] if args.native_args and args.native_args[0] == "--" else list(args.native_args)
+
+
+def shim_root(run_id: str) -> Path:
+    root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+    return root / "monash" / "spawns" / run_id
+
+
+def clean_native_path(shim_directory: Path) -> str:
+    """Keep the shim out of the launcher and native process search path."""
+    spawn_root = shim_directory.parent.parent
+    retained: list[str] = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        candidate = Path(entry).expanduser().resolve(strict=False)
+        try:
+            candidate.relative_to(spawn_root)
+        except ValueError:
+            retained.append(entry)
+    return os.pathsep.join(retained)
+
+
+def write_shim(args: argparse.Namespace, run_id: str, expectation: LaunchExpectation) -> Path:
+    directory = shim_root(run_id) / "bin"
+    try:
+        directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+        os.chmod(directory, 0o700)
+    except OSError as error:
+        raise MonashError("shim_creation_failed", "The per-run native launcher shim could not be created",
+                          "repair XDG_STATE_HOME permissions and retry") from error
+    shim = directory / args.agent
+    native_path = Path(expectation.native_executable).resolve()
+    try:
+        native_path.relative_to(directory)
+    except ValueError:
+        pass
+    else:
+        raise MonashError("shim_recursion_refused", "The native executable resolves inside the per-run shim directory",
+                          "repair the native executable path and retry")
+    launcher = launcher_argv_without_native_args(args)
+    clean_path = clean_native_path(directory)
+    script = "\n".join((
+        "#!/bin/sh",
+        'if [ "${HERDR_MONASH_SHIM_ACTIVE:-}" = 1 ]; then',
+        '  printf "%s\\n" "Monash shim recursion refused" >&2',
+        "  exit 126",
+        "fi",
+        "exec env " + shlex.join((
+            f"PATH={clean_path}",
+            "HERDR_MONASH_SHIM_ACTIVE=1",
+            f"HERDR_AGENT={args.agent}",
+            *launcher,
+        )) + ' -- "$@"',
+        "",
+    ))
+    try:
+        shim.write_text(script, encoding="utf-8")
+        os.chmod(shim, 0o700)
+    except OSError as error:
+        raise MonashError("shim_creation_failed", "The per-run native launcher shim could not be written",
+                          "repair XDG_STATE_HOME permissions and retry") from error
+    return shim
+
+
+def launcher_argv_without_native_args(args: argparse.Namespace) -> list[str]:
+    copied = argparse.Namespace(**vars(args))
+    copied.native_args = []
+    return launcher_argv(copied, dry_run=False)
+
+
+def verify_shim_resolution(pane_id: str, agent: str, shim: Path) -> None:
+    expected = str(shim)
+    command = (
+        f"resolved=$(command -v {shlex.quote(agent)} 2>/dev/null); "
+        f"if [ \"$resolved\" = {shlex.quote(expected)} ]; then "
+        f"printf '%s\\n' {shlex.quote('__MONASH_SHIM_OK__=' + expected)}; "
+        "else printf '__MONASH_SHIM_MISMATCH__=%s\\n' \"$resolved\"; fi"
+    )
+    herdr_pane_run(pane_id, command)
+    await_shell_ready(pane_id)
+    sentinel_pattern = rf"^__MONASH_SHIM_(?:OK__={re.escape(expected)}|MISMATCH__=.*)$"
+    result = herdr("pane", "wait-output", pane_id, "--regex", sentinel_pattern,
+                   "--timeout", str(SHIM_RESOLUTION_TIMEOUT_MS))
+    matched = result.get("matched_line")
+    if matched != f"__MONASH_SHIM_OK__={expected}":
+        raise MonashError("shim_resolution_failed", "The new pane did not resolve the canonical native command to its per-run shim",
+                          "inspect the pane login-shell PATH, aliases, and functions; do not rerun spawn", pane_id=pane_id)
+
+
+def agent_get(target: str, *, timeout: float = 15) -> dict[str, Any]:
+    detail = run_json(("herdr", "agent", "get", target), timeout=timeout).get("agent")
+    if not isinstance(detail, dict):
+        raise MonashError("herdr_protocol_invalid", "Herdr did not return the started native agent",
+                          "verify the installed Herdr client and server are compatible")
+    return detail
+
+
+def startup_blocked(pane_id: str, detail: dict[str, Any] | None, agent_name: str | None = None) -> MonashError:
+    observation = agent_observation(detail) if detail is not None else None
+    running_agent = {"pane_id": pane_id, "agent_name": agent_name} if agent_name is not None else None
+    return MonashError("startup_blocked", "Herdr observed the native agent blocked during startup",
+                       "inspect the returned pane and resolve the native prompt explicitly; do not rerun spawn",
+                       pane_id=pane_id, running_agent=running_agent, agent_observation=observation)
+
+
+def start_agent(name: str, args: argparse.Namespace, pane_id: str) -> dict[str, Any]:
+    argv = ("herdr", "agent", "start", name, "--kind", args.agent, "--pane", pane_id,
+            "--timeout", str(MANAGED_START_TIMEOUT_MS), "--", *native_args(args))
+    retried_not_ready = False
+    while True:
+        try:
+            return run_json(argv, timeout=(MANAGED_START_TIMEOUT_MS / 1000) + 5)
+        except MonashError as error:
+            missing_agent = False
+            try:
+                detail = agent_get(name)
+            except MonashError as lookup_error:
+                detail = None
+                missing_agent = lookup_error.herdr_error_code == "agent_not_found"
+            if detail is not None and detail.get("agent_status") == "blocked":
+                raise startup_blocked(pane_id, detail, name) from error
+            if (not retried_not_ready and error.herdr_error_code == "agent_not_ready" and missing_agent):
+                retried_not_ready = True
+                continue
+            raise MonashError("native_not_ready", "Herdr did not report the native agent ready before the managed start timeout",
+                              "inspect the returned pane for native startup output; do not rerun spawn", pane_id=pane_id,
+                              agent_observation=agent_observation(detail) if detail is not None else None) from error
+
+
+def same_executable(observed: str, expected: str) -> bool:
+    """Compare the current filesystem identity behind two absolute executable paths."""
+    if not Path(observed).is_absolute() or not Path(expected).is_absolute():
+        return False
+    try:
+        return os.path.samefile(observed, expected)
+    except OSError:
+        return False
+
+
+def verify_native_process(pane_id: str, requested_cwd: str, expectation: LaunchExpectation,
+                          args: argparse.Namespace, shim: Path) -> dict[str, Any]:
+    result = herdr("pane", "process-info", "--pane", pane_id)
+    info = result.get("process_info")
+    processes = info.get("foreground_processes") if isinstance(info, dict) else None
+    if not isinstance(processes, list):
+        raise MonashError("native_process_unverified", "Herdr did not report the native foreground process",
+                          "inspect the returned pane; do not treat a launcher hint as native readiness", pane_id=pane_id)
+    expected_cwd = str(Path(requested_cwd).resolve())
+    prohibited = {str(shim.resolve()), str(FOUNDRY.resolve())}
+    for process in processes:
+        if not isinstance(process, dict):
+            continue
+        argv = process.get("argv")
+        argv0 = process.get("argv0")
+        observed = [value for value in ([argv0] if isinstance(argv0, str) else [])]
+        if isinstance(argv, list):
+            observed.extend(value for value in argv if isinstance(value, str))
+        if any(same_executable(value, blocked) for value in observed for blocked in prohibited):
+            raise MonashError("native_process_unverified", "The ready pane still foregrounds a shim or generic launcher",
+                              "inspect the returned pane; do not rerun spawn", pane_id=pane_id)
+        if (not isinstance(argv, list) or not argv or not isinstance(argv[0], str)
+                or not same_executable(argv[0], expectation.native_executable)):
+            continue
+        if process.get("cwd") != expected_cwd:
+            raise MonashError("observed_cwd_mismatch", "The native agent started outside the requested working directory",
+                              "inspect the returned pane and retry with a valid --cwd", pane_id=pane_id)
+        if native_argv_has_model(argv, expectation, args) and list(argv[-len(native_args(args)):] if native_args(args) else []) == native_args(args):
+            return process
+    raise MonashError("native_process_unverified", "Herdr did not observe the pinned native executable with its exact model route",
+                      "inspect the returned pane; do not treat a launcher hint as native readiness", pane_id=pane_id)
+
+
+def native_argv_has_model(argv: list[Any], expectation: LaunchExpectation, args: argparse.Namespace) -> bool:
+    values = [value for value in argv if isinstance(value, str)]
+    if len(values) != len(argv):
+        return False
+    if args.agent == "codex":
+        return any(values[index:index + 2] == ["-c", f"model={json.dumps(expectation.deployment)}"]
+                   for index in range(len(values) - 1))
+    if args.agent == "opencode":
+        return any(values[index:index + 2] == ["--model", f"azure/{expectation.model_id}"]
+                   for index in range(len(values) - 1))
+    if args.agent == "claude":
+        return any(values[index:index + 2] == ["--model", expectation.deployment]
+                   for index in range(len(values) - 1))
+    return False
+
+
+def observed_execution_host() -> dict[str, str]:
+    try:
+        result = subprocess.run(("/bin/hostname",), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, check=False, timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise subprocess_error(error, "/bin/hostname") from error
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value:
+        raise MonashError("execution_host_unavailable", "The local execution host could not be observed",
+                          "repair /bin/hostname and retry")
+    return {
+        "value": value,
+        "source": "/bin/hostname",
+        "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def persist_success(receipt: dict[str, object]) -> None:
+    destination = state_path()
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as error:
+        raise MonashError("last_success_persistence_failed", "The running agent could not be saved as the last successful selection",
+                          "repair XDG_STATE_HOME permissions; the returned pane remains running",
+                          pane_id=receipt.get("pane_id") if isinstance(receipt.get("pane_id"), str) else None,
+                          running_agent=running_agent_identity(receipt)) from error
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "host": receipt["host"],
+        "model": receipt["model"],
+        "agent": receipt["agent"],
+        "cwd": receipt["requested_cwd"],
+        "run_id": receipt["run_id"],
+    }
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=destination.parent, encoding="utf-8", delete=False) as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+            temporary = Path(handle.name)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, destination)
+    except OSError as error:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise MonashError("last_success_persistence_failed", "The running agent could not be saved as the last successful selection",
+                          "repair XDG_STATE_HOME permissions; the returned pane remains running",
+                          pane_id=receipt.get("pane_id") if isinstance(receipt.get("pane_id"), str) else None,
+                          running_agent=running_agent_identity(receipt)) from error
+
+
+def running_agent_identity(receipt: dict[str, object]) -> dict[str, object]:
+    """Return only receipt-backed identity needed to recover a live native agent."""
+    names = (
+        "run_id", "host", "transport", "model", "agent", "agent_name", "pane_id", "tab_id", "terminal_id",
+        "session_id", "requested_cwd", "execution_cwd", "execution_host", "local_identity", "remote_identity",
+        "observation",
+        "remote_workspace_id", "remote_tab_id", "remote_pane_id", "remote_terminal_id", "remote_agent_name",
+        "remote_agent_session", "native_identity", "lifecycle", "attach_argv", "local_attach",
+    )
+    return {
+        name: receipt[name]
+        for name in names
+        if name in receipt
+    }
+
+
+class LocalPaneAdapter:
+    """The only adapter allowed to create a local sibling pane."""
+
+    def __init__(self, profile: HostProfile, args: argparse.Namespace, requested_cwd: str,
+                 expectation: LaunchExpectation):
+        self.profile = profile
+        self.args = args
+        self.requested_cwd = requested_cwd
+        self.expectation = expectation
+
+    def spawn(self) -> dict[str, object]:
+        target = resolve_target(self.args.pane)
+        execution_host = observed_execution_host()
+        split = herdr("pane", "split", target["pane_id"], "--direction", "right", "--cwd", self.requested_cwd, "--no-focus")
+        pane = pane_from_result(split)
+        pane_id = pane["pane_id"]
+        if isinstance(target.get("tab_id"), str) and pane.get("tab_id") != target["tab_id"]:
+            raise MonashError("sibling_tab_mismatch", "Herdr created a pane outside the caller tab",
+                              "inspect the returned pane and retry from the intended tab", pane_id=pane_id)
+        run_id = uuid4().hex
+        try:
+            shim = write_shim(self.args, run_id, self.expectation)
+        except MonashError as error:
+            error.pane_id = pane_id
+            raise
+        agent_name = f"monash-{run_id[:8]}"
+        try:
+            await_shell_ready(pane_id)
+            herdr_pane_run(pane_id, f"export PATH={shlex.quote(str(shim.parent))}:\"$PATH\"")
+            verify_shim_resolution(pane_id, self.args.agent, shim)
+            start_agent(agent_name, self.args, pane_id)
+            native = agent_get(agent_name)
+            if native.get("agent_status") == "blocked":
+                raise startup_blocked(pane_id, native, agent_name)
+            if native.get("pane_id") != pane_id or native.get("agent") != self.args.agent:
+                raise MonashError("native_identity_unverified", "Herdr did not preserve the requested native agent identity",
+                                  "inspect the returned pane; do not rerun spawn", pane_id=pane_id,
+                                  agent_observation=agent_observation(native))
+            process = verify_native_process(pane_id, self.requested_cwd, self.expectation, self.args, shim)
+        except MonashError as error:
+            if error.pane_id is None:
+                error.pane_id = pane_id
+            raise
+
+        receipt: dict[str, object] = {
+            "schema_version": SCHEMA_VERSION,
+            "command": "spawn",
+            "status": "ready",
+            "run_id": run_id,
+            "host": self.profile.profile_id,
+            "execution_host": execution_host,
+            "model": self.args.model,
+            "agent": self.args.agent,
+            "agent_name": agent_name,
+            "billing_identity": BILLING_IDENTITY,
+            "pane_id": pane_id,
+            "tab_id": pane.get("tab_id"),
+            # `cwd` remains for launch-picker state consumers. The two explicit fields are authoritative.
+            "cwd": self.requested_cwd,
+            "requested_cwd": self.requested_cwd,
+            "execution_cwd": process.get("cwd"),
+            "session": {"state": "pending_first_turn"},
+            "native_identity": {
+                "agent": native.get("agent"),
+                "native_executable": self.expectation.native_executable,
+                "agent_status": native.get("agent_status"),
+            },
+            "lifecycle": {"state": native.get("agent_status"), "source": "herdr.agent.get"},
+        }
+        try:
+            herdr_void(
+                "pane", "report-metadata", pane_id, "--source", "monash", "--agent", self.args.agent,
+                "--title", f"Monash | {self.profile.profile_id} | {self.args.agent} | {self.args.model}",
+                "--token", f"host={self.profile.profile_id}", "--token", f"model={self.args.model}",
+                "--token", f"billing_identity={BILLING_IDENTITY}", pane_id=pane_id,
+            )
+        except MonashError as error:
+            raise MonashError("metadata_report_failed", "The native agent is running but its pane metadata was not recorded",
+                              "inspect the returned pane; do not rerun spawn unless a new agent is intended",
+                              pane_id=pane_id, running_agent=running_agent_identity(receipt)) from error
+        return receipt
+
+
+class SshAdapter:
+    """Remote seam only. The helper owns remote pane and native-session truth."""
+
+    def __init__(self, profile: HostProfile, args: argparse.Namespace, requested_cwd: str):
+        self.profile = profile
+        self.args = args
+        self.requested_cwd = requested_cwd
+
+    def spawn(self) -> dict[str, object]:
+        run_id = uuid4().hex
+        if not (REMOTE_HELPER.is_file() and os.access(REMOTE_HELPER, os.X_OK)):
+            raise MonashError("remote_helper_unavailable", "The selected SSH profile has no installed remote helper",
+                              "install and qualify scripts/foundry/monash_remote.py for this host profile")
+        target = resolve_target(self.args.pane)
+        split = herdr("pane", "split", target["pane_id"], "--direction", "right", "--cwd", self.requested_cwd, "--no-focus")
+        pane = pane_from_result(split)
+        pane_id = pane["pane_id"]
+        if isinstance(target.get("tab_id"), str) and pane.get("tab_id") != target["tab_id"]:
+            raise MonashError("sibling_tab_mismatch", "Herdr created a pane outside the caller tab",
+                              "inspect the returned pane and retry from the intended tab", pane_id=pane_id)
+        local_identity = local_sibling_identity(pane)
+        helper_attempted = False
+        helper_receipt: dict[str, Any] | None = None
+        receipt: dict[str, object] | None = None
+        try:
+            await_shell_ready(pane_id)
+            helper_attempted = True
+            helper_receipt = run_remote_helper(
+                remote_start_argv(self.args, self.profile, self.requested_cwd, run_id), pane_id,
+                timeout_seconds=REMOTE_START_TIMEOUT_SECONDS, run_id=run_id,
+            )
+            receipt_status = "ready"
+            if helper_receipt.get("status") == "started":
+                if not self.args.verify:
+                    raise MonashError(
+                        "remote_not_ready", "The remote helper started an agent without a complete native session",
+                        "inspect the returned remote run identity; do not rerun spawn", pane_id=pane_id,
+                        running_agent=remote_recovery_identity(
+                            self.profile, self.args, self.requested_cwd, local_identity, helper_receipt,
+                        ),
+                    )
+                remote = remote_first_turn_after_started(
+                    self.args, self.profile, self.requested_cwd, pane_id, helper_receipt,
+                    expected_run_id=run_id,
+                )
+                receipt_status = "verified"
+            else:
+                remote = validate_remote_receipt(
+                    helper_receipt, self.profile, self.args, self.requested_cwd, pane_id,
+                    expected_run_id=run_id,
+                )
+                receipt_status = "ready"
+            receipt = remote_public_receipt(
+                self.args, self.profile, self.requested_cwd, local_identity, remote, status=receipt_status,
+            )
+            if self.args.verify and receipt_status != "verified":
+                verified = verify_remote_spawn(self.args, self.profile, receipt)
+                receipt = {**receipt, **verified}
+            herdr_pane_run(pane_id, shlex.join(remote["attach_argv"]))
+            attached = await_attach_process(pane_id, self.requested_cwd, remote["attach_argv"])
+            receipt["local_attach"] = {
+                "status": "observed",
+                "pid": attached.get("pid"),
+                "argv0": attached.get("argv0"),
+                "argv": attached.get("argv"),
+                "cwd": attached.get("cwd"),
+            }
+            try:
+                report_remote_metadata(self.profile, self.args, pane_id)
+            except MonashError as metadata_error:
+                raise MonashError(
+                    "metadata_report_failed",
+                    "The remote agent is attached but its local pane metadata was not recorded",
+                    "inspect the local sibling and remote identity; do not rerun spawn unless a new agent is intended",
+                    pane_id=pane_id, running_agent=running_agent_identity(receipt),
+                ) from metadata_error
+            return receipt
+        except MonashError as error:
+            if error.pane_id is None:
+                error.pane_id = pane_id
+            if helper_attempted:
+                if receipt is not None:
+                    recovery: dict[str, object] | None = running_agent_identity(receipt)
+                elif helper_receipt is not None:
+                    recovery = remote_recovery_identity(
+                        self.profile, self.args, self.requested_cwd, local_identity, helper_receipt,
+                    )
+                elif isinstance(error.running_agent, dict) and error.running_agent:
+                    recovery = remote_recovery_identity(
+                        self.profile, self.args, self.requested_cwd, local_identity, error.running_agent,
+                    )
+                elif timeout_error(error.code, error.message, error.repair) or error.code == "remote_native_not_ready":
+                    recovery = remote_recovery_identity(
+                        self.profile, self.args, self.requested_cwd, local_identity, {"run_id": run_id},
+                    )
+                else:
+                    recovery = None
+                if recovery is not None:
+                    if isinstance(error.running_agent, dict):
+                        for name in ("run_id", "remote_identity", "observation"):
+                            if name in error.running_agent:
+                                recovery[name] = error.running_agent[name]
+                    recovery["run_id"] = run_id
+                    error.running_agent = recovery
+                if error.code == "remote_native_not_ready" or timeout_error(error.code, error.message, error.repair):
+                    error.repair = recovery_repair(run_id)
+            raise
+
+
+def remote_public_receipt(args: argparse.Namespace, profile: HostProfile, requested_cwd: str,
+                          local_identity: dict[str, str], remote: dict[str, Any],
+                          status: str = "ready") -> dict[str, object]:
+    remote_ids = remote["remote_identity"]
+    remote_identity = {
+        **remote_ids,
+        "agent_session": remote["session"],
+        "session_id": remote["session_id"],
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "command": "spawn",
+        "status": status,
+        "run_id": remote["run_id"],
+        "host": profile.profile_id,
+        "transport": "ssh",
+        "execution_host": remote["execution_host"],
+        "model": args.model,
+        "agent": args.agent,
+        "agent_name": remote_ids["agent_name"],
+        "billing_identity": BILLING_IDENTITY,
+        "pane_id": local_identity["pane_id"],
+        "tab_id": local_identity["tab_id"],
+        "terminal_id": local_identity["terminal_id"],
+        "local_identity": local_identity,
+        "remote_identity": remote_identity,
+        "remote_workspace_id": remote_ids["workspace_id"],
+        "remote_tab_id": remote_ids["tab_id"],
+        "remote_pane_id": remote_ids["pane_id"],
+        "remote_terminal_id": remote_ids["terminal_id"],
+        "remote_agent_name": remote_ids["agent_name"],
+        "remote_agent_session": remote["session"],
+        "cwd": requested_cwd,
+        "requested_cwd": requested_cwd,
+        "expected_cwd": remote["expected_cwd"],
+        "expected_cwd_source": remote["expected_cwd_source"],
+        "observed_cwd": remote["observed_cwd"],
+        "actual_cwd": remote["observed_cwd"],
+        "execution_cwd": remote["observed_cwd"],
+        "actual_cwd_source": remote["observation"]["source"],
+        "execution_cwd_source": remote["observation"]["source"],
+        "session": {"state": "ready", "agent_session": remote["session"]},
+        "session_id": remote["session_id"],
+        "native_identity": {
+            "agent": remote["observation"]["agent"],
+            "agent_status": remote["observation"]["agent_status"],
+            "interactive_ready": remote["observation"]["interactive_ready"],
+            "agent_session": remote["session"],
+        },
+        "observation": remote["observation"],
+        "lifecycle": {
+            "state": remote["observation"]["agent_status"],
+            "source": remote["observation"]["source"],
+        },
+        "attach_argv": remote["attach_argv"],
+    }
+
+
+def remote_first_turn_after_started(args: argparse.Namespace, profile: HostProfile, requested_cwd: str,
+                                    pane_id: str, start_payload: dict[str, Any],
+                                    expected_run_id: str | None = None) -> dict[str, Any]:
+    run_id = required_remote_string(start_payload.get("run_id"), "run_id", pane_id)
+    if expected_run_id is not None and run_id != expected_run_id:
+        raise MonashError("remote_identity_mismatch", "The remote helper changed the run identity during verification",
+                          "inspect the remote session and do not reuse this run_id", pane_id=pane_id)
+    argv = remote_helper_base_argv(args, profile)
+    argv.extend(("prompt", "--run-id", run_id, marker_prompt(None), "--wait", "--timeout", str(VERIFY_TIMEOUT_MS)))
+    payload = run_remote_helper(argv, pane_id, timeout_seconds=REMOTE_VERIFY_TIMEOUT_SECONDS, run_id=run_id)
+    remote = validate_remote_receipt(
+        payload, profile, args, requested_cwd, pane_id,
+        expected_command="prompt", expected_run_id=run_id,
+    )
+    expected_ids = {
+        name: start_payload[name]
+        for name in ("workspace_id", "tab_id", "pane_id", "terminal_id", "agent_name")
+        if isinstance(start_payload.get(name), str) and start_payload[name]
+    }
+    if any(remote["remote_identity"].get(name) != value for name, value in expected_ids.items()):
+        raise MonashError("remote_identity_mismatch", "The remote verification receipt changed the started identity",
+                          "inspect the remote session and do not reuse this run_id", pane_id=pane_id)
+    return remote
+
+
+def report_remote_metadata(profile: HostProfile, args: argparse.Namespace, pane_id: str) -> None:
+    herdr_void(
+        "pane", "report-metadata", pane_id, "--source", "monash", "--agent", args.agent,
+        "--title", f"Monash | {profile.profile_id} | {args.agent} | {args.model}",
+        "--token", f"host={profile.profile_id}", "--token", f"model={args.model}",
+        "--token", f"agent={args.agent}", "--token", f"billing_identity={BILLING_IDENTITY}",
+        pane_id=pane_id,
+    )
+
+
+def verify_remote_spawn(args: argparse.Namespace, profile: HostProfile, receipt: dict[str, object]) -> dict[str, object]:
+    pane_id = receipt.get("pane_id") if isinstance(receipt.get("pane_id"), str) else ""
+    run_id = receipt.get("run_id") if isinstance(receipt.get("run_id"), str) else ""
+    argv = remote_helper_base_argv(args, profile)
+    argv.extend((
+        "prompt", "--run-id", run_id, marker_prompt(None), "--wait", "--timeout", str(VERIFY_TIMEOUT_MS),
+    ))
+    try:
+        payload = run_remote_helper(argv, pane_id, timeout_seconds=REMOTE_VERIFY_TIMEOUT_SECONDS, run_id=run_id)
+        remote = validate_remote_receipt(
+            payload, profile, args, str(receipt["requested_cwd"]), pane_id,
+            expected_command="prompt", expected_run_id=run_id,
+        )
+        expected_ids = {
+            name: receipt["remote_identity"][name]
+            for name in ("workspace_id", "tab_id", "pane_id", "terminal_id", "agent_name")
+        }
+        if remote["remote_identity"] != expected_ids or remote["session"] != receipt["remote_identity"]["agent_session"]:
+            raise MonashError("remote_identity_mismatch", "The remote verification receipt changed the running identity",
+                              "inspect the remote session and do not reuse this run_id", pane_id=pane_id)
+    except MonashError as error:
+        error.pane_id = pane_id
+        recovery = running_agent_identity(receipt)
+        if isinstance(error.running_agent, dict):
+            for name in ("run_id", "remote_identity", "observation"):
+                if name in error.running_agent:
+                    recovery[name] = error.running_agent[name]
+        error.running_agent = recovery
+        raise
+    return {
+        "status": "verified",
+        "session_id": remote["session_id"],
+        "native_identity": {
+            "agent": remote["observation"]["agent"],
+            "agent_status": remote["observation"]["agent_status"],
+            "interactive_ready": remote["observation"]["interactive_ready"],
+            "agent_session": remote["session"],
+        },
+        "observation": remote["observation"],
+        "lifecycle": {
+            "state": remote["observation"]["agent_status"],
+            "source": remote["observation"]["source"],
+        },
+    }
+
+
+class SpawnCoordinator:
+    """Validate selection, dispatch through the registry transport, then persist only readiness."""
+
+    def __init__(self, args: argparse.Namespace, registry: HostProfileRegistry):
+        self.args = args
+        self.registry = registry
+
+    def spawn(self) -> dict[str, object]:
+        requested_cwd = require_directory(self.args.cwd)
+        try:
+            profile = self.registry.get(self.args.host)
+        except HostProfileError as error:
+            raise MonashError(error.code, str(error), "select a configured host profile with monash launch") from error
+        if profile.transport == "local":
+            expectation = validate_selection(self.args)
+            receipt = LocalPaneAdapter(profile, self.args, requested_cwd, expectation).spawn()
+        elif profile.transport == "ssh":
+            # The remote helper repeats the native executable proof on the
+            # selected host. Locally, only the catalogue and route contract
+            # can be validated before the SSH sibling is created.
+            validate_remote_selection(self.args)
+            receipt = SshAdapter(profile, self.args, requested_cwd).spawn()
+        else:  # HostProfile is sealed by the registry; retain a diagnostic boundary for future versions.
+            raise MonashError("unsupported_transport", "The selected host profile has an unsupported transport",
+                              "repair config.json host_profiles and retry")
+        if profile.transport == "ssh":
+            if self.args.verify and receipt.get("status") != "verified":
+                raise MonashError(
+                    "remote_verification_not_completed",
+                    "The SSH adapter returned before completing the requested remote verification turn",
+                    "inspect the returned local and remote identity; do not rerun spawn",
+                    pane_id=receipt.get("pane_id") if isinstance(receipt.get("pane_id"), str) else None,
+                    running_agent=running_agent_identity(receipt),
+                )
+            persist_success(receipt)
+            return {**receipt, "command": "spawn"}
+        persist_success(receipt)
+        if self.args.verify:
+            verified = verify_agent(
+                self.args,
+                receipt["agent_name"] if isinstance(receipt.get("agent_name"), str) else "",
+            )
+            return {**receipt, **verified, "command": "spawn"}
+        return receipt
+
+
+def marker_prompt(marker: str | None) -> str:
+    if marker is None:
+        return "Reply with exactly: Monash first-turn verification."
+    path = Path(marker).expanduser()
+    if not path.is_absolute() or not path.is_file():
+        raise MonashError("invalid_marker", "--marker must name an existing absolute file",
+                          "pass an existing absolute marker file", exit_code=2)
+    return f"Read the marker file at {path.resolve()} and reply with its contents."
+
+
+def verified_session(detail: dict[str, Any], pane_id: str | None) -> dict[str, str]:
+    session = detail.get("agent_session")
+    agent = detail.get("agent")
+    required = ("source", "agent", "kind", "value")
+    if (not isinstance(agent, str) or not isinstance(session, dict)
+            or not all(isinstance(session.get(name), str) and session[name] for name in required)
+            or session["agent"] != agent or session["source"] != f"herdr:{agent}"):
+        raise MonashError("agent_session_unavailable", "Herdr has not reported a native session after the verification turn",
+                          "inspect the returned agent and retry after its native Herdr integration reports matching identity",
+                          pane_id=pane_id, agent_observation=agent_observation(detail))
+    return {name: session[name] for name in required}
+
+
+def reconcile_stalled_verification(target: str, detail: dict[str, Any], deadline: float,
+                                   prompt_error: MonashError) -> tuple[dict[str, Any], dict[str, str]]:
+    identity = {
+        name: detail[name]
+        for name in ("pane_id", "terminal_id", "agent", "name")
+        if isinstance(detail.get(name), str) and detail[name]
+    }
+    while True:
+        pane_id = detail.get("pane_id") if isinstance(detail.get("pane_id"), str) else None
+        if time.monotonic() >= deadline:
+            break
+        if detail.get("agent_status") == "blocked":
+            raise startup_blocked(pane_id or "", detail) from prompt_error
+        if detail.get("agent_session") is not None:
+            return detail, verified_session(detail, pane_id)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(VERIFY_RECONCILE_INTERVAL_SECONDS, remaining))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            candidate = agent_get(target, timeout=max(0.001, min(15, remaining)))
+        except MonashError:
+            break
+        detail = candidate
+        if time.monotonic() >= deadline:
+            break
+        if any(candidate.get(name) != value for name, value in identity.items()):
+            raise MonashError(
+                "verification_identity_changed",
+                "The native agent identity changed while its verification session was settling",
+                "inspect the returned pane and do not retry verification against the replaced identity",
+                pane_id=pane_id,
+                agent_observation=agent_observation(candidate),
+            ) from prompt_error
+    pane_id = detail.get("pane_id") if isinstance(detail.get("pane_id"), str) else None
+    raise MonashError(
+        "verification_not_settled",
+        "Herdr did not settle the first verification turn",
+        "inspect the returned agent before retrying verify",
+        pane_id=pane_id,
+        agent_observation=agent_observation(detail),
+    ) from prompt_error
+
+
+def verify_agent(args: argparse.Namespace, target: str) -> dict[str, object]:
+    if not target:
+        raise MonashError("agent_target_required", "verify requires a live Herdr agent name or pane ID",
+                          "pass the ready receipt agent_name or pane_id", exit_code=2)
+    prompt = marker_prompt(getattr(args, "marker", None))
+    deadline = time.monotonic() + (VERIFY_TIMEOUT_MS / 1000)
+    try:
+        run_json(("herdr", "agent", "prompt", target, prompt, "--wait", "--timeout", str(VERIFY_TIMEOUT_MS)),
+                 timeout=(VERIFY_TIMEOUT_MS / 1000) + 5)
+    except MonashError as error:
+        detail: dict[str, Any] | None
+        if error.herdr_error_code == "agent_prompt_stalled":
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                detail = None
+            else:
+                try:
+                    detail = agent_get(target, timeout=max(0.001, min(15, remaining)))
+                except MonashError:
+                    detail = None
+        else:
+            try:
+                detail = agent_get(target)
+            except MonashError:
+                detail = None
+        if detail is not None and detail.get("agent_status") == "blocked":
+            raise startup_blocked(str(detail.get("pane_id")) if isinstance(detail.get("pane_id"), str) else "", detail) from error
+        if error.herdr_error_code == "agent_prompt_stalled" and detail is not None:
+            detail, session = reconcile_stalled_verification(target, detail, deadline, error)
+        else:
+            raise MonashError("verification_not_settled", "Herdr did not settle the first verification turn",
+                              "inspect the returned agent before retrying verify", pane_id=detail.get("pane_id") if isinstance(detail, dict) and isinstance(detail.get("pane_id"), str) else None,
+                              agent_observation=agent_observation(detail) if detail is not None else None) from error
+    else:
+        detail = agent_get(target)
+        session = verified_session(detail, detail.get("pane_id") if isinstance(detail.get("pane_id"), str) else None)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "command": "verify",
+        "status": "verified",
+        "agent_name": target,
+        "pane_id": detail.get("pane_id"),
+        "native_identity": {"agent_session": session, "agent_status": detail.get("agent_status")},
+        "session_id": session["value"],
+        "lifecycle": {"state": detail.get("agent_status"), "source": "herdr.agent.get"},
+    }
+
+
+def last_success() -> dict[str, str]:
+    try:
+        value = json.loads(state_path().read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {name: value[name] for name in ("host", "model", "agent", "cwd") if isinstance(value.get(name), str)}
+
+
+def picker_value(label: str, default: str | None) -> str | None:
+    suffix = f" [{default}]" if default else ""
+    answer = input(f"{label}{suffix} (q cancels): ").strip()
+    if answer.casefold() in {"q", "quit", "cancel"}:
+        return None
+    return answer or default
+
+
+def picker_choice(label: str, choices: Sequence[str], default: str | None) -> str | None:
+    allowed = tuple(choices)
+    if not allowed:
+        raise MonashError("selection_unavailable", f"No {label.casefold()} choices are available",
+                          "run monash doctor and repair the selected catalogue")
+    display = ", ".join(allowed)
+    while True:
+        value = picker_value(f"{label} ({display})", default)
+        if value is None or value in allowed:
+            return value
+        print(f"Choose one of: {display}.", file=sys.stderr)
+
+
+def model_catalogue_payload(args: argparse.Namespace) -> dict[str, Any]:
+    argv = [str(FOUNDRY)]
+    if args.config:
+        argv.extend(("--config", str(configuration_path(args))))
+    argv.extend(("models", "--json"))
+    try:
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, check=False, timeout=15)
+        payload = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+        raise MonashError("model_choices_unavailable", "Monash Foundry could not load the closed model choices",
+                          "run monash-foundry models --json and repair its reported route") from error
+    models = payload.get("models") if isinstance(payload, dict) else None
+    if result.returncode != 0 or not isinstance(models, list) or not models \
+            or not all(isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"] for item in models):
+        raise MonashError("model_choices_unavailable", "Monash Foundry could not load the closed model choices",
+                          "run monash-foundry models --json and repair its reported route")
+    return payload
+
+
+def model_catalogue(args: argparse.Namespace) -> list[dict[str, Any]]:
+    payload = model_catalogue_payload(args)
+    return [item for item in payload["models"] if isinstance(item, dict)]
+
+
+def model_choices(args: argparse.Namespace) -> tuple[str, ...]:
+    return tuple(item["id"] for item in model_catalogue(args))
+
+
+PICKER_AGENTS = ("codex", "claude", "opencode")
+PICKER_AGENT_PROTOCOLS = {
+    "codex": "azure-openai-responses",
+    "claude": "azure-anthropic-messages",
+    "opencode": "azure-openai-chat-completions",
+}
+PICKER_AGENT_FORMATS = {
+    "codex": {"OpenAI"},
+    "claude": {"Anthropic"},
+    "opencode": {"OpenAI", "DeepSeek", "MoonshotAI"},
+}
+PICKER_OPENCODE_MODELS = {
+    "gpt-5.4-nano", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6", "kimi-k2.7-code",
+}
+
+
+def route_is_permitted(model: dict[str, Any], route: dict[str, Any], bindings: list[dict[str, Any]],
+                       resources: list[dict[str, Any]], qualification: bool) -> bool:
+    agent = route.get("agent")
+    if agent not in PICKER_AGENTS or model.get("availability") != "available":
+        return False
+    if route.get("implemented") is not True or route.get("compatibility") != "compatible":
+        return False
+    status = route.get("status")
+    if status == "untested" and not qualification:
+        return False
+    if status not in {"qualified", "untested"}:
+        return False
+    resource_id = route.get("binding_resource_id")
+    if not isinstance(resource_id, str) or not resource_id:
+        return False
+    expected_resource = {"codex": "gpt", "claude": "claude"}.get(agent)
+    if expected_resource is not None and resource_id != expected_resource:
+        return False
+    binding = next((item for item in bindings
+                    if item.get("resource_id") == resource_id
+                    and item.get("protocol") == PICKER_AGENT_PROTOCOLS[agent]), None)
+    resource = next((item for item in resources if item.get("id") == resource_id), None)
+    if (not isinstance(binding, dict) or binding.get("availability") != "available"
+            or binding.get("observed") is not True or not isinstance(resource, dict)
+            or resource.get("availability") != "available" or resource.get("observed") is not True):
+        return False
+    if binding.get("model_format") not in PICKER_AGENT_FORMATS[agent]:
+        return False
+    if agent == "opencode" and model.get("id") not in PICKER_OPENCODE_MODELS:
+        return False
+    return True
+
+
+def permitted_agent_choices(args: argparse.Namespace, model_id: str) -> tuple[str, ...]:
+    payload = model_catalogue_payload(args)
+    catalogue = [item for item in payload["models"] if isinstance(item, dict)]
+    model = next((item for item in catalogue if item.get("id") == model_id), None)
+    if model is None:
+        raise MonashError("selection_unavailable", f"Model {model_id} is not present in the closed catalogue",
+                          "run monash-foundry models --json and choose a listed model")
+    routes = model.get("routes")
+    bindings = model.get("bindings")
+    resources = payload.get("resources")
+    if not isinstance(routes, list) or not isinstance(bindings, list) or not isinstance(resources, list):
+        raise MonashError("selection_unavailable", f"Model {model_id} has no usable route catalogue",
+                          "run monash-foundry models --json and repair its reported route")
+    choices = tuple(
+        agent for agent in PICKER_AGENTS
+        if any(isinstance(route, dict) and route_is_permitted(
+            model, route, [item for item in bindings if isinstance(item, dict)],
+            [item for item in resources if isinstance(item, dict)], args.qualification,
+        ) and route.get("agent") == agent for route in routes)
+    )
+    if not choices:
+        raise MonashError("selection_unavailable", f"No permitted native agent route is available for {model_id}",
+                          "run monash-foundry models --json and choose a compatible implemented route")
+    return choices
+
+
+def validate_remote_selection(args: argparse.Namespace) -> None:
+    try:
+        payload = model_catalogue_payload(args)
+    except MonashError as error:
+        if error.code == "model_choices_unavailable":
+            raise MonashError("selection_refused", "Monash Foundry refused the selected model or native agent",
+                              "run monash models or monash doctor, then choose a compatible qualified route") from error
+        raise
+    catalogue = [item for item in payload["models"] if isinstance(item, dict)]
+    model = next((item for item in catalogue if item.get("id") == args.model), None)
+    if model is None:
+        raise MonashError("selection_refused", "Monash Foundry refused the selected model or native agent",
+                          "run monash models or monash doctor, then choose a compatible qualified route")
+    routes = model.get("routes")
+    bindings = model.get("bindings")
+    resources = payload.get("resources")
+    if not isinstance(routes, list) or not isinstance(bindings, list) or not isinstance(resources, list):
+        raise MonashError("launcher_protocol_invalid", "Monash Foundry returned an incomplete route catalogue",
+                          "install the matching Monash Foundry snapshot and retry")
+    route = next((item for item in routes if isinstance(item, dict) and item.get("agent") == args.agent), None)
+    if not isinstance(route, dict) or not route_is_permitted(
+        model,
+        route,
+        [item for item in bindings if isinstance(item, dict)],
+        [item for item in resources if isinstance(item, dict)],
+        args.qualification,
+    ):
+        raise MonashError("selection_refused", "Monash Foundry refused the selected model or native agent",
+                          "run monash models or monash doctor, then choose a compatible qualified route")
+
+
+def pause_for_tty() -> None:
+    """Keep a transient Herdr picker pane readable after a refusal."""
+    if sys.stdin.isatty():
+        try:
+            input("Press Enter to close this pane. ")
+        except EOFError:
+            pass
+
+
+def default_profile(registry: HostProfileRegistry, remembered: dict[str, str]) -> str | None:
+    if remembered.get("host"):
+        try:
+            registry.get(remembered["host"])
+            return remembered["host"]
+        except HostProfileError:
+            pass
+    profiles = registry.list_profiles()
+    return profiles[0].profile_id if profiles else None
+
+
+def launch(args: argparse.Namespace) -> dict[str, object]:
+    registry = host_registry(args)
+    remembered = last_success()
+    if args.host is None or args.model is None or args.agent is None or args.cwd is None:
+        if args.no_input or not sys.stdin.isatty():
+            raise MonashError("selection_required", "launch needs host, model, agent, and cwd outside the picker",
+                              "pass all selection flags or run monash launch from a terminal", exit_code=2)
+        args.host = args.host or picker_choice("Host", tuple(profile.profile_id for profile in registry.list_profiles()),
+                                               default_profile(registry, remembered))
+        if args.host is None:
+            return {"schema_version": SCHEMA_VERSION, "command": "launch", "status": "cancelled"}
+        available_models = model_choices(args)
+        remembered_model = remembered.get("model")
+        model_default = remembered_model if remembered_model in available_models else available_models[0]
+        args.model = args.model or picker_choice("Model", available_models, model_default)
+        if args.model is None:
+            return {"schema_version": SCHEMA_VERSION, "command": "launch", "status": "cancelled"}
+        available_agents = permitted_agent_choices(args, args.model)
+        remembered_agent = remembered.get("agent")
+        agent_default = remembered_agent if remembered_agent in available_agents else available_agents[0]
+        args.agent = args.agent or picker_choice("Native agent", available_agents, agent_default)
+        if args.agent is None:
+            return {"schema_version": SCHEMA_VERSION, "command": "launch", "status": "cancelled"}
+        args.cwd = args.cwd or picker_value("Working directory", remembered.get("cwd", os.getcwd()))
+        if args.cwd is None:
+            return {"schema_version": SCHEMA_VERSION, "command": "launch", "status": "cancelled"}
+    receipt = SpawnCoordinator(args, registry).spawn()
+    receipt["command"] = "launch"
+    return receipt
+
+
+def doctor(args: argparse.Namespace) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    foundry_argv = [str(FOUNDRY)]
+    if args.config:
+        foundry_argv.extend(("--config", str(configuration_path(args))))
+    foundry_argv.append("check")
+    try:
+        launcher = subprocess.run(foundry_argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, check=False, timeout=15)
+        foundry_ready = launcher.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        foundry_ready = False
+    checks.append({"name": "foundry", "status": "ready" if foundry_ready else "failed",
+                   "repair": None if foundry_ready else "run monash-foundry check and repair its reported route"})
+    try:
+        host_registry(args)
+        checks.append({"name": "host_profiles", "status": "ready", "repair": None})
+    except MonashError as error:
+        checks.append({"name": "host_profiles", "status": "failed", "repair": error.repair})
+    try:
+        herdr("status")
+        checks.append({"name": "herdr", "status": "ready", "repair": None})
+    except MonashError:
+        checks.append({"name": "herdr", "status": "failed", "repair": "start Herdr and rerun monash doctor"})
+    status = "ready" if all(check["status"] == "ready" for check in checks) else "refused"
+    return {"schema_version": SCHEMA_VERSION, "command": "doctor", "status": status, "checks": checks}
+
+
+def models(args: argparse.Namespace) -> int:
+    argv = [str(FOUNDRY)]
+    if args.config:
+        argv.extend(("--config", str(configuration_path(args))))
+    argv.append("models")
+    if args.refresh:
+        argv.append("--refresh")
+    if args.json:
+        argv.append("--json")
+    return subprocess.run(argv, check=False).returncode
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(description=__doc__)
+    root.add_argument("--config", help="Monash Foundry config path")
+    commands = root.add_subparsers(dest="command", required=True)
+    model = commands.add_parser("models", help="show the deployed Monash catalogue")
+    model.add_argument("--refresh", action="store_true")
+    model.add_argument("--json", action="store_true")
+    launch_parser = commands.add_parser("launch", help="open the host, model, and agent picker")
+    spawn_parser = commands.add_parser("spawn", help="create one ready sibling native-agent pane")
+    for command, required in ((launch_parser, False), (spawn_parser, True)):
+        command.add_argument("--host", required=required, metavar="PROFILE_ID")
+        command.add_argument("--model", required=required)
+        command.add_argument("--agent", choices=("codex", "claude", "opencode"), required=required)
+        command.add_argument("--cwd", required=required)
+        command.add_argument("--remote-cwd", help="explicit absolute cwd on an SSH host profile")
+        command.add_argument("--pane")
+        command.add_argument("--qualification", action="store_true")
+        command.add_argument("--no-input", action="store_true")
+        command.add_argument("--verify", action="store_true", help="verify native session identity after one first turn")
+        command.add_argument("native_args", nargs=argparse.REMAINDER)
+    verify_parser = commands.add_parser("verify", help="verify native session identity after one first turn")
+    verify_parser.add_argument("target", help="live Herdr agent name or pane ID")
+    verify_parser.add_argument("--marker", help="existing absolute file for the harmless verification turn")
+    commands.add_parser("doctor", help="report concrete local Monash repairs")
+    return root
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        args = parser().parse_args(argv)
+        if args.command == "models":
+            return models(args)
+        if args.command == "doctor":
+            emit(doctor(args))
+            return 0
+        if args.command == "spawn":
+            emit(SpawnCoordinator(args, host_registry(args)).spawn())
+            return 0
+        if args.command == "verify":
+            emit(verify_agent(args, args.target))
+            return 0
+        if args.command == "launch":
+            emit(launch(args))
+            return 0
+        raise AssertionError("unreachable command")
+    except (KeyboardInterrupt, EOFError):
+        emit({"schema_version": SCHEMA_VERSION, "status": "cancelled"})
+        return 130
+    except MonashError as error:
+        response: dict[str, object] = {"schema_version": SCHEMA_VERSION, "status": "refused", "error": {
+            "code": error.code, "message": error.message, "repair": error.repair,
+        }}
+        if error.pane_id is not None:
+            response["pane_id"] = error.pane_id
+        if error.running_agent is not None:
+            response["running_agent"] = error.running_agent
+        if error.agent_observation is not None:
+            response["agent_observation"] = error.agent_observation
+        emit(response)
+        if "args" in locals() and getattr(args, "command", None) == "launch":
+            pause_for_tty()
+        return error.exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

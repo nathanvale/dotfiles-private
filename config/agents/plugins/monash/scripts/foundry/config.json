@@ -1,0 +1,757 @@
+{
+  "tenant": "ef7a487a-77ca-410a-803d-e426b62a587f",
+  "subscription": "monash-edu-smst-smstai-aiplus-dev-001",
+  "codex": {
+    "base_url": "https://monash-edu-esol-smst-ai-dev-gpt.openai.azure.com/openai/v1",
+    "deployment": "gpt-5.5",
+    "credential_ref": "op://API Credentials/AZURE_OPENAI_API_KEY_MONASH/credential"
+  },
+  "claude": {
+    "resource": "monash-edu-smst-ai-claude-code",
+    "opus": null,
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+    "sonnet5": "claude-sonnet-5-5"
+  },
+  "opencode": {
+    "resources": {
+      "gpt": {
+        "resource": "monash-edu-esol-smst-ai-dev-gpt",
+        "base_url": "https://monash-edu-esol-smst-ai-dev-gpt.services.ai.azure.com/openai/v1"
+      },
+      "claude": {
+        "resource": "monash-edu-smst-ai-claude-code",
+        "base_url": "https://monash-edu-smst-ai-claude-code.services.ai.azure.com/openai/v1"
+      }
+    },
+    "minimum_version": "1.18.27"
+  },
+  "host_profiles": {
+    "laptop": {
+      "transport": "local"
+    },
+    "mini": {
+      "transport": "ssh",
+      "ssh_alias": "mac-mini",
+      "herdr_session": "monash-foundry",
+      "remote_install_root": "/Users/server/.local/share/monash-foundry",
+      "herdr_executable": "/opt/homebrew/bin/herdr",
+      "path_mappings": [
+        {
+          "local_prefix": "/Users/nathanvale/code",
+          "remote_prefix": "/Users/server/code"
+        }
+      ]
+    }
+  },
+  "inventory": {
+    "schema_version": 1,
+    "snapshot_observed_at": "2026-09-09",
+    "snapshot_source": "projects/monash-foundry/proofs/foundry-launch-proof.md",
+    "resources": [
+      {
+        "id": "gpt",
+        "resource": "monash-edu-esol-smst-ai-dev-gpt",
+        "resource_group": "monash-edu-esol-smst-ai-dev",
+        "availability": "available",
+        "observed": true,
+        "error": null
+      },
+      {
+        "id": "claude",
+        "resource": "monash-edu-smst-ai-claude-code",
+        "resource_group": "monash-edu-smst-smstai-degreeworks-scribe",
+        "availability": "available",
+        "observed": true,
+        "error": null
+      }
+    ],
+    "models": [
+      {
+        "id": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "gpt-5.5",
+            "protocol": "azure-openai-responses",
+            "model_format": "OpenAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "gpt-5.5",
+            "protocol": "unverified",
+            "model_format": "OpenAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "gpt",
+            "reason": "Native inference and harmless file-read tool passed on laptop, 2026-09-09; other hosts require their own qualification.",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native_request",
+                "host": "laptop",
+                "reference": "proofs/foundry-launch-proof.md#native-bounded-requests"
+              },
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "Nathans-MacBook-Pro",
+                "reference": "vault:projects/monash-foundry/proofs/foundry-launch-proof.md@08a3308#native-selection-vertical-slices-9-september-2026"
+              }
+            ]
+          },
+          {
+            "agent": "claude",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "claude",
+            "reason": "Claude Messages protocol is not documented for the OpenAI model format",
+            "evidence": []
+          },
+          {
+            "agent": "opencode",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "no documented OpenCode route for GPT-5.5",
+            "evidence": []
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "display_name": "GPT-5.4 Nano",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "gpt-5.4-nano",
+            "protocol": "azure-openai-responses",
+            "model_format": "OpenAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "gpt",
+            "deployment": "gpt-5.4-nano",
+            "protocol": "azure-openai-chat-completions",
+            "model_format": "OpenAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "gpt-5-4-nano",
+            "protocol": "unverified",
+            "model_format": "OpenAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "candidate",
+            "binding_resource_id": "gpt",
+            "reason": "pinned Codex 0.153.4 catalogue lacks gpt-5.4-nano metadata",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "Claude Messages protocol is not documented for the OpenAI model format",
+            "evidence": []
+          },
+          {
+            "agent": "opencode",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "gpt",
+            "reason": "native OpenCode inference and harmless README file-read tool passed through the installed Monash launcher on laptop and Mini on 2026-09-10",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "laptop",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/gpt-5.4-nano-managed-laptop-9c2d50d0/receipt.json"
+              },
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "mini",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/gpt-5.4-nano-managed-mini-42f9a0c4/receipt.json"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "claude-sonnet-5",
+        "display_name": "Claude Sonnet 5",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "claude-sonnet-5",
+            "protocol": "unverified",
+            "model_format": "Anthropic",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "claude-sonnet-5",
+            "protocol": "azure-anthropic-messages",
+            "model_format": "Anthropic",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "Codex Responses protocol is not documented for the Anthropic model format",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "claude",
+            "reason": "Native inference and harmless file-read tool passed on laptop, 2026-09-09; other hosts require their own qualification.",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "Nathans-MacBook-Pro",
+                "reference": "vault:projects/monash-foundry/proofs/foundry-launch-proof.md@08a3308#native-selection-vertical-slices-9-september-2026"
+              }
+            ]
+          },
+          {
+            "agent": "opencode",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "no documented OpenCode route for Claude Sonnet 5",
+            "evidence": []
+          }
+        ]
+      },
+      {
+        "id": "claude-sonnet-4.6",
+        "display_name": "Claude Sonnet 4.6",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "claude-sonnet-4-6",
+            "protocol": "unverified",
+            "model_format": "Anthropic",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "claude-sonnet-4-6",
+            "protocol": "azure-anthropic-messages",
+            "model_format": "Anthropic",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "Codex Responses protocol is not documented for the Anthropic model format",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "claude",
+            "reason": "Native inference and harmless file-read tool passed on laptop, 2026-09-09; other hosts require their own qualification.",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native_request",
+                "host": "laptop",
+                "reference": "proofs/foundry-launch-proof.md#native-bounded-requests"
+              },
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "Nathans-MacBook-Pro",
+                "reference": "vault:projects/monash-foundry/proofs/foundry-launch-proof.md@08a3308#native-selection-vertical-slices-9-september-2026"
+              }
+            ]
+          },
+          {
+            "agent": "opencode",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "no documented OpenCode route for Claude Sonnet 4.6",
+            "evidence": []
+          }
+        ]
+      },
+      {
+        "id": "claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "claude-haiku-4-5",
+            "protocol": "unverified",
+            "model_format": "Anthropic",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "claude-haiku-4-5",
+            "protocol": "azure-anthropic-messages",
+            "model_format": "Anthropic",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "Codex Responses protocol is not documented for the Anthropic model format",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "claude",
+            "reason": "Native inference and harmless file-read tool passed on laptop, 2026-09-09; other hosts require their own qualification.",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "Nathans-MacBook-Pro",
+                "reference": "vault:projects/monash-foundry/proofs/foundry-launch-proof.md@08a3308#native-selection-vertical-slices-9-september-2026"
+              }
+            ]
+          },
+          {
+            "agent": "opencode",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "no documented OpenCode route for Claude Haiku 4.5",
+            "evidence": []
+          }
+        ]
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "display_name": "DeepSeek V4 Pro",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "DeepSeek-V4-Pro",
+            "protocol": "unverified",
+            "model_format": "DeepSeek",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "gpt",
+            "deployment": "DeepSeek-V4-Pro",
+            "protocol": "azure-openai-chat-completions",
+            "model_format": "DeepSeek",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "DeepSeek-V4-Pro",
+            "protocol": "unverified",
+            "model_format": "DeepSeek",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "wire protocol is unverified for DeepSeek V4 Pro",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "wire protocol is unverified for DeepSeek V4 Pro",
+            "evidence": []
+          },
+          {
+            "agent": "opencode",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "gpt",
+            "reason": "native OpenCode inference and harmless README file-read tool passed through the installed Monash launcher on laptop and Mini on 2026-09-10",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "laptop",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/deepseek-v4-pro-managed-laptop-4b555364/receipt.json"
+              },
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "mini",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/deepseek-v4-pro-managed-mini-fae5b24b/receipt.json"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "display_name": "DeepSeek V4 Flash",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "DeepSeek-V4-Flash",
+            "protocol": "unverified",
+            "model_format": "DeepSeek",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "gpt",
+            "deployment": "DeepSeek-V4-Flash",
+            "protocol": "azure-openai-chat-completions",
+            "model_format": "DeepSeek",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "DeepSeek-V4-Flash",
+            "protocol": "unverified",
+            "model_format": "DeepSeek",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "wire protocol is unverified for DeepSeek V4 Flash",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "wire protocol is unverified for DeepSeek V4 Flash",
+            "evidence": []
+          },
+          {
+            "agent": "opencode",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "gpt",
+            "reason": "native OpenCode inference and harmless README file-read tool passed through the installed Monash launcher on laptop and Mini on 2026-09-10",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "laptop",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/deepseek-v4-flash-managed-laptop-896f1286/receipt.json"
+              },
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "mini",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/deepseek-v4-flash-managed-mini-e4433d85/receipt.json"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "display_name": "Kimi K2.7 Code",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "Kimi-K2.7-Code",
+            "protocol": "unverified",
+            "model_format": "MoonshotAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "gpt",
+            "deployment": "Kimi-K2.7-Code",
+            "protocol": "azure-openai-chat-completions",
+            "model_format": "MoonshotAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          },
+          {
+            "resource_id": "claude",
+            "deployment": "Kimi-K2.7-Code",
+            "protocol": "unverified",
+            "model_format": "MoonshotAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "wire protocol is unverified for Kimi K2.7 Code",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "gpt",
+            "reason": "wire protocol is unverified for Kimi K2.7 Code",
+            "evidence": []
+          },
+          {
+            "agent": "opencode",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "gpt",
+            "reason": "native OpenCode inference and harmless README file-read tool passed through the integrated laptop launcher on 2026-09-09 and the installed Mini route on 2026-09-10",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "laptop",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/kimi-k2.7-managed-laptop-6752d771/receipt.json"
+              },
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "mini",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/kimi-k2.7-code-managed-mini-2631c50d/receipt.json"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "kimi-k2.6",
+        "display_name": "Kimi K2.6",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "claude",
+            "deployment": "Kimi-K2.6",
+            "protocol": "azure-openai-chat-completions",
+            "model_format": "MoonshotAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "model is not deployed in the GPT resource",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": "claude",
+            "reason": "wire protocol is unverified for Kimi K2.6",
+            "evidence": []
+          },
+          {
+            "agent": "opencode",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "claude",
+            "reason": "native OpenCode inference and harmless README file-read tool passed through the installed Monash launcher on laptop and Mini on 2026-09-10",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "laptop",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/kimi-k2.6-managed-laptop-9a3474dc/receipt.json"
+              },
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "mini",
+                "reference": "receipt:my-second-brain-playground/monash-foundry/integrated-opencode-qualification/kimi-k2.6-managed-mini-9a690eb0/receipt.json"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "gpt-6.1-sol",
+        "display_name": "GPT-6.1 Sol",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "gpt",
+            "deployment": "gpt-6.1-sol",
+            "protocol": "azure-openai-responses",
+            "model_format": "OpenAI",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "gpt",
+            "reason": "Deployment gpt-6.1-sol (OpenAI, version 2026-09-29, Succeeded) observed on the GPT resource by az on 2026-11-01; Codex 0.165.0 lists the model with high among its reasoning levels; native Codex qualification is pending.",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "model is not deployed in the Claude resource",
+            "evidence": []
+          },
+          {
+            "agent": "opencode",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "no documented OpenCode route for GPT-6.1 Sol",
+            "evidence": []
+          }
+        ]
+      }
+    ]
+  }
+}
