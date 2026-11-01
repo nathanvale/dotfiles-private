@@ -12,6 +12,7 @@ import { figmaAdapter } from "../../skills/figma/adapter.ts";
 import { firecrawlAdapter } from "../../skills/firecrawl/adapter.ts";
 import { mermaidAdapter } from "../../skills/mermaid/adapter.ts";
 import { notionAdapter } from "../../skills/notion/adapter.ts";
+import { notebooklmAdapter } from "../../skills/notebooklm/adapter.ts";
 import type { Adapter } from "./contract.ts";
 import { challengeAuthAdapter } from "./challenge-auth.ts";
 import { testAuthAdapter } from "./test-auth.ts";
@@ -24,6 +25,7 @@ export const ADAPTERS: Readonly<Record<string, Adapter>> = {
 	[firecrawlAdapter.id]: firecrawlAdapter,
 	[mermaidAdapter.id]: mermaidAdapter,
 	[notionAdapter.id]: notionAdapter,
+	[notebooklmAdapter.id]: notebooklmAdapter,
 	[challengeAuthAdapter.id]: challengeAuthAdapter,
 	[testAuthAdapter.id]: testAuthAdapter,
 };

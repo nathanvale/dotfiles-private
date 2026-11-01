@@ -1,0 +1,28 @@
+{
+  "imports": [],
+  "mcpServers": {
+    "notebooklm-connectors": {
+      "description": "NotebookLM vendor-managed stdio profile, admitted operations with enforced output projections",
+      "command": "../../../bin/connectors",
+      "args": [
+        "__internal",
+        "notebooklm",
+        "provider"
+      ],
+      "env": {
+        "CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+      },
+      "allowedTools": [
+        "notebook_list",
+        "notebook_get",
+        "notebook_describe",
+        "notebook_rename",
+        "server_info",
+        "source_rename",
+        "source_describe",
+        "source_get_content",
+        "studio_status"
+      ]
+    }
+  }
+}
