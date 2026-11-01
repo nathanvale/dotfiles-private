@@ -215,6 +215,7 @@ export type CustodyResolution =
 
 export interface Adapter {
 	readonly id: string;
+	readonly privateInput?: "staged";
 	readonly internalRoles?: Readonly<Record<string, InternalRole>>;
 	attemptAuth?(manifest: ConnectorManifest): Promise<AuthAttempt>;
 	resolveCustody?(request: SchemaRequest): CustodyResolution;

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { record } from "../scripts/catalogue.ts";
 import { API_ORIGIN } from "../scripts/endpoint.ts";
@@ -41,7 +41,7 @@ const ANSWER = {
 	},
 	usage: { input_tokens: 41, output_tokens: 17 },
 };
-type Mode = "extras" | "oversized" | "hold" | "success" | "http-429" | "http-529" | "http-500" | "malformed" | "mismatch" | "timeout";
+type Mode = "extras" | "probability-collision" | "oversized" | "hold" | "success" | "http-429" | "http-529" | "http-500" | "malformed" | "mismatch" | "timeout";
 async function fixture(
 	body: (context: {
 		machine: JevMachine;
@@ -97,6 +97,7 @@ async function fixture(
             if (mode === "hold") await held;
             if (mode === "oversized") return new Response("x".repeat(2 * 1024 * 1024 + 1));
             if (mode === "extras") return Response.json({ ...ANSWER, private_extra: "SENTINEL_REPLY_EXTRA", answers: { fruit: { ...ANSWER.answers.fruit, hidden: "SENTINEL_REPLY_EXTRA" }, yes: { ...ANSWER.answers.yes, hidden: "SENTINEL_REPLY_EXTRA" } } });
+            if (mode === "probability-collision") return Response.json({ ...ANSWER, answers: { ...ANSWER.answers, fruit: { ...ANSWER.answers.fruit, probabilities: { "apple\u0000pear": 1 } } } });
 			if (mode.startsWith("http-"))
 				return new Response("secret error body must never be echoed", {
 					status: Number(mode.slice(5)),
@@ -309,12 +310,64 @@ qualifiedTest("JEV surviving reserved/sending receipts block replay and malforme
 	});
 }, 30000);
 
+qualifiedTest("JEV rejects delimiter-colliding probability names and blocks replay", async () => {
+	await fixture(async ({ run, requests, mode, machine }) => {
+		mode("probability-collision");
+		const result = await run(infer());
+		expect(result.causeCode).toBe("DOMAIN_INFERENCE_UNKNOWN");
+		expect(result.transactionState).toBe("unknown");
+		const saved = JSON.parse(readFileSync(path.join(machine.state, "connectors/jev/inferences", `${String(result.data?.runId)}.json`), "utf8"));
+		expect(saved.status).toBe("unknown");
+		expect((await run(infer())).data?.connectorCause).toBe("inference-replay-blocked");
+		expect(requests).toHaveLength(1);
+	});
+}, 30000);
+
+test("JEV empty recovery is read-only and unreadable or malformed ledgers refuse", async () => {
+	await fixture(async ({ run, machine, requests }) => {
+		const before = readdirSync(machine.state, { recursive: true });
+		const result = await run(["recover", "jev"]);
+		expect(result).toMatchObject({ causeCode: "SUCCESS_UNCHANGED", exitCode: 0, transactionState: "unchanged", data: { receipts: [], remoteOutcomeResolved: false, replayPermitted: false } });
+		expect(readdirSync(machine.state, { recursive: true })).toEqual(before);
+		const directory = path.join(machine.state, "connectors/jev/inferences");
+		mkdirSync(directory, { recursive: true, mode: 0o700 });
+		chmodSync(directory, 0o000);
+		try {
+			expect((await run(["recover", "jev"])).data?.connectorCause).toBe("ledger-unavailable");
+		} finally {
+			chmodSync(directory, 0o700);
+		}
+		writeFileSync(path.join(directory, `ji-${"a".repeat(64)}.json`), "{malformed", { mode: 0o600 });
+		expect((await run(["recover", "jev"])).data?.connectorCause).toBe("ledger-unavailable");
+		expect(machine.lines("op-calls.jsonl")).toEqual([]);
+		expect(requests).toEqual([]);
+	}, false);
+}, 30000);
+
 const PRIVATE_MARKER = "SENTINEL_PRIVATE_EMAIL_EXCERPT";
 function privateFile(machine: JevMachine, input: unknown = { ...INPUT, state: { text: PRIVATE_MARKER } }): string {
  const file = path.join(machine.root, "private-input.json");
  writeFileSync(file, JSON.stringify(input), { mode: 0o600 });
  return file;
 }
+
+test("private input refuses adapters without qualified private transport before capability", async () => {
+	await fixture(async ({ run, machine, requests }) => {
+		const input = { query: PRIVATE_MARKER, libraryName: "react" };
+		const file = privateFile(machine, input);
+		const before = readdirSync(machine.state, { recursive: true });
+		for (const connector of ["context7", "firecrawl", "notebooklm"]) {
+			for (const source of [file, "-"]) {
+				const result = await run(["run", connector, "resolve-library-id", "--input-file", source], source === "-" ? JSON.stringify(input) : undefined);
+				expect(result).toMatchObject({ causeCode: "SCHEMA_ADAPTER_REFUSED", exitCode: 4, transactionState: "unchanged", data: { connector, connectorCause: "private-input-not-supported" } });
+				expect(result.effects).toMatchObject({ completed: [], uncertain: [] });
+			}
+		}
+		expect(readdirSync(machine.state, { recursive: true })).toEqual(before);
+		expect(machine.lines("op-calls.jsonl")).toEqual([]);
+		expect(requests).toEqual([]);
+	}, false);
+}, 30000);
 qualifiedTest("JEV private file input reaches the provider without a payload in any process arguments", async () => {
  await fixture(async ({ run, mode, machine, requests, seen, release }) => {
   mode("hold");
@@ -406,7 +459,7 @@ test("run discovery declares private file or stdin without acquiring capability"
   const command = result.data?.command;
   if (!record(command) || !Array.isArray(command.input)) throw new Error("run command discovery missing");
   expect(command.effectClass).toBe("external");
-  expect(command.input.find((entry) => record(entry) && entry.token === "--input-file")).toEqual({ position: 4, kind: "option", token: "--input-file", value: { type: "string" }, required: false, repeatable: false, onlyWhen: "instead of --input" });
+  expect(command.input.find((entry) => record(entry) && entry.token === "--input-file")).toEqual({ position: 4, kind: "option", token: "--input-file", value: { type: "string" }, required: false, repeatable: false, onlyWhen: "adapter declares private input; instead of --input" });
   expect(requests).toHaveLength(0);
  }, false);
 }, 30000);

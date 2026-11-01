@@ -105,6 +105,7 @@ function run(request: SchemaRequest, operation: string, input: Readonly<Record<s
 }
 export const jevAdapter: Adapter = {
 	id: "jev",
+	privateInput: "staged",
 	prepare(request) {
         try {
             const actual: unknown = JSON.parse(readFileSync(path.join(request.skillsRoot, "jev/config/mcporter.json"), "utf8"));

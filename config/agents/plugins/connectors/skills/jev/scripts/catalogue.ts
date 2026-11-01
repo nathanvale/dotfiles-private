@@ -93,7 +93,7 @@ function answer(value: unknown, asked: Question): value is Answer {
 	)
 		return false;
 	return (
-		Object.keys(value.probabilities).sort().join("\0") === Object.keys(asked.criteria).sort().join("\0") &&
+		JSON.stringify(Object.keys(value.probabilities).sort()) === JSON.stringify(Object.keys(asked.criteria).sort()) &&
 		Object.values(value.probabilities).every(probability)
 	);
 }
@@ -108,7 +108,7 @@ export function inferenceResponse(value: unknown, input: InferenceInput, request
 		!tokens(value.usage.output_tokens)
 	)
 		return null;
-	if (Object.keys(value.answers).sort().join("\0") !== Object.keys(input.questions).sort().join("\0")) return null;
+	if (JSON.stringify(Object.keys(value.answers).sort()) !== JSON.stringify(Object.keys(input.questions).sort())) return null;
 	const answers: [string, Answer][] = [];
 	for (const [name, asked] of Object.entries(input.questions)) {
 		const valueAnswer = value.answers[name];

@@ -92,11 +92,12 @@ export function claimSend(env: EnvironmentSource, input: InferenceInput): Receip
 	return save(env, sending) ? sending : null;
 }
 export function receipts(env: EnvironmentSource): Receipt[] | null {
+	let names: string[];
 	try {
-		const names = readdirSync(directory(env)).filter((name) => name.endsWith(".json"));
-		const values = names.map((name) => receipt(env, name.slice(0, -5)));
-		return values.every((value): value is Receipt => value !== null) ? values : null;
-	} catch {
-		return null;
+		names = readdirSync(directory(env)).filter((name) => name.endsWith(".json"));
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "ENOENT" ? [] : null;
 	}
+	const values = names.map((name) => receipt(env, name.slice(0, -5)));
+	return values.every((value): value is Receipt => value !== null) ? values : null;
 }

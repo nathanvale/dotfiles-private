@@ -99,6 +99,7 @@ describe("compiled front door: discovery", () => {
 		expect(result.stdout).toContain("--discover --json");
 		expect(result.stdout).toContain("--discover-command <identity> --json");
 		expect(result.stdout).toContain("--help");
+		expect(result.stdout).toContain("Private input requires an adapter with staged transport");
 		expect(result.stdout).toContain("deps status [tool]");
 		expect(result.stdout).toContain("deps repair <tool> --preview");
 		expect(result.stdout).toContain("deps repair <tool> --apply <previewId>");

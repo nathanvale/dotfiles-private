@@ -208,7 +208,7 @@ const runInput = (write: "--preview" | "--apply" | null): InputElement[] => [
 	selectAt(2),
 	positional(3, "operation", { type: "string", source: "connectors.schema" }),
 	option(4, "--input", JSON_OBJECT, write !== null),
- ...(write === null ? [option(4, "--input-file", { type: "string" }, false, { onlyWhen: "instead of --input" })] : []),
+ ...(write === null ? [option(4, "--input-file", { type: "string" }, false, { onlyWhen: "adapter declares private input; instead of --input" })] : []),
 	...(write === "--preview" ? [option(4, "--preview", null, true)] : write === "--apply" ? [option(4, "--apply", { type: "string", source: "connectors.run.preview" }, true)] : []),
 ];
 const recoverInput = (tail: readonly InputElement[]): InputElement[] => [word(0, "recover"), connectorAt(1), selectAt(2), ...tail];
@@ -1192,7 +1192,7 @@ function helpText(): string {
 		"  auth login <connector> [--select name=value ...] [--no-browser] [--reset]",
 		"                                                  Print the consent URL instead of opening a browser; clear the cached grant first",
 		"  run <connector> [--select name=value] <operation> [--input <json-object> | --input-file <path|->]",
- "                                                  Private input: owned 0600 regular file or non-TTY stdin, at most 256 KiB",
+ "                                                  Private input requires an adapter with staged transport: owned 0600 regular file or non-TTY stdin, at most 256 KiB",
 		"                                                  Run one declared read or paid inference through MCPorter",
 		"  run <connector> [--select name=value] <write-operation> --input <json-object> --preview",
 		"                                                  Record a durable preview of one write; nothing is sent",
@@ -2196,6 +2196,7 @@ interface AdapterCommand {
 	readonly id: string;
 	readonly given: ReadonlyMap<string, string>;
 	readonly action: CommandAction;
+	readonly privateInputSource?: "file" | "stdin";
 }
 
 type TransportPlan = Extract<Prepared, { kind: "transport" }>;
@@ -2313,6 +2314,10 @@ function parseRunOptions(after: readonly string[]): RunOptions | null {
  }
  return phase !== null && input.kind === "private" ? null : { input, phase };
 }
+function privateInputProvenance(input: RunInput): Pick<AdapterCommand, "privateInputSource"> {
+ if (input.kind !== "private") return {};
+ return { privateInputSource: input.file === "-" ? "stdin" : "file" };
+}
 type RunCommand = { kind: "ready"; command: AdapterCommand } | { kind: "private-refused"; command: AdapterCommand };
 async function parseRunArgs(args: readonly string[]): Promise<RunCommand | null> {
  const [id, ...rest] = args; const given = new Map<string, string>();
@@ -2322,7 +2327,7 @@ async function parseRunArgs(args: readonly string[]): Promise<RunCommand | null>
  const input = options.input.kind === "inline" ? options.input.value : options.input.kind === "private" ? parseInputObject((await readPrivateInput(options.input.file)) ?? undefined) : null;
  const phase = options.phase;
  const command: AdapterCommand = phase === null
-  ? { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input } }
+  ? { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input }, ...privateInputProvenance(options.input) }
   : { commandIdentity: phase.kind === "preview" ? "connectors.run.preview" : "connectors.run.apply", id, given, action: { kind: "write", operation, input, phase } };
  return { kind: options.input.kind === "private" && input === null ? "private-refused" : "ready", command };
 }
@@ -2393,6 +2398,10 @@ function prepareThroughAdapter(command: AdapterCommand, manifest: ConnectorManif
 	const adapter = manifest.adapter === null ? undefined : ADAPTERS[manifest.adapter];
 	if (!adapter) {
 		emitRefusal(command.commandIdentity, `${PROGRAM}: ${command.id} declares no packaged adapter`, "DOMAIN_ADAPTER_NOT_DECLARED", "Use a connector whose manifest declares a packaged adapter", "connectors.list");
+		return null;
+	}
+	if (command.privateInputSource !== undefined && adapter.privateInput !== "staged") {
+		emitAdapterRefusal(command, { kind: "schema", connectorCause: "private-input-not-supported", repair: "Use a connector whose packaged adapter declares staged private input transport" });
 		return null;
 	}
 	if (command.action.kind === "schema" && !adapter.prepareSchema) {
