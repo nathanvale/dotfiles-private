@@ -208,7 +208,7 @@ const runInput = (write: "--preview" | "--apply" | null): InputElement[] => [
 	selectAt(2),
 	positional(3, "operation", { type: "string", source: "connectors.schema" }),
 	option(4, "--input", JSON_OBJECT, write !== null),
- ...(write === null ? [option(4, "--input-file", { type: "string", source: "owned 0600 JSON file, or - for non-TTY stdin; mutually exclusive with --input; 256 KiB maximum" }, false)] : []),
+ ...(write === null ? [option(4, "--input-file", { type: "string" }, false, { onlyWhen: "instead of --input" })] : []),
 	...(write === "--preview" ? [option(4, "--preview", null, true)] : write === "--apply" ? [option(4, "--apply", { type: "string", source: "connectors.run.preview" }, true)] : []),
 ];
 const recoverInput = (tail: readonly InputElement[]): InputElement[] => [word(0, "recover"), connectorAt(1), selectAt(2), ...tail];
@@ -366,7 +366,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{
 		commandIdentity: "connectors.run",
 		route: ["run"],
-		effectClass: "repository-local",
+		effectClass: "external",
 		summary: "Run a declared read or paid inference; uncertain inference is inspect-only through recover and cannot be replayed",
 		usage: "run <connector> [--select name=value ...] <operation> [--input <json-object> | --input-file <path|->]",
 		input: runInput(null),

@@ -403,6 +403,10 @@ qualifiedTest("JEV oversized reply remains unknown and never replays", async () 
 test("run discovery declares private file or stdin without acquiring capability", async () => {
  await fixture(async ({ run, requests }) => {
   const result = await run(["--discover-command", "connectors.run", "--json"]);
-  expect(JSON.stringify(result.data)).toContain("--input-file"); expect(requests).toHaveLength(0);
+  const command = result.data?.command;
+  if (!record(command) || !Array.isArray(command.input)) throw new Error("run command discovery missing");
+  expect(command.effectClass).toBe("external");
+  expect(command.input.find((entry) => record(entry) && entry.token === "--input-file")).toEqual({ position: 4, kind: "option", token: "--input-file", value: { type: "string" }, required: false, repeatable: false, onlyWhen: "instead of --input" });
+  expect(requests).toHaveLength(0);
  }, false);
 }, 30000);
