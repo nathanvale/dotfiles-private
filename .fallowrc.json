@@ -64,6 +64,7 @@
     "maxCrap": 0
   },
   "entry": [
+    "bin/system/people-pilot-cleanup.py",
     "bin/dotfiles/herdr-defaults.py",
     "bin/model-selection-preflight",
     "bin/teams/teams-scraper.ts",
