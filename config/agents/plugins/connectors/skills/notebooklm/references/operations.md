@@ -6,47 +6,36 @@ The catalogue snapshot was obtained from vendor `notebooklm-mcp-cli` 0.15.8.
 [Upstream source](https://github.com/jacob-bd/gemini-notebook-mcp-cli) owns the
 vendor protocol. New versions require schema and reply qualification.
 
-## Rename a notebook or source
+## Admitted reads
 
-`notebook_rename` takes `notebook_id` and `new_title`. `source_rename` also
-takes `source_id`, whose membership is checked in that exact notebook.
+The exact seven admitted operations are `server_info`, `notebook_list`,
+`notebook_get`, `notebook_describe`, `source_describe`, `source_get_content`
+and `studio_status`. Use their schemas for required targets and limits.
+Readiness does not enumerate notebooks. Describe suggestions contain
+`question` and `prompt` fields; output projections discard extra vendor fields.
 
-1. Confirm the user's authority covers that target and rename.
-2. Run the operation with `--preview`. Review its target and expiry against the
-   requested input. Previews expire after 15 minutes. The journal stores hashes
-   and identifiers, not titles, source content, cookies or raw replies.
-3. Run it with `--apply PREVIEW_ID` and the identical `--input` and profile.
-   A changed notebook or source inventory invalidates the preview.
-4. Report success only after read-back proves the requested title. One preview
-   dispatches at most once. A repeated apply refuses, including after success.
+## Withheld renames
 
-Profile writes are serialized. An unresolved receipt blocks further writes
-through that profile. Do not reauthenticate a profile as a different Google
-account while it holds previews or unresolved receipts. The connector does
-not claim account identity isolation against a separately modified vendor
-profile or direct vendor operations.
+`notebook_rename` and `source_rename` are blocked. Vendor 0.15.8 automatically
+retries their RPCs after HTTP 5xx responses. Its public rename tools expose no
+setting to disable that replay; `NOTEBOOKLM_RATE_LIMIT_MAX_RETRIES=0` controls
+rate limits only. An uncertain rename could be sent again after an intervening
+edit, so a local receipt cannot establish at-most-once dispatch.
 
-## Unknown outcome
+Nathan chose to keep reads and withhold renames until a non-replaying vendor
+route is qualified. Ordinary rename calls return `capability-not-qualified`.
+Preview, apply and recovery use the Front Door's `adapter-has-no-writes`
+refusal. This release creates no NotebookLM write journal or receipts. No live
+writes were attempted by the candidate that preceded this restriction.
 
-`recover notebooklm --select profile=PROFILE` lists unresolved receipts.
-Add `--run RUN_ID` to inspect one. Add `--adjudicate --input '{}'` to inspect
-only its bound notebook/source and settle a proved rename. Recovery never
-sends the write again. An old title does not prove a timed-out write cannot
-land later, so insufficient evidence leaves the receipt unresolved.
-
-`--unlock` only removes a lock whose recorded process is proven absent. It
-does not settle a receipt or authorize replay. A malformed journal blocks
-writes until its storage integrity is restored.
-
-## Explicit qualification gaps
+## Other qualification gaps
 
 Notebook creation/deletion, adding/deleting/synchronizing sources, sharing,
 chat queries and configuration, labels, notes, research, batch/pipeline work,
-generation and revision, downloads and exports remain `blocked` in the
+generation and revision, downloads and exports remain unadmitted in the
 capability catalogue. Each needs an exact input policy, validated output
 projection and effect-specific recovery proof before admission. Token
 ingestion and MCP authentication refresh remain forbidden.
 
-The restored skill supports the qualified read and rename routes. A schema
-snapshot does not prove authentication, live reads, live writes, generation,
-exports or activation in another machine's agent harness.
+A schema snapshot does not prove authentication, live reads, live writes,
+generation, exports or activation in another machine's agent harness.

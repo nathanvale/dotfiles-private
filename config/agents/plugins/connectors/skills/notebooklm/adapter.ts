@@ -1,15 +1,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterRequest, Executed, Prepared, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
+import type { Adapter, AdapterRequest, Executed, Prepared, SchemaRequest } from "../../bin/adapters/contract.ts";
 import registry from "./config/mcporter.json";
-import { openJournal, PREVIEW_ID, RUN_ID } from "./scripts/journal.ts";
 import { admittedNames, CATALOGUE, hash, inputFor, operation, record } from "./scripts/policy.ts";
 import { runProvider } from "./scripts/provider.ts";
 import { caller, type Caller } from "./scripts/transport.ts";
-import { adjudicate, refusal, write } from "./scripts/writes.ts";
 
 const REPAIR = "Use connectors schema notebooklm for the admitted operations and exact input; unsupported workflows remain blocked";
 const refused = (cause: string, repair = REPAIR): Prepared => ({ kind: "refused", refusal: { kind: "domain", connectorCause: cause, repair } });
+const refusal = (cause: string, repair = REPAIR): Executed => ({ kind: "refused", refusal: { kind: "domain", connectorCause: cause, repair } });
 function checked<T extends SchemaRequest>(prepare: (request: T) => Prepared): (request: T) => Prepared {
 	return (request) => {
 		try {
@@ -45,7 +44,6 @@ function prepare(request: AdapterRequest): Prepared {
 	const spec = operation(name);
 	if (!spec) return refused("operation-not-allowed");
 	if (spec.admission !== "admitted") return refused(spec.effect === "auth-forbidden" ? "auth-tool-forbidden" : "capability-not-qualified");
-	if (spec.effect === "write") return refused("write-needs-preview", "Review a --preview, then --apply its one-use preview ID with identical input");
 	const args = inputFor(name, input);
 	if (args === null) return { kind: "refused", refusal: { kind: "schema", connectorCause: "input-invalid", repair: REPAIR } };
 	if (name === "server_info") return readiness(request);
@@ -75,33 +73,7 @@ function prepareSchema(request: SchemaRequest): Prepared {
 		return { kind: "success", data: { vendorVersion: CATALOGUE.vendorVersion, compatible: true, operations: CATALOGUE.operations } };
 	}, false);
 }
-function prepareWrite(request: WriteRequest): Prepared {
-	const spec = operation(request.operation);
-	if (!spec || spec.admission !== "admitted") return refused("capability-not-qualified");
-	if (spec.effect !== "write") return refused("read-takes-no-phase");
-	const args = inputFor(request.operation, request.input);
-	if (args === null) return { kind: "refused", refusal: { kind: "schema", connectorCause: "input-invalid", repair: REPAIR } };
-	if (request.phase.kind === "apply" && !PREVIEW_ID.test(request.phase.previewId)) return refused("preview-unknown");
-	return execute(request, (client) => write(request, args, client, openJournal(request.env, request.selectors.profile ?? "default")));
-}
-function prepareRecover(request: RecoverRequest): Prepared {
-	if (request.runId !== null && !RUN_ID.test(request.runId)) return refused("run-unknown");
-	const local = async (client?: Caller): Promise<Executed> => {
-		const journal = openJournal(request.env, request.selectors.profile ?? "default");
-		if (!journal) return refusal("journal-unavailable");
-		const all = journal.all();
-		if (all === null) return refusal("journal-corrupt");
-		if (request.runId === null) return { kind: "success", data: { receipts: all.filter((item) => item.status !== "completed") } };
-		const receipt = journal.receipt(request.runId);
-		if (!receipt) return refusal("run-unknown");
-		if (request.recovery.kind === "unlock") return journal.unlock() ? { kind: "recorded", effect: "write-unlock", data: { unlocked: true, runId: receipt.runId } } : refusal("holder-live-or-invalid");
-		if (client && request.recovery.kind === "adjudicate") return adjudicate(receipt, client, journal);
-		return { kind: "success", data: { receipt } };
-	};
-	if (request.recovery.kind === "adjudicate") return Object.keys(request.recovery.input).length === 0 ? execute(request, local) : refused("recovery-input-invalid", "Adjudication takes an empty --input object and only reads the receipt's bound target");
-	return { kind: "execute", execute: () => local() };
-}
 export const notebooklmAdapter: Adapter = {
-	id: "notebooklm", internalRoles: { provider: { run: runProvider } }, prepare: checked(prepare), prepareSchema: checked(prepareSchema), prepareWrite: checked(prepareWrite), prepareRecover: checked(prepareRecover),
+	id: "notebooklm", internalRoles: { provider: { run: runProvider } }, prepare: checked(prepare), prepareSchema: checked(prepareSchema),
 	resolveCustody: () => ({ kind: "resolved", effective: null, notYetEffective: { mode: "vendor-managed-profile", source: "packaged-config:vendor-profile" }, subject: null }),
 };

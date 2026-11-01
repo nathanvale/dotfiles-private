@@ -52,6 +52,15 @@ function listing(value: Record<string, unknown>): Record<string, unknown> | null
 	const notebooks = summaries(value.notebooks);
 	return notebooks === null ? null : { notebooks, returned: notebooks.length };
 }
+function description(value: Record<string, unknown>): Record<string, unknown> | null {
+	if (!string(value.summary) || !Array.isArray(value.suggested_topics) || value.suggested_topics.length > 1000) return null;
+	const topics: { question: string; prompt: string }[] = [];
+	for (const topic of value.suggested_topics) {
+		if (!record(topic) || !string(topic.question) || !string(topic.prompt)) return null;
+		topics.push({ question: topic.question, prompt: topic.prompt });
+	}
+	return { summary: value.summary, suggested_topics: topics };
+}
 function sourceContent(value: Record<string, unknown>): Record<string, unknown> | null {
 	return string(value.content) && string(value.title) && string(value.source_type) && count(value.char_count) ? { content: value.content, title: value.title, source_type: value.source_type, char_count: value.char_count } : null;
 }
@@ -59,12 +68,10 @@ const PROJECTIONS: Record<string, (value: Record<string, unknown>) => Record<str
 	server_info: readiness,
 	notebook_get: notebook,
 	notebook_list: listing,
-	notebook_describe: (value) => string(value.summary) && strings(value.suggested_topics) ? { summary: value.summary, suggested_topics: value.suggested_topics } : null,
+	notebook_describe: description,
 	source_describe: (value) => string(value.summary) && strings(value.keywords) ? { summary: value.summary, keywords: value.keywords } : null,
 	source_get_content: sourceContent,
 	studio_status: studio,
-	notebook_rename: (value) => string(value.notebook_id) && string(value.new_title) ? { notebook_id: value.notebook_id, new_title: value.new_title } : null,
-	source_rename: (value) => string(value.source_id) && string(value.new_title) ? { source_id: value.source_id, new_title: value.new_title } : null,
 };
 export function project(name: string, raw: unknown): Record<string, unknown> | null {
 	const value = decode(raw);

@@ -16,9 +16,7 @@
         "notebook_list",
         "notebook_get",
         "notebook_describe",
-        "notebook_rename",
         "server_info",
-        "source_rename",
         "source_describe",
         "source_get_content",
         "studio_status"

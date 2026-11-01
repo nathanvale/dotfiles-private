@@ -1,6 +1,6 @@
 // Independent vendor protocol fixture. Literal tool schemas and outcomes do
 // not import the production catalogue, validators, projections or journal.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
 
@@ -27,13 +27,6 @@ const tools = [
 	{ name: "source_rename", inputSchema: schema({ notebook_id: text, source_id: text, new_title: text }, ["notebook_id", "source_id", "new_title"]) },
 	{ name: "studio_status", inputSchema: schema({ notebook_id: text, action: text, artifact_id: optionalText, new_title: optionalText, include_details: boolean, limit: { type: "integer" }, offset: { type: "integer" } }, ["notebook_id"]) },
 ];
-function rename(name: string, args: Record<string, unknown>, value: State): unknown {
-	if (name === "notebook_rename") value.title = String(args.new_title);
-	else value.sourceTitle = String(args.new_title);
-	writeFileSync(state, JSON.stringify(value));
-	if (value.mode === "lost-reply") process.exit(1);
-	return { status: "success", notebook_id: id, source_id: sourceId, new_title: args.new_title, extra: "SENTINEL_REPLY_CREDENTIAL" };
-}
 function call(name: string, args: Record<string, unknown>): unknown {
 	const value = load();
 	appendFileSync(log, `${JSON.stringify({ name, args, profile: process.env.NLM_PROFILE, debug: process.env.NOTEBOOKLM_MCP_DEBUG, ambient: process.env.PRIVATE_SENTINEL !== undefined })}\n`);
@@ -42,11 +35,10 @@ function call(name: string, args: Record<string, unknown>): unknown {
 	if (value.mode === "malformed") return { status: "success", error: "SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "notebook_get") return { status: "success", notebook: { id: value.mode === "wrong-target" ? sourceId : id, title: value.title, source_count: 1, cookies: "SENTINEL_REPLY_CREDENTIAL" }, sources: [{ id: sourceId, title: value.sourceTitle, token: "SENTINEL_REPLY_CREDENTIAL" }], extra: "SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "notebook_list") return { status: "success", notebooks: [{ id, title: value.title, cookie: "SENTINEL_REPLY_CREDENTIAL" }], count: 500, secret: "SENTINEL_REPLY_CREDENTIAL" };
-	if (name === "notebook_describe") return { status: "success", summary: "Synthetic summary", suggested_topics: ["Synthetic topic"], extra: "SENTINEL_REPLY_CREDENTIAL" };
+	if (name === "notebook_describe") return { status: "success", summary: "Synthetic summary", suggested_topics: [{ question: "Synthetic question", prompt: "Synthetic prompt", extra: "SENTINEL_REPLY_CREDENTIAL" }], extra: "SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "source_describe") return { status: "success", summary: "Source summary", keywords: ["Synthetic"], extra: "SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "source_get_content") return { status: "success", title: value.sourceTitle, content: "Synthetic content", source_type: "text", char_count: 17, extra: "SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "studio_status") return { status: "success", artifacts: [{ artifact_id: sourceId, title: "Synthetic audio", type: "audio", status: "completed", url: "https://fixture.invalid/?token=SENTINEL_REPLY_CREDENTIAL" }] };
-	if (name === "notebook_rename" || name === "source_rename") return rename(name, args, value);
 	return { status: "error", error: "SENTINEL_REPLY_CREDENTIAL" };
 }
 for await (const line of createInterface({ input: process.stdin })) {

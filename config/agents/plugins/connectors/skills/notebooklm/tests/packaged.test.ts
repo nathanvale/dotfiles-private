@@ -61,7 +61,7 @@ processTest("all seven read operations expose only their qualified fields", asyn
 		const cases = [
 			["notebook_list", { max_results: 5 }, { notebooks: [{ id: ID, title: "Synthetic notebook" }], returned: 1 }],
 			["notebook_get", { notebook_id: ID }, { notebook: { id: ID, title: "Synthetic notebook", source_count: 1 }, sources: [{ id: SOURCE_ID, title: "Synthetic source" }] }],
-			["notebook_describe", { notebook_id: ID }, { summary: "Synthetic summary", suggested_topics: ["Synthetic topic"] }],
+			["notebook_describe", { notebook_id: ID }, { summary: "Synthetic summary", suggested_topics: [{ question: "Synthetic question", prompt: "Synthetic prompt" }] }],
 			["source_describe", { source_id: SOURCE_ID }, { summary: "Source summary", keywords: ["Synthetic"] }],
 			["source_get_content", { source_id: SOURCE_ID }, { title: "Synthetic source", content: "Synthetic content", source_type: "text", char_count: 17 }],
 			["studio_status", { notebook_id: ID }, { artifacts: [{ artifact_id: SOURCE_ID, title: "Synthetic audio", type: "audio", status: "completed" }] }],
@@ -84,7 +84,7 @@ processTest("unsafe read actions, missing targets and unqualified effects refuse
 			["notebook_list", { max_results: 21 }, 4, "input-invalid"],
 			["save_auth_tokens", { cookies: "SENTINEL_INPUT_SECRET" }, 3, "auth-tool-forbidden"],
 			["notebook_query", { notebook_id: ID, query: "query" }, 3, "capability-not-qualified"],
-			["notebook_rename", { notebook_id: ID, new_title: "New" }, 3, "write-needs-preview"],
+			["notebook_rename", { notebook_id: ID, new_title: "New" }, 3, "capability-not-qualified"],
 		] satisfies [string, Record<string, unknown>, number, string][];
 		for (const [name, input, code, cause] of rows) {
 			const result = await m.run(["run", "notebooklm", ...SELECT, name, ...args(input)]);
@@ -122,57 +122,6 @@ processTest("live schema qualification matches independent synthetic vendor sche
 		expect(m.calls()).toHaveLength(0);
 	} finally { m.dispose(); }
 });
-processTest("a completed rename verifies read-back, rejects duplicate apply and leaves no raw titles in its journal", async () => {
-	const m = machine(); try {
-		const input = args({ notebook_id: ID, new_title: "Requested title" });
-		const preview = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--preview"]);
-		const apply = ["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--apply", preview.result.data.previewId];
-		const result = await m.run(apply);
-		expect([result.code, result.result.data.receipt.status]).toEqual([0, "completed"]);
-		const repeated = await m.run(apply);
-		expect(repeated.result.data.connectorCause).toBe("preview-consumed");
-		expect(m.calls().filter((call) => call.name === "notebook_rename")).toHaveLength(1);
-		const stored = readFileSync(path.join(m.state, "connectors/notebooklm/default/journal/receipts", `${result.result.data.runId}.json`), "utf8");
-		expect(stored).not.toContain("Requested title"); expect(stored).not.toContain("SENTINEL_");
-		expect(JSON.parse(stored).status).toBe("completed");
-	} finally { m.dispose(); }
-}, 180000);
-processTest("changed inputs and stale notebook evidence prevent dispatch", async () => {
-	const m = machine(); try {
-		const input = { notebook_id: ID, new_title: "Requested title" };
-		const preview = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...args(input), "--preview"]);
-		const apply = (value: unknown) => m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...args(value), "--apply", preview.result.data.previewId]);
-		expect((await apply({ ...input, new_title: "Changed answer" })).result.data.connectorCause).toBe("preview-input-mismatch");
-		m.change({ title: "Externally changed" });
-		expect((await apply(input)).result.data.connectorCause).toBe("preview-stale");
-		expect(m.calls().filter((call) => call.name === "notebook_rename")).toHaveLength(0);
-	} finally { m.dispose(); }
-}, 180000);
-processTest("lost replies stay unknown and recover by read-back without resending", async () => {
-	const m = machine(); try {
-		const input = args({ notebook_id: ID, new_title: "Requested title" });
-		const preview = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--preview"]);
-		m.change({ mode: "lost-reply" });
-		const applied = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--apply", preview.result.data.previewId]);
-		expect([applied.code, applied.result.transactionState]).toEqual([3, "unknown"]);
-		m.change({ mode: "normal" });
-		const blocked = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...args({ notebook_id: ID, new_title: "Another title" }), "--preview"]);
-		expect(blocked.result.data.connectorCause).toBe("unresolved-write");
-		const recovered = await m.run(["recover", "notebooklm", ...SELECT, "--run", applied.result.data.runId, "--adjudicate", ...args({})]);
-		expect([recovered.code, recovered.result.data.receipt.status]).toEqual([0, "completed"]);
-		expect(m.calls().filter((call) => call.name === "notebook_rename")).toHaveLength(1);
-	} finally { m.dispose(); }
-}, 180000);
-processTest("a source rename binds membership and does not change the notebook title", async () => {
-	const m = machine(); try {
-		const input = args({ notebook_id: ID, source_id: SOURCE_ID, new_title: "Renamed source" });
-		const preview = await m.run(["run", "notebooklm", ...SELECT, "source_rename", ...input, "--preview"]);
-		const applied = await m.run(["run", "notebooklm", ...SELECT, "source_rename", ...input, "--apply", preview.result.data.previewId]);
-		expect([applied.code, applied.result.data.receipt.status]).toEqual([0, "completed"]);
-		const data = JSON.parse(readFileSync(path.join(m.home, "fixture.json"), "utf8"));
-		expect([data.title, data.sourceTitle]).toEqual(["Synthetic notebook", "Renamed source"]);
-	} finally { m.dispose(); }
-}, 180000);
 processTest("registry widening refuses before any vendor process", async () => {
 	const m = machine(); try {
 		const file = path.join(m.bundle.skillsRoot, "notebooklm/config/mcporter.json");
@@ -182,42 +131,34 @@ processTest("registry widening refuses before any vendor process", async () => {
 		expect(m.calls()).toEqual([]);
 	} finally { m.dispose(); }
 });
-processTest("concurrent applies send one rename and retain a single durable receipt", async () => {
+
+processTest("renames and recovery refuse without starting the vendor or creating journal state", async () => {
 	const m = machine(); try {
-		const input = args({ notebook_id: ID, new_title: "Concurrent title" });
-		const preview = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--preview"]);
-		const apply = ["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--apply", preview.result.data.previewId];
-		const results = await Promise.all([m.run(apply), m.run(apply)]);
-		expect(results.map((result) => result.code).sort()).toEqual([0, 3]);
-		const refused = results.find((result) => result.code === 3);
-		expect(["write-locked", "preview-consumed"]).toContain(refused?.result.data.connectorCause);
-		expect(m.calls().filter((call) => call.name === "notebook_rename")).toHaveLength(1);
+		for (const name of ["notebook_rename", "source_rename"]) {
+			const input = args({ notebook_id: ID, ...(name === "source_rename" ? { source_id: SOURCE_ID } : {}), new_title: "Requested title" });
+			for (const phase of [[], ["--preview"], ["--apply", "lp-11111111-1111-1111-1111-111111111111"]]) {
+				const result = await m.run(["run", "notebooklm", ...SELECT, name, ...input, ...phase]);
+				expect([result.code, result.result.data.connectorCause]).toEqual([3, phase.length === 0 ? "capability-not-qualified" : "adapter-has-no-writes"]);
+			}
+		}
+		for (const recovery of [[], ["--run", "lr-11111111-1111-1111-1111-111111111111"], ["--run", "lr-11111111-1111-1111-1111-111111111111", "--unlock"], ["--run", "lr-11111111-1111-1111-1111-111111111111", "--adjudicate", ...args({})]]) {
+			const result = await m.run(["recover", "notebooklm", ...SELECT, ...recovery]);
+			expect([result.code, result.result.data.connectorCause]).toEqual([3, "adapter-has-no-writes"]);
+		}
+		expect(m.calls()).toEqual([]);
+		expect(existsSync(path.join(m.state, "connectors/notebooklm"))).toBe(false);
 	} finally { m.dispose(); }
-}, 180000);
-processTest("expired previews and a different profile cannot dispatch the approved rename", async () => {
+});
+processTest("capability discovery admits exactly seven safe operations and withholds both renames", async () => {
 	const m = machine(); try {
-		const input = args({ notebook_id: ID, new_title: "Requested title" });
-		const preview = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--preview"]);
-		const other = await m.run(["run", "notebooklm", "--select", "profile=other", "notebook_rename", ...input, "--apply", preview.result.data.previewId]);
-		expect(other.result.data.connectorCause).toBe("preview-unknown");
-		const file = path.join(m.state, "connectors/notebooklm/default/journal/previews", `${preview.result.data.previewId}.json`);
-		const stored = JSON.parse(readFileSync(file, "utf8")); stored.expiresAt = 0; writeFileSync(file, JSON.stringify(stored));
-		const expired = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--apply", preview.result.data.previewId]);
-		expect(expired.result.data.connectorCause).toBe("preview-expired");
-		expect(m.calls().filter((call) => call.name === "notebook_rename")).toHaveLength(0);
+		const result = await m.run(["run", "notebooklm", ...SELECT, "capabilities"]);
+		const operations = result.result.data.operations;
+		expect(operations).toHaveLength(53);
+		expect(operations.filter((item: { admission: string }) => item.admission === "admitted").map((item: { name: string }) => item.name).sort()).toEqual(["notebook_describe", "notebook_get", "notebook_list", "server_info", "source_describe", "source_get_content", "studio_status"]);
+		expect(operations.filter((item: { name: string }) => ["notebook_rename", "source_rename"].includes(item.name)).map((item: { name: string; admission: string; effect: string }) => [item.name, item.admission, item.effect])).toEqual([["notebook_rename", "blocked", "write"], ["source_rename", "blocked", "write"]]);
+		const registry = JSON.parse(readFileSync(path.join(m.bundle.skillsRoot, "notebooklm/config/mcporter.json"), "utf8"));
+		expect(registry.imports).toEqual([]);
+		expect(registry.mcpServers["notebooklm-connectors"].allowedTools.slice().sort()).toEqual(["notebook_describe", "notebook_get", "notebook_list", "server_info", "source_describe", "source_get_content", "studio_status"]);
+		expect(m.calls()).toEqual([]);
 	} finally { m.dispose(); }
-}, 180000);
-processTest("unknown writes stay blocked when a later read does not prove the requested title", async () => {
-	const m = machine(); try {
-		const input = args({ notebook_id: ID, new_title: "Requested title" });
-		const preview = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--preview"]);
-		m.change({ mode: "lost-reply" });
-		const applied = await m.run(["run", "notebooklm", ...SELECT, "notebook_rename", ...input, "--apply", preview.result.data.previewId]);
-		m.change({ mode: "normal", title: "Synthetic notebook" });
-		const recovery = await m.run(["recover", "notebooklm", ...SELECT, "--run", applied.result.data.runId, "--adjudicate", ...args({})]);
-		expect([recovery.code, recovery.result.data.connectorCause]).toEqual([3, "evidence-insufficient"]);
-		const inspected = await m.run(["recover", "notebooklm", ...SELECT, "--run", applied.result.data.runId]);
-		expect(inspected.result.data.receipt.status).toBe("unknown");
-		expect(m.calls().filter((call) => call.name === "notebook_rename")).toHaveLength(1);
-	} finally { m.dispose(); }
-}, 180000);
+});

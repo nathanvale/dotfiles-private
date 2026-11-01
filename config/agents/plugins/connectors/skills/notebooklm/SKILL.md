@@ -1,6 +1,6 @@
 ---
 name: notebooklm
-description: "Inspect NotebookLM readiness, list requested notebooks, read notebook sources and Studio status, or preview and apply qualified renames through Connectors."
+description: "Inspect NotebookLM readiness, list requested notebooks, read notebook sources and Studio status through Connectors."
 ---
 
 # NotebookLM
@@ -42,13 +42,12 @@ Example from this skill directory:
 ../../bin/connectors run notebooklm --select profile=default notebook_list --input '{"max_results":5}'
 ```
 
-## Qualified writes and recovery
+## Capability boundaries
 
-Read [operations](references/operations.md) for renames, one-use previews and
-recovery. Act only within the user's current exact-target authorization.
-The implementation currently admits notebook and source renames. All other
-effectful workflows refuse before dispatch and remain visible in `capabilities`.
-Notebook queries can persist chat history, so they are not admitted as reads.
+Read [operations](references/operations.md) for the admission ledger and
+qualification gaps. This release admits seven status and read operations.
+Renames and all other effectful workflows refuse before dispatch. Notebook
+queries can persist chat history, so they are not admitted as reads.
 
 ## Authentication or dependency failure
 

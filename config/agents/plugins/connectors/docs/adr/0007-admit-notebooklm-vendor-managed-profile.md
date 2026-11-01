@@ -35,8 +35,8 @@ Live safe readiness separately establishes authentication status. An explicit
 `profile` Route Selection maps to the vendor's source-qualified `NLM_PROFILE`
 setting. The Provider disables debug output and automatic rate-limit retries.
 
-The adapter admits schema-qualified reads and journaled notebook/source
-renames. It refuses all remaining effects before dispatch. Notebook queries
+The adapter admits seven schema-qualified status and read operations. It
+refuses all effects before dispatch. Notebook queries
 persist chat history and therefore remain outside the read-only route.
 
 ## Consequences
@@ -64,7 +64,20 @@ No second token store, browser controller or OAuth implementation is added.
 
 Nathan is decision authority. This record remains proposed; the implementation
 is a reviewable candidate under the foreground implementation request.
-Public-process tests must prove privacy, action guards, stale/duplicate apply
-refusals and unknown-write recovery. Fresh Codex and Claude Code sessions must
+Public-process tests must prove privacy, read action guards, the exact seven
+admissions and refusal of renames, write phases and recovery without starting
+the vendor or creating write state. Fresh Codex and Claude Code sessions must
 prove discovery and safe readiness separately from live content and write proof.
 Revisit on vendor profile semantics changes or any newly admitted effect.
+
+
+## Rename admission withheld
+
+Nathan chose to block notebook and source renames while retaining reads.
+Vendor 0.15.8 routes both rename RPCs through automatic HTTP 5xx retries;
+its public MCP tools expose no supported override. The rate-limit retry
+setting does not disable these replays. A local preview/receipt cannot prevent
+the vendor from replaying an uncertain mutation, so renames remain blocked
+pending qualification of a non-replaying route. The unused write journal,
+preview/apply and recovery implementation is removed from this candidate.
+No real write receipts were created and no migration is required.

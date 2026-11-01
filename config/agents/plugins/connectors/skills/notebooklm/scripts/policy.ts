@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import snapshot from "../config/catalogue.json";
 
 export const CATALOGUE = snapshot;
-export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 export const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 function canonical(value: unknown): unknown {
@@ -39,13 +39,10 @@ function studioInput(args: Readonly<Record<string, unknown>>): boolean {
 	if (args.limit !== undefined && !bounded(args.limit, 1, 20) || args.offset !== undefined && !bounded(args.offset, 0, 100000)) return false;
 	return args.artifact_id === undefined || typeof args.artifact_id === "string" && UUID.test(args.artifact_id);
 }
-const renameInput = (args: Readonly<Record<string, unknown>>): boolean => typeof args.new_title === "string" && args.new_title.trim().length > 0 && args.new_title.length <= 500;
 const INPUT_POLICY: Record<string, (args: Readonly<Record<string, unknown>>) => boolean> = {
 	notebook_list: (args) => bounded(args.max_results, 1, 20),
 	studio_status: studioInput,
 	source_get_content: (args) => args.wait !== true && args.wait_timeout === undefined && args.poll_interval === undefined,
-	notebook_rename: renameInput,
-	source_rename: renameInput,
 };
 
 export function inputFor(name: string, input: Readonly<Record<string, unknown>> | null): Record<string, unknown> | null {

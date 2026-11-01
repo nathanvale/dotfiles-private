@@ -835,7 +835,7 @@
     },
     {
       "name": "notebook_rename",
-      "admission": "admitted",
+      "admission": "blocked",
       "effect": "write",
       "inputSchema": {
         "type": "object",
@@ -1439,7 +1439,7 @@
     },
     {
       "name": "source_rename",
-      "admission": "admitted",
+      "admission": "blocked",
       "effect": "write",
       "inputSchema": {
         "type": "object",
