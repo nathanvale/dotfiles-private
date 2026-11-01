@@ -26,6 +26,7 @@ import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.t
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
 import { loginKeychain, storeServiceToken } from "./setup/keychain.ts";
 import { stateRoot } from "./private-state.ts";
+import { readPrivateInput } from "./private-input.ts";
 import { observeEvidence } from "./evidence-state.ts";
 import { retainFixtureObservation, retainObservation } from "./evidence-record.ts";
 import { doctorFailureView, readProviderFailure } from "./diagnostic-record.ts";
@@ -130,6 +131,8 @@ export type CauseCode =
 	| "SCHEMA_ADAPTER_REFUSED"
 	| "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION"
 	| "SUCCESS_RUN_RECORDED"
+	| "SUCCESS_INFERENCE_COMPLETED"
+	| "DOMAIN_INFERENCE_UNKNOWN"
 	| "SUCCESS_RUN_APPLIED"
 	| "DOMAIN_RUN_EFFECT_UNKNOWN"
 	| "DOMAIN_RUN_FAILED_RECORDED";
@@ -205,6 +208,7 @@ const runInput = (write: "--preview" | "--apply" | null): InputElement[] => [
 	selectAt(2),
 	positional(3, "operation", { type: "string", source: "connectors.schema" }),
 	option(4, "--input", JSON_OBJECT, write !== null),
+ ...(write === null ? [option(4, "--input-file", { type: "string", source: "owned 0600 JSON file, or - for non-TTY stdin; mutually exclusive with --input; 256 KiB maximum" }, false)] : []),
 	...(write === "--preview" ? [option(4, "--preview", null, true)] : write === "--apply" ? [option(4, "--apply", { type: "string", source: "connectors.run.preview" }, true)] : []),
 ];
 const recoverInput = (tail: readonly InputElement[]): InputElement[] => [word(0, "recover"), connectorAt(1), selectAt(2), ...tail];
@@ -245,7 +249,7 @@ const DEPS_APPLY: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_D
 // through a prepareSchema step; every other connector refuses through the
 // catalogue.
 const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--input <json-object> after configure | --no-browser --reset after login]";
-const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
+const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object> | --input-file <path|->] [--preview | --apply <previewId>]";
 const RECOVER_USAGE = "recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
 const SCHEMA_USAGE = "schema <connector> [--select name=value ...]";
 const STATUS_USAGE = "status [connector [--select name=value ...]]";
@@ -363,11 +367,11 @@ const COMMANDS: readonly CommandDescriptor[] = [
 		commandIdentity: "connectors.run",
 		route: ["run"],
 		effectClass: "repository-local",
-		summary: "Run one declared read operation for a connector through its packaged adapter and the selected MCPorter",
-		usage: "run <connector> [--select name=value ...] <operation> [--input <json-object>]",
+		summary: "Run a declared read or paid inference; uncertain inference is inspect-only through recover and cannot be replayed",
+		usage: "run <connector> [--select name=value ...] <operation> [--input <json-object> | --input-file <path|->]",
 		input: runInput(null),
 		reaches: "provider",
-		stations: ["USAGE_MALFORMED_ARGUMENTS", ...ADAPTER_BASE, ...ADAPTER_READ],
+		stations: ["USAGE_MALFORMED_ARGUMENTS", ...ADAPTER_BASE, ...ADAPTER_READ, "SUCCESS_INFERENCE_COMPLETED", "DOMAIN_INFERENCE_UNKNOWN"],
 	},
 	{
 		commandIdentity: "connectors.run.preview",
@@ -634,6 +638,8 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	SCHEMA_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 	DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 	SUCCESS_RUN_RECORDED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_INFERENCE_COMPLETED: { outcome: "success", effectClass: "external", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	DOMAIN_INFERENCE_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 	SUCCESS_RUN_APPLIED: { outcome: "success", effectClass: "external", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	// A write that may have reached the Provider is not an internal defect:
 	// like DOMAIN_AUTH_LOGIN_UNKNOWN, it is a domain failure with an unknown state.
@@ -717,6 +723,8 @@ const STATION_SEMANTICS: Readonly<Record<CauseCode, { readonly reachability: Rea
 	SCHEMA_ADAPTER_REFUSED: { reachability: "plugin-state", trigger: "the adapter found its stored or packaged configuration invalid" },
 	DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION: { reachability: "dependency-install", trigger: "the adapter refused after MCPorter selection or account effects completed" },
 	SUCCESS_RUN_RECORDED: { reachability: "command", trigger: "the command recorded its durable record without a Provider write" },
+	SUCCESS_INFERENCE_COMPLETED: { reachability: "provider", trigger: "the paid inference answered and its private receipt was recorded" },
+	DOMAIN_INFERENCE_UNKNOWN: { reachability: "provider", trigger: "a reserved inference may have been sent or billed without a verified complete reply; inspect local receipt and never replay" },
 	SUCCESS_RUN_APPLIED: { reachability: "provider", trigger: "the Provider confirmed the one previewed write after its receipt was recorded" },
 	DOMAIN_RUN_EFFECT_UNKNOWN: { reachability: "provider", trigger: "the write may have reached the Provider but its effect was not confirmed" },
 	DOMAIN_RUN_FAILED_RECORDED: { reachability: "provider", trigger: "the Provider rejected the write and its receipt records no change" },
@@ -795,13 +803,15 @@ function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] 
 }
 
 // Recorded effects: the custody registration auth configure publishes, then
-// the journaled-write effects, in the one order an inventory may list them.
-const WRITE_EFFECT_ORDER: readonly string[] = ["custody-registration", "write-preview", "write-receipt", "provider-write", "write-adjudication", "write-unlock"];
+// journaled-write and paid-inference effects, in their admitted order.
+const WRITE_EFFECT_ORDER: readonly string[] = ["custody-registration", "write-preview", "write-receipt", "provider-write", "write-adjudication", "write-unlock", "inference-receipt", "paid-inference"];
 const NO_WRITE_EFFECTS = { completed: [], uncertain: [] } as const;
 
-// Each journaled-write station: its cause and command identity, and the exact
-// write effects it reports. Every other envelope reports none.
+// Each receipted station: cause, command identity and exact effects.
+// The shared inventory checker keeps paid inference distinct from writes.
 const WRITE_STATIONS: Readonly<Record<string, { readonly completed: readonly string[]; readonly uncertain: readonly string[] }>> = {
+	"SUCCESS_INFERENCE_COMPLETED connectors.run": { completed: ["inference-receipt", "paid-inference"], uncertain: [] },
+	"DOMAIN_INFERENCE_UNKNOWN connectors.run": { completed: ["inference-receipt"], uncertain: ["paid-inference"] },
 	"SUCCESS_RUN_RECORDED connectors.auth": { completed: ["custody-registration"], uncertain: [] },
 	"SUCCESS_RUN_RECORDED connectors.run.preview": { completed: ["write-preview"], uncertain: [] },
 	"SUCCESS_RUN_RECORDED connectors.recover.adjudicate": { completed: ["write-adjudication"], uncertain: [] },
@@ -810,7 +820,7 @@ const WRITE_STATIONS: Readonly<Record<string, { readonly completed: readonly str
 	"DOMAIN_RUN_EFFECT_UNKNOWN connectors.run.apply": { completed: ["write-receipt"], uncertain: ["provider-write"] },
 	"DOMAIN_RUN_FAILED_RECORDED connectors.run.apply": { completed: ["write-receipt"], uncertain: [] },
 };
-const WRITE_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_RUN_RECORDED", "SUCCESS_RUN_APPLIED", "DOMAIN_RUN_EFFECT_UNKNOWN", "DOMAIN_RUN_FAILED_RECORDED"]);
+const WRITE_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_INFERENCE_COMPLETED", "DOMAIN_INFERENCE_UNKNOWN", "SUCCESS_RUN_RECORDED", "SUCCESS_RUN_APPLIED", "DOMAIN_RUN_EFFECT_UNKNOWN", "DOMAIN_RUN_FAILED_RECORDED"]);
 
 const writeEffects = (effects: unknown): string => JSON.stringify(Array.isArray(effects) ? effects.filter((effect) => WRITE_EFFECT_ORDER.includes(effect as string)) : []);
 
@@ -837,7 +847,7 @@ function checkCauseRow(result: Envelope["result"]): string[] {
 const ADMITTED_EFFECTS: Readonly<Record<"selection" | "remaining" | "uncertain", readonly string[]>> = {
 	selection: ["[]", '["mcporter-bootstrap"]', '["mcporter-recovery"]'],
 	remaining: ["[]"],
-	uncertain: ["[]", '["mcporter-repair"]', '["mcporter-recovery"]', '["account-grant"]', '["provider-write"]'],
+	uncertain: ["[]", '["mcporter-repair"]', '["mcporter-recovery"]', '["account-grant"]', '["provider-write"]', '["paid-inference"]'],
 };
 
 // A completed inventory is one selection inventory followed by connector
@@ -1181,8 +1191,9 @@ function helpText(): string {
 		"                                                  Inspect that stored configuration; reads no credential",
 		"  auth login <connector> [--select name=value ...] [--no-browser] [--reset]",
 		"                                                  Print the consent URL instead of opening a browser; clear the cached grant first",
-		"  run <connector> [--select name=value] <operation> [--input <json-object>]",
-		"                                                  Run one declared read operation through MCPorter",
+		"  run <connector> [--select name=value] <operation> [--input <json-object> | --input-file <path|->]",
+ "                                                  Private input: owned 0600 regular file or non-TTY stdin, at most 256 KiB",
+		"                                                  Run one declared read or paid inference through MCPorter",
 		"  run <connector> [--select name=value] <write-operation> --input <json-object> --preview",
 		"                                                  Record a durable preview of one write; nothing is sent",
 		"  run <connector> [--select name=value] <write-operation> --input <json-object> --apply <previewId>",
@@ -2267,48 +2278,61 @@ function parseInputObject(text: string | undefined): Record<string, unknown> | n
 	}
 }
 
-interface RunOptions {
-	readonly input: Readonly<Record<string, unknown>> | null;
-	readonly phase: WritePhase | null;
+type RunInput = { readonly kind: "none" } | { readonly kind: "inline"; readonly value: Readonly<Record<string, unknown>> } | { readonly kind: "private"; readonly file: string };
+interface RunOptions { readonly input: RunInput; readonly phase: WritePhase | null; }
+function parseRunInput(token: string | undefined, value: string | undefined): RunInput | null {
+ if (token === "--input") {
+  const parsed = parseInputObject(value);
+  return parsed === null ? null : { kind: "inline", value: parsed };
+ }
+ return token === "--input-file" && value !== undefined && (value === "-" || !value.startsWith("-"))
+  ? { kind: "private", file: value } : null;
 }
-
-// The options after a run operation, in any order: --input <json-object>, and
-// at most one of --preview or --apply <previewId>, each at most once.
+type RunOption = { readonly kind: "input"; readonly input: RunInput; readonly consumed: 2 } | { readonly kind: "phase"; readonly phase: WritePhase; readonly consumed: 1 | 2 };
+function parseRunOption(token: string | undefined, value: string | undefined): RunOption | null {
+ if (token === "--preview") return { kind: "phase", phase: { kind: "preview" }, consumed: 1 };
+ if (token === "--apply") return value === undefined || value.startsWith("-") ? null : { kind: "phase", phase: { kind: "apply", previewId: value }, consumed: 2 };
+ const input = parseRunInput(token, value);
+ return input === null ? null : { kind: "input", input, consumed: 2 };
+}
 function parseRunOptions(after: readonly string[]): RunOptions | null {
-	let input: Readonly<Record<string, unknown>> | null = null;
-	let phase: WritePhase | null = null;
-	let index = 0;
-	while (index < after.length) {
-		const token = after[index];
-		const value = after[index + 1];
-		if (token === "--preview" && phase === null) {
-			phase = { kind: "preview" };
-			index += 1;
-		} else if (token === "--input" && input === null) {
-			input = parseInputObject(value);
-			if (input === null) return null;
-			index += 2;
-		} else if (token === "--apply" && phase === null && value !== undefined && !value.startsWith("-")) {
-			phase = { kind: "apply", previewId: value };
-			index += 2;
-		} else {
-			return null;
-		}
-	}
-	return { input, phase };
+ let input: RunInput = { kind: "none" };
+ let phase: WritePhase | null = null;
+ let index = 0;
+ while (index < after.length) {
+  const option = parseRunOption(after[index], after[index + 1]);
+  if (option === null) return null;
+  if (option.kind === "phase") {
+   if (phase !== null) return null;
+   phase = option.phase;
+  } else {
+   if (input.kind !== "none") return null;
+   input = option.input;
+  }
+  index += option.consumed;
+ }
+ return phase !== null && input.kind === "private" ? null : { input, phase };
 }
-
-function parseRunArgs(args: readonly string[]): AdapterCommand | null {
-	const [id, ...rest] = args;
-	const given = new Map<string, string>();
-	const at = consumeSelections(rest, given);
-	const operation = at === null ? undefined : rest[at];
-	if (!id || at === null || !operation || operation.startsWith("-")) return null;
-	const options = parseRunOptions(rest.slice(at + 1));
-	if (options === null) return null;
-	const { input, phase } = options;
-	if (phase === null) return { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input } };
-	return { commandIdentity: phase.kind === "preview" ? "connectors.run.preview" : "connectors.run.apply", id, given, action: { kind: "write", operation, input, phase } };
+type RunCommand = { kind: "ready"; command: AdapterCommand } | { kind: "private-refused"; command: AdapterCommand };
+async function parseRunArgs(args: readonly string[]): Promise<RunCommand | null> {
+ const [id, ...rest] = args; const given = new Map<string, string>();
+ const at = consumeSelections(rest, given); const operation = at === null ? undefined : rest[at];
+ if (!id || at === null || !operation || operation.startsWith("-")) return null;
+ const options = parseRunOptions(rest.slice(at + 1)); if (options === null) return null;
+ const input = options.input.kind === "inline" ? options.input.value : options.input.kind === "private" ? parseInputObject((await readPrivateInput(options.input.file)) ?? undefined) : null;
+ const phase = options.phase;
+ const command: AdapterCommand = phase === null
+  ? { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input } }
+  : { commandIdentity: phase.kind === "preview" ? "connectors.run.preview" : "connectors.run.apply", id, given, action: { kind: "write", operation, input, phase } };
+ return { kind: options.input.kind === "private" && input === null ? "private-refused" : "ready", command };
+}
+async function handleRun(args: readonly string[]): Promise<void> {
+ const parsed = await parseRunArgs(args);
+ if (parsed?.kind === "private-refused") {
+  emitAdapterRefusal(parsed.command, { kind: "schema", connectorCause: "private-input-invalid", repair: "Use one owned 0600 regular UTF-8 JSON object file, or --input-file - with closed non-TTY stdin; at most 256 KiB within 5 seconds" });
+  return;
+ }
+ await handleAdapterCommand(parsed?.command ?? null, RUN_USAGE, "connectors.run");
 }
 
 const RECOVERY_IDENTITY: Readonly<Record<Recovery["kind"], AdapterCommandIdentity>> = { inspect: "connectors.recover", adjudicate: "connectors.recover.adjudicate", unlock: "connectors.recover.unlock" };
@@ -2640,6 +2664,12 @@ function emitExecuted(command: AdapterCommand, executed: Executed): void {
 		case "recorded":
 			emitAdapterEnvelope(command, "SUCCESS_RUN_RECORDED", `${command.id}${operationLabel(command)} recorded ${executed.effect}`, data(executed.data), null, { completed: [...completed, executed.effect], uncertain: [] }, RECORDED_NEXT[executed.effect]);
 			return;
+		case "inference-completed":
+			emitAdapterEnvelope(command, "SUCCESS_INFERENCE_COMPLETED", `${command.id} inference completed`, data(executed.data), null, { completed: [...completed, "inference-receipt", "paid-inference"], uncertain: [] });
+			return;
+		case "inference-unknown":
+			emitAdapterEnvelope(command, "DOMAIN_INFERENCE_UNKNOWN", `${command.id} inference outcome or billing is unknown; replay is blocked`, data(executed.data), executed.repair, { completed: [...completed, "inference-receipt"], uncertain: ["paid-inference"] }, "connectors.recover");
+			return;
 		case "applied":
 			emitAdapterEnvelope(command, "SUCCESS_RUN_APPLIED", `${command.id}${operationLabel(command)} applied`, data(executed.data), null, { completed: [...completed, "write-receipt", "provider-write"], uncertain: [] });
 			return;
@@ -2698,7 +2728,7 @@ async function dispatchCommand(args: readonly string[]): Promise<void> {
 		return;
 	}
 	if (args[0] === "run") {
-		await handleAdapterCommand(parseRunArgs(args.slice(1)), RUN_USAGE, "connectors.run");
+		await handleRun(args.slice(1));
 		return;
 	}
 	if (args[0] === "recover") {

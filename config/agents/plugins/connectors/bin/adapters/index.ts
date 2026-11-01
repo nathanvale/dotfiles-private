@@ -10,6 +10,7 @@ import { canvaAdapter } from "../../skills/canva/adapter.ts";
 import { context7Adapter } from "../../skills/context7/adapter.ts";
 import { figmaAdapter } from "../../skills/figma/adapter.ts";
 import { firecrawlAdapter } from "../../skills/firecrawl/adapter.ts";
+import { jevAdapter } from "../../skills/jev/adapter.ts";
 import { mermaidAdapter } from "../../skills/mermaid/adapter.ts";
 import { notionAdapter } from "../../skills/notion/adapter.ts";
 import { notebooklmAdapter } from "../../skills/notebooklm/adapter.ts";
@@ -24,6 +25,7 @@ export const ADAPTERS: Readonly<Record<string, Adapter>> = {
 	[figmaAdapter.id]: figmaAdapter,
 	[firecrawlAdapter.id]: firecrawlAdapter,
 	[mermaidAdapter.id]: mermaidAdapter,
+	[jevAdapter.id]: jevAdapter,
 	[notionAdapter.id]: notionAdapter,
 	[notebooklmAdapter.id]: notebooklmAdapter,
 	[challengeAuthAdapter.id]: challengeAuthAdapter,
