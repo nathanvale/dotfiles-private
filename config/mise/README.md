@@ -50,6 +50,58 @@ activation. That is not evidence that this machine is already installed or
 activated. Live launch-context and clean no-cache Mac qualification remain
 separate. Git remains blocked and exact reconstruction remains unqualified.
 
+`../husky/toolchain-guard.sh` runs after the bootstrap in Husky's init. For a
+checkout with exact pins (`engines.node` or `.nvmrc`; `packageManager`
+`pnpm@x.y.z`) it refuses (exit 1, cause and repair on stderr) before any hook
+effect unless the pinned tools are what will run. Mise 2026.9.10 can fall back
+to the ambient PATH with auto-install off, and an ambient pnpm (Homebrew's 12)
+forwards to the project's pin inside a project, so its reported version proves
+nothing about the executable that ran. The guard therefore binds each tool:
+
+- Node must be the Mise shim, report the pin, and run from the Mise install.
+  `mise trust --show` (run through the executable the shim chain ends at,
+  with helpers taken from the system directories) must not report untrusted,
+  and must positively name a checkout that carries a Mise config. Mise's path
+  trust keeps accepting a trusted file after it is edited (real 2026.9.10), so
+  every TOML config Mise loads for the checkout, ancestors included, must also
+  have its exact sha256 recorded by `bin/dotfiles/mise-config-review <file>`
+  after it is read; a changed file needs a new review. Reviews are by content,
+  so the same reviewed file is accepted in every linked worktree.
+- A Node version file (`.nvmrc`, `.node-version`) pins Node even without a
+  `package.json`; it still needs the applied Mise state.
+- pnpm must be `$MISE_INSTALLS_DIR/pnpm/<pin>/pnpm`, a regular executable
+  that reports the pin with manager switching off. The hook exports that
+  setting, puts the file's directory behind Husky's `node_modules/.bin`, and
+  refuses if `pnpm` resolves to anything else (a repo-local shadow, an
+  ambient pnpm). It never downloads.
+
+A checkout can instead opt into the direct route with a regular file
+`.husky/direct-pins`. Husky's init then sources `../husky/direct-pins.sh`
+before the Mise bootstrap and returns: it reads the exact `engines.node`,
+`.nvmrc` and `packageManager` pins with `plutil`, requires the regular
+executables under `~/.local/share/mise/installs` to report them, exports
+`HUSKY_PINNED_NODE` and `HUSKY_PINNED_PNPM` with manager switching and
+Corepack network off, and never runs Mise. A direct-route hook body calls
+pnpm by that absolute path; a bare `pnpm` is unsupported there. Contract:
+`bin/test/husky-direct-pins-test.sh`.
+
+Both routes refuse a `node`, `pnpm`, `pnpx`, `npm`, `npx` or `corepack` in
+the `node_modules/.bin` of any package directory Git lists (tracked or
+untracked, not ignored) or of any directory above one, up to `/`, inside the
+checkout or not. Husky puts the root's first, lint-staged runs each workspace
+package's tasks with that directory's and every ancestor's ahead of PATH, and
+pnpm bin wrappers run a sibling `node` or else the first on PATH. Not covered:
+a dependency's own nested `node_modules/.pnpm/**/node_modules/.bin`, which
+only that dependency's child processes reach.
+
+In a checkout that can pin tools, a missing or linked Mise bootstrap or guard
+is a partial installation and refuses rather than running ambient tools.
+
+Provision a pin explicitly, once per version: `bin/dotfiles/pnpm-provision
+<x.y.z>` (Mise install from a private empty configuration, then a version
+check). The guard never trusts config: a checkout's `mise.toml` needs an
+explicit `mise trust <exact reviewed file>` first.
+
 Inspect the declared change without modifying the machine or repository:
 
 ```sh

@@ -49,9 +49,9 @@
 		"test:plugins": "bun run tooling/plugin-tests.ts",
 		"test:quality:repository": "bun test tooling/repository-quality/native-git-hook.test.ts tooling/repository-quality/workspace-manifest.test.ts tooling/fallow-runtime-audit.test.ts tooling/repository-quality/plugin-tests.test.ts tooling/repository-quality/plugin-test-shards.test.ts tooling/repository-quality/plugin-preparation.test.ts tooling/plugin-preparation.test.ts tooling/repository-quality/typescript-ownership.test.ts tooling/repository-quality/personal-plugin.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json && bun run --filter '*' typecheck && bun run typecheck:browser-login",
-		"typecheck:browser-login": "tsc --ignoreConfig --noEmit --allowJs --checkJs --module nodenext --moduleResolution nodenext --target es2022 --types bun --skipLibCheck config/agents/plugins/personal/library/one-password/scripts/browser-login.mjs",
+		"typecheck:browser-login": "tsc --ignoreConfig --noEmit --allowJs --checkJs --module nodenext --moduleResolution nodenext --target es2022 --types bun --skipLibCheck config/agents/plugins/personal/library/one-password/scripts/browser-login.mjs config/agents/plugins/personal/library/one-password/scripts/agent-browser-provider.mjs",
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows",
-		"personal:build": "bun run --filter classic-cinema-scripts --filter session-recovery-scripts --filter test-runner-scripts --filter worktree-scripts --filter @local/xero-skill --filter imazing-archive --filter bestie-chapter-check --filter xero-history build:bundle"
+		"personal:build": "bun run --filter classic-cinema-scripts --filter session-recovery-scripts --filter test-runner-scripts --filter worktree-scripts --filter @local/xero-skill --filter imazing-archive --filter bestie-chapter-check --filter xero-history build:bundle && bun build ./config/agents/plugins/personal/library/one-password/scripts/agent-browser-provider.mjs --compile --target=bun-darwin-arm64 --outfile ./config/agents/plugins/personal/library/one-password/dist/agent-browser-one-password"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.15",

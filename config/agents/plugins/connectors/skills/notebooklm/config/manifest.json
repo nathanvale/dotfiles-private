@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "notebooklm",
+  "transport": {
+    "registry": "./mcporter.json"
+  },
+  "selectors": {
+    "profile": {
+      "required": false,
+      "default": "default",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$"
+    }
+  },
+  "requirements": [
+    "mcporter"
+  ],
+  "adapter": "notebooklm",
+  "credentials": {
+    "reference": "vendor-managed-profile"
+  }
+}

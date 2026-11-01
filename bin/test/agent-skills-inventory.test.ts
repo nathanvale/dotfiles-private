@@ -606,4 +606,187 @@ describe('agent-skills-inventory public process', () => {
 		expect(report.topology_path).toBe(realpathSync(join(fixture.dotfiles, 'config', 'agents', 'skills', 'topology.json')))
 		expect(report.lock_path).toBe(realpathSync(join(fixture.home, '.agents', '.skill-lock.json')))
 	})
+
+	describe('installer-owned skills from any upstream source', () => {
+		function installNonMattSkill(fixture: ReturnType<typeof makeFixture>, name: string) {
+			write(join(fixture.home, '.agents', '.skill-lock.json'), JSON.stringify({ version: 3, skills: {
+				[name]: {
+					source: 'vercel/turborepo',
+					sourceType: 'github',
+					ref: '8003ff0fe919160f68367cd08465b179410e0692',
+					skillFolderHash: 'a1bae26a81bbc79e6eb14b4e7ec4d36694e6e94a',
+				},
+			} }))
+			skill(join(fixture.agents, name, 'SKILL.md'), name)
+			symlinkSync(join('..', '..', '.agents', 'skills', name), join(fixture.claude, name))
+		}
+
+		test('accepts a non-Matt locked skill at its installer addresses without declarations', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			const result = run(fixture.home, '--json')
+			expect(result.stderr.toString()).toBe('')
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues).toEqual([])
+			expect(result.exitCode).toBe(0)
+			const rows = report.entries.filter((row: { name: string }) => row.name === 'turborepo-fixture')
+			expect(rows.map((row: { address: string }) => row.address)).toEqual(['agents', 'claude'])
+			for (const row of rows) {
+				expect(row).toMatchObject({ provenance: 'third-party-installer-owned', source_owner: 'vercel/turborepo', content_agreement: 'installer-owned' })
+			}
+			expect(rows[0].filesystem_kind).toBe('directory')
+			expect(rows[1].filesystem_kind).toBe('symlink')
+		})
+
+		test('still flags an unlocked, undeclared skill beside a locked one', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.agents, 'unlocked-one', 'SKILL.md'), 'unlocked-one')
+			symlinkSync(join('..', '..', '.agents', 'skills', 'unlocked-one'), join(fixture.claude, 'unlocked-one'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues.map((issue: { code: string, address: string, name: string }) => [issue.code, issue.address, issue.name])).toEqual([
+				['unknown-provenance', 'agents', 'unlocked-one'],
+				['unknown-provenance', 'claude', 'unlocked-one'],
+			])
+		})
+
+		test('still flags a locked skill whose link is broken', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues.map((issue: { code: string, address: string, name: string }) => [issue.code, issue.address, issue.name])).toEqual([
+				['dangling-symlink', 'claude', 'turborepo-fixture'],
+			])
+		})
+
+		function issuePairs(report: { issues: { code: string, address: string, name: string }[] }) {
+			return report.issues.map((issue) => [issue.code, issue.address, issue.name])
+		}
+
+		test('flags a Claude link redirected to the obsolete legacy source', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.legacySource, 'turborepo-fixture', 'SKILL.md'), 'turborepo-fixture')
+			rmSync(join(fixture.claude, 'turborepo-fixture'))
+			symlinkSync(join(fixture.legacySource, 'turborepo-fixture'), join(fixture.claude, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			expect(issuePairs(JSON.parse(result.stdout.toString()))).toContainEqual(['legacy-live-address', 'claude', 'turborepo-fixture'])
+		})
+
+		test('flags a Claude link that resolves to a different valid payload', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.agents, 'other-skill', 'SKILL.md'), 'other-skill')
+			write(join(fixture.home, '.agents', '.skill-lock.json'), JSON.stringify({ version: 3, skills: {
+				'turborepo-fixture': { source: 'vercel/turborepo' },
+				'other-skill': { source: 'vercel/turborepo' },
+			} }))
+			rmSync(join(fixture.claude, 'turborepo-fixture'))
+			symlinkSync(join('..', '..', '.agents', 'skills', 'other-skill'), join(fixture.claude, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(issuePairs(report)).toEqual([['installer-address-mismatch', 'claude', 'turborepo-fixture']])
+			const row = report.entries.find((entry: { name: string, address: string }) => entry.name === 'turborepo-fixture' && entry.address === 'claude')
+			expect(row.provenance).not.toBe('third-party-installer-owned')
+		})
+
+		test('flags a Claude real directory that is not the installer payload link', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.claude, 'turborepo-fixture'))
+			skill(join(fixture.claude, 'turborepo-fixture', 'SKILL.md'), 'turborepo-fixture')
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			expect(issuePairs(JSON.parse(result.stdout.toString()))).toEqual([['installer-address-mismatch', 'claude', 'turborepo-fixture']])
+		})
+
+		test('flags an agents link that does not name its own payload', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			skill(join(fixture.home, 'elsewhere', 'other-skill', 'SKILL.md'), 'other-skill')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			symlinkSync(join(fixture.home, 'elsewhere', 'other-skill'), join(fixture.agents, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			expect(issuePairs(JSON.parse(result.stdout.toString()))).toContainEqual(['installer-address-mismatch', 'agents', 'turborepo-fixture'])
+		})
+
+		test('rejects a shared payload that is a regular file, with the links through it', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			write(join(fixture.home, 'elsewhere', 'turborepo-fixture'), 'not a skill\n')
+			symlinkSync(join(fixture.home, 'elsewhere', 'turborepo-fixture'), join(fixture.agents, 'turborepo-fixture'))
+			symlinkSync(join(fixture.agents, 'turborepo-fixture'), join(fixture.codex, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(issuePairs(report).map((pair) => pair[0])).toContain('installer-address-mismatch')
+			expect(report.entries.filter((row: { name: string, provenance: string }) => row.name === 'turborepo-fixture' && row.provenance === 'third-party-installer-owned')).toEqual([])
+		})
+
+		test('rejects links through a shared payload that points into the obsolete personal source', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			rmSync(join(fixture.agents, 'turborepo-fixture'), { recursive: true })
+			skill(join(fixture.personalSource, 'turborepo-fixture', 'SKILL.md'), 'turborepo-fixture')
+			symlinkSync(join(fixture.personalSource, 'turborepo-fixture'), join(fixture.agents, 'turborepo-fixture'))
+			symlinkSync(join(fixture.agents, 'turborepo-fixture'), join(fixture.codex, 'turborepo-fixture'))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.entries.filter((row: { name: string, provenance: string }) => row.name === 'turborepo-fixture' && row.provenance === 'third-party-installer-owned')).toEqual([])
+			const addresses = issuePairs(report).filter((pair) => pair[2] === 'turborepo-fixture').map((pair) => pair[1])
+			expect(addresses).toEqual(expect.arrayContaining(['agents', 'claude', 'codex']))
+		})
+
+		test('accepts a Codex link to the installer payload and flags an independent Codex copy', () => {
+			const fixture = makeFixture()
+			rmSync(join(fixture.home, '.agents', '.skill-lock.json'))
+			installNonMattSkill(fixture, 'turborepo-fixture')
+			symlinkSync(join(fixture.agents, 'turborepo-fixture'), join(fixture.codex, 'turborepo-fixture'))
+			const linked = run(fixture.home, '--json')
+			expect(linked.exitCode).toBe(0)
+			expect(JSON.parse(linked.stdout.toString()).issues).toEqual([])
+
+			rmSync(join(fixture.codex, 'turborepo-fixture'))
+			skill(join(fixture.codex, 'turborepo-fixture', 'SKILL.md'), 'completely-different-skill')
+			const copied = run(fixture.home, '--json')
+			expect(copied.exitCode).toBe(1)
+			const report = JSON.parse(copied.stdout.toString())
+			expect(issuePairs(report)).toEqual([['codex-duplicate-name', 'codex', 'turborepo-fixture']])
+			const row = report.entries.find((entry: { name: string, address: string }) => entry.name === 'turborepo-fixture' && entry.address === 'codex')
+			expect(row.provenance).toBe('codex-owned')
+		})
+
+		test('keeps a declared reviewed vendor on its reviewed checks until it migrates', () => {
+			const fixture = makeFixture()
+			// The machine lock also records locked-one, which topology declares as a reviewed vendor.
+			rmSync(join(fixture.agents, 'locked-one'))
+			skill(join(fixture.agents, 'locked-one', 'SKILL.md'), 'locked-one')
+			write(join(fixture.home, '.agents', '.skill-lock.json'), JSON.stringify({ version: 3, skills: {
+				'locked-one': { source: 'fixture/skills' },
+			} }))
+			const result = run(fixture.home, '--json')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues.map((issue: { code: string, name: string }) => [issue.code, issue.name])).toContainEqual(['wrong-third-party-target', 'locked-one'])
+		})
+	})
 })

@@ -16,7 +16,9 @@
 # forward added to the shared interactive mac-mini mux) is left alone and
 # checked every poll; once it is released the session ends so the next start
 # takes it over. When every port is held this waits without opening an SSH
-# connection, so it never competes for a port or repeats authentication.
+# connection, so it never competes for a port or repeats authentication; it
+# still ends every REDISCOVER_SECONDS so the next start re-reads serve.json and
+# follows a page server move.
 
 set -euo pipefail
 
@@ -25,6 +27,7 @@ readonly SSH_HOST="${HERDR_REPORT_FORWARD_HOST:-mac-mini}"
 readonly DATA_DIR="${HERDR_REPORT_FORWARD_DATA_DIR:-.herdr-projects/data}"
 readonly POLL_SECONDS="${HERDR_REPORT_FORWARD_POLL_SECONDS:-15}"
 readonly MAX_PORTS="${HERDR_REPORT_FORWARD_MAX_PORTS:-32}"
+readonly REDISCOVER_SECONDS="${HERDR_REPORT_FORWARD_REDISCOVER_SECONDS:-300}"
 readonly SSH_BIN="${HERDR_REPORT_FORWARD_SSH_BIN:-/usr/bin/ssh}"
 readonly LSOF_BIN="${HERDR_REPORT_FORWARD_LSOF_BIN:-/usr/sbin/lsof}"
 
@@ -105,6 +108,7 @@ main() {
     return
   fi
   [[ "${DATA_DIR}" =~ ^[A-Za-z0-9._/-]+$ ]] || die "HERDR_REPORT_FORWARD_DATA_DIR has unsupported characters"
+  [[ "${REDISCOVER_SECONDS}" =~ ^[1-9][0-9]*$ ]] || die "HERDR_REPORT_FORWARD_REDISCOVER_SECONDS must be a whole number of seconds"
 
   local discovered current port listeners
   discovered="$(ssh_mini "${SSH_HOST}" "$(discovery_command)")" ||
@@ -136,8 +140,14 @@ main() {
 
   local freed
   if ((${#forwards[@]} == 0)); then
-    # Wait locally until one held port frees; the next start rediscovers.
+    # Wait locally until one held port frees, or long enough that the page
+    # server may have moved; either way the next start rediscovers.
+    local waited_from="${SECONDS}"
     until freed="$(first_released "${held[@]}")"; do
+      if ((SECONDS - waited_from >= REDISCOVER_SECONDS)); then
+        log "status=rediscovering after=${REDISCOVER_SECONDS}s"
+        exit 0
+      fi
       sleep "${POLL_SECONDS}"
     done
     log "status=released port=${freed}"

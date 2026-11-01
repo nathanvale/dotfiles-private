@@ -1,0 +1,1850 @@
+{
+  "vendorVersion": "0.15.8",
+  "schemaVersion": 1,
+  "operations": [
+    {
+      "name": "alias",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "alias_type": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "refresh_auth",
+      "admission": "blocked",
+      "effect": "auth-forbidden",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "save_auth_tokens",
+      "admission": "blocked",
+      "effect": "auth-forbidden",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cookies": {
+            "type": "string"
+          },
+          "csrf_token": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "request_body": {
+            "type": "string"
+          },
+          "request_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cookies"
+        ]
+      }
+    },
+    {
+      "name": "batch",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "titles": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "artifact_type": {
+            "type": "string"
+          },
+          "notebook_names": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "all": {
+            "type": "boolean"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "notebook_query",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "source_ids": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "new_conversation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "chat_configure",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "custom_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "response_length": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "notebook_query_start",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "source_ids": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "new_conversation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "notebook_query_status",
+      "admission": "pending-proof",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_id"
+        ]
+      }
+    },
+    {
+      "name": "chat_list",
+      "admission": "pending-proof",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "chat_get",
+      "admission": "pending-proof",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "chat_export",
+      "admission": "pending-proof",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "chat_save_to_note",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "conversation_id"
+        ]
+      }
+    },
+    {
+      "name": "collection_list",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "collection_create",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "notebook_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "collection_edit",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "collection_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notebook_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "collection_id"
+        ]
+      }
+    },
+    {
+      "name": "collection_set_emoji",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "collection_id": {
+            "type": "string"
+          },
+          "emoji": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection_id",
+          "emoji"
+        ]
+      }
+    },
+    {
+      "name": "collection_delete",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "collection_id": {
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "collection_id"
+        ]
+      }
+    },
+    {
+      "name": "cross_notebook_query",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "notebook_names": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "all": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "download_artifact",
+      "admission": "pending-proof",
+      "effect": "export",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "artifact_type": {
+            "type": "string"
+          },
+          "output_path": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output_format": {
+            "type": "string"
+          },
+          "slide_deck_format": {
+            "type": "string"
+          },
+          "wait": {
+            "type": "boolean"
+          },
+          "wait_timeout": {
+            "type": "number"
+          },
+          "poll_interval": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "artifact_type",
+          "output_path"
+        ]
+      }
+    },
+    {
+      "name": "download_all_artifacts",
+      "admission": "pending-proof",
+      "effect": "export",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output_dir": {
+            "type": "string"
+          },
+          "artifact_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output_format": {
+            "type": "string"
+          },
+          "slide_deck_format": {
+            "type": "string"
+          },
+          "all_notebooks": {
+            "type": "boolean"
+          },
+          "skip_existing": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "export_artifact",
+      "admission": "pending-proof",
+      "effect": "export",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "export_type": {
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "notebook_id",
+          "artifact_id",
+          "export_type"
+        ]
+      }
+    },
+    {
+      "name": "label",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "label_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label_ids": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "emoji": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unlabeled_only": {
+            "type": "boolean"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "notebook_list",
+      "admission": "admitted",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "max_results": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "name": "notebook_get",
+      "admission": "admitted",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "notebook_describe",
+      "admission": "admitted",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "notebook_create",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "notebook_rename",
+      "admission": "blocked",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "new_title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "new_title"
+        ]
+      }
+    },
+    {
+      "name": "notebook_delete",
+      "admission": "pending-proof",
+      "effect": "destructive",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "note",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "note_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "pipeline",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "notebook_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pipeline_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_url": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "profile",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "make_default": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "research_start",
+      "admission": "pending-proof",
+      "effect": "generate",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "notebook_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "research_status",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "poll_interval": {
+            "type": "integer"
+          },
+          "max_wait": {
+            "type": "integer"
+          },
+          "compact": {
+            "type": "boolean"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "auto_import": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "research_import",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "source_indices": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeout": {
+            "type": "number"
+          },
+          "cited_only": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "task_id"
+        ]
+      }
+    },
+    {
+      "name": "server_info",
+      "admission": "admitted",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "notebook_share_status",
+      "admission": "pending-proof",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "notebook_share_public",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "is_public": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "notebook_share_invite",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "email"
+        ]
+      }
+    },
+    {
+      "name": "notebook_share_batch",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "recipients": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "recipients"
+        ]
+      }
+    },
+    {
+      "name": "tag",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "notebook_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notebook_title": {
+            "type": "string"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "source_add",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "source_type": {
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "urls": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "doc_type": {
+            "type": "string"
+          },
+          "wait": {
+            "type": "boolean"
+          },
+          "wait_timeout": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "source_type"
+        ]
+      }
+    },
+    {
+      "name": "source_list_drive",
+      "admission": "pending-proof",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "skip_freshness": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "source_sync_drive",
+      "admission": "pending-proof",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_ids": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source_ids"
+        ]
+      }
+    },
+    {
+      "name": "source_rename",
+      "admission": "blocked",
+      "effect": "write",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "new_title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "source_id",
+          "new_title"
+        ]
+      }
+    },
+    {
+      "name": "source_delete",
+      "admission": "pending-proof",
+      "effect": "destructive",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_ids": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "source_describe",
+      "admission": "admitted",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ]
+      }
+    },
+    {
+      "name": "source_get_content",
+      "admission": "admitted",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "type": "string"
+          },
+          "wait": {
+            "type": "boolean"
+          },
+          "wait_timeout": {
+            "type": "number"
+          },
+          "poll_interval": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "source_id"
+        ]
+      }
+    },
+    {
+      "name": "studio_create",
+      "admission": "pending-proof",
+      "effect": "generate",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "artifact_type": {
+            "type": "string"
+          },
+          "source_ids": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "audio_format": {
+            "type": "string"
+          },
+          "audio_length": {
+            "type": "string"
+          },
+          "video_format": {
+            "type": "string"
+          },
+          "visual_style": {
+            "type": "string"
+          },
+          "video_style_prompt": {
+            "type": "string"
+          },
+          "orientation": {
+            "type": "string"
+          },
+          "detail_level": {
+            "type": "string"
+          },
+          "infographic_style": {
+            "type": "string"
+          },
+          "slide_format": {
+            "type": "string"
+          },
+          "slide_length": {
+            "type": "string"
+          },
+          "report_format": {
+            "type": "string"
+          },
+          "report_template": {
+            "type": "string"
+          },
+          "custom_prompt": {
+            "type": "string"
+          },
+          "question_count": {
+            "type": "integer"
+          },
+          "difficulty": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "focus_prompt": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "artifact_type"
+        ]
+      }
+    },
+    {
+      "name": "studio_status",
+      "admission": "admitted",
+      "effect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "new_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "include_details": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "notebook_id"
+        ]
+      }
+    },
+    {
+      "name": "report",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "wait_for": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "timeout": {
+            "type": "integer"
+          },
+          "include_content": {
+            "type": "boolean"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "language": {
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "artifact_id",
+          "action"
+        ]
+      }
+    },
+    {
+      "name": "studio_delete",
+      "admission": "pending-proof",
+      "effect": "destructive",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "artifact_id"
+        ]
+      }
+    },
+    {
+      "name": "studio_revise",
+      "admission": "pending-proof",
+      "effect": "generate",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notebook_id": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "slide_instructions": {
+            "items": {
+              "properties": {
+                "slide": {
+                  "type": "integer"
+                },
+                "instruction": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "slide",
+                "instruction"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "confirm": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "notebook_id",
+          "artifact_id",
+          "slide_instructions"
+        ]
+      }
+    },
+    {
+      "name": "usage_get",
+      "admission": "pending-proof",
+      "effect": "mixed",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

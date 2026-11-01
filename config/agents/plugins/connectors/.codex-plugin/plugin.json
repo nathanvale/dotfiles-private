@@ -1,6 +1,6 @@
 {
   "name": "connectors",
-  "version": "0.7.2",
+  "version": "0.8.4",
   "description": "Nathan's service connectors for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -13,13 +13,15 @@
     "jira",
     "confluence",
     "notion",
-    "mcporter"
+    "mcporter",
+    "notebooklm",
+    "jev"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Connectors",
     "shortDescription": "Work with connected services",
-    "longDescription": "Service connectors shared by Codex and Claude Code, including the complete Notion MCP tool set, raw meeting transcripts, account-isolated OAuth, and journaled writes.",
+    "longDescription": "Service connectors shared by Codex and Claude Code, including Notion, NotebookLM reads with private result projections, account-isolated OAuth where supported, and qualified journaled writes.",
     "developerName": "Nathan Vale",
     "category": "Productivity",
     "capabilities": [

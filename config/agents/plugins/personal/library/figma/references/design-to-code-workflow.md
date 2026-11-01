@@ -31,9 +31,8 @@ Agent workflow for implementing UI from a Figma design source of truth.
 6. **Implement** using existing codebase components and design tokens. Prefer
    the project's component library over raw HTML/CSS.
 
-7. **Compare** — fetch a fresh screenshot from Figma and compare to the
-   implementation (browser screenshot or Storybook story). Patch only real
-   design or semantic gaps.
+7. **Compare** using the measured [design parity check](#design-parity-check)
+   below. Patch discrepancies against the approved reference and repeat the proof.
 
 8. **Test** — run relevant component tests with accessibility enabled.
 
@@ -68,11 +67,14 @@ Connect is not set up for the target project, note it as a gap and suggest
 
 When comparing Figma to an existing implementation:
 
-1. Fetch design context and screenshot for the target node.
-2. Capture a screenshot of the current implementation (browser or Storybook).
-3. Diff against design tokens — look for hardcoded values that should use
-   tokens.
-4. Diff against layout constraints — look for manual positioning that should
-   use auto-layout patterns.
-5. Patch only real gaps. Do not chase pixel-perfect parity when semantic
-   correctness is achieved.
+1. Bind the approved reference revision, target nodes, implementation candidate,
+   content, state and widths. Fetch design context, variables and screenshots;
+   inspect relevant child nodes when the response omits required properties.
+2. Apply [spacing evidence](../../design-parity-session/SKILL.md#spacing-evidence)
+   for agreed tolerances, typography, nested gaps and cumulative vertical drift.
+   Collect actual browser geometry and resolved styles as well as screenshots.
+3. Compare token bindings and layout constraints with the measured result.
+   Return conflicts between Figma and canonical components to their owner for
+   an accepted deviation; semantic correctness alone leaves spacing unproved.
+4. Return every required measurement and unresolved row. After an authorised
+   repair, repeat the same reference, state, widths and measurement contract.

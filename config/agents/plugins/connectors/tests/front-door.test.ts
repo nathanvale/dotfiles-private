@@ -99,6 +99,7 @@ describe("compiled front door: discovery", () => {
 		expect(result.stdout).toContain("--discover --json");
 		expect(result.stdout).toContain("--discover-command <identity> --json");
 		expect(result.stdout).toContain("--help");
+		expect(result.stdout).toContain("Private input requires an adapter with staged transport");
 		expect(result.stdout).toContain("deps status [tool]");
 		expect(result.stdout).toContain("deps repair <tool> --preview");
 		expect(result.stdout).toContain("deps repair <tool> --apply <previewId>");
@@ -510,7 +511,7 @@ describe("compiled front door: run through the packaged fixture adapter (public 
 		try {
 			// Independent literals of the accepted grammar: unlock alone names a
 			// runId or a previewId.
-			const runRepair = "Run connectors run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
+			const runRepair = "Run connectors run <connector> [--select name=value ...] <operation> [--input <json-object> | --input-file <path|->] [--preview | --apply <previewId>]";
 			const recoverRepair = "Run connectors recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
 			for (const [argv, identity, repair] of [
 				[["run", CONNECTOR, "probe", "--preview", "--apply", "p-1"], "connectors.run", runRepair],
@@ -545,7 +546,7 @@ describe("compiled front door: per-Skill resolution (Q11a)", () => {
 	// Independent oracle: the shipped Skills whose SKILL.md reaches the front
 	// door, and the exact line each declares to resolve it from its own
 	// directory (no global command, no dotfiles path).
-	const FRONT_DOOR_SKILLS = ["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid", "notion"];
+	const FRONT_DOOR_SKILLS = ["atlassian", "canva", "context7", "figma", "firecrawl", "jev", "mermaid", "notion"];
 	const RELATIVE = "../../bin/connectors";
 	const INVOCATION = `CONNECTORS="$SKILL_DIR/${RELATIVE}"`;
 

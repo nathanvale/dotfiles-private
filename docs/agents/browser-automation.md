@@ -5,6 +5,12 @@ Browser Use are retired by
 [ADR-0011](../adr/0011-native-harness-browsers.md): `browser-use`,
 `browser-lanes`, and `browser-lane` are not routes.
 
+For approved unattended website login in Pi, Claude Code or Codex, use the
+dedicated Agent Browser route owned by the
+[1Password login reference](../../config/agents/plugins/personal/library/one-password/references/agent-browser.md).
+[ADR-0015](../adr/0015-shared-unattended-browser-credentials.md) records this
+exception. Keep ordinary personal Chrome work on the native surface below.
+
 ## Surface
 
 | Task | Codex | Claude Code |
@@ -114,4 +120,5 @@ are the existing configuration owner.
 
 Agent Browser, Playwright, MCPorter, and the `chrome-devtools` MCPorter entry
 stay for their own consumers (OpenCode agents, Connectors, VS Code). They are
-not entry points for the tasks above.
+not entry points for native-browser tasks above. The dedicated 1Password
+route is the admitted Agent Browser exception.

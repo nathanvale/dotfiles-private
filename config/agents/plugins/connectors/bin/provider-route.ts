@@ -12,6 +12,7 @@
 
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { type PrivateFileArgument, privateInputToken } from "./private-input.ts";
 import { ownedDirectory, stateRoot } from "./private-state.ts";
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 
@@ -277,19 +278,20 @@ function checkOption(verb: Verb, flags: string[], index: number): number {
 }
 
 // Tool arguments are named only. MCPorter reads a local file for a value that
-// starts with a single @, so that form never reaches it.
-function checkToolArgument(token: string): void {
+// starts with a single @. Only an explicitly admitted private dispatcher file
+// may use that form.
+function checkToolArgument(token: string, privateArgument: string | null): void {
 	const match = TOOL_ARGUMENT_PATTERN.exec(token);
 	if (!match) throw new RouteError("argument-invalid", `tool arguments take the form name=value or name:value: ${token}`);
 	const value = match[2] ?? "";
-	if (value.startsWith("@") && !value.startsWith("@@")) {
+	if (value.startsWith("@") && !value.startsWith("@@") && token !== privateArgument) {
 		throw new RouteError("argument-invalid", `a tool argument cannot read a local file: ${match[1]}`);
 	}
 }
 
 // Allow-list, not deny-list: anything MCPorter could use to reach another
 // server, config, working directory, header, or environment is absent from it.
-function checkFlags(verb: Verb, flags: string[]): string[] {
+function checkFlags(verb: Verb, flags: string[], privateArgument: string | null): string[] {
 	let index = 0;
 	while (index < flags.length) {
 		const token = flags[index] ?? "";
@@ -298,13 +300,20 @@ function checkFlags(verb: Verb, flags: string[]): string[] {
 			continue;
 		}
 		if (verb !== "call") throw new RouteError("arguments-invalid", `unexpected ${verb} argument: ${token}`);
-		checkToolArgument(token);
+		checkToolArgument(token, privateArgument);
 		index += 1;
 	}
 	return verb === "auth" || flags.includes("--no-oauth") ? flags : [...flags, "--no-oauth"];
 }
 
-function plan(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, dispatcherTransport: boolean, internalContext?: string): RoutePlan {
+function admittedPrivateArgument(input: PrivateFileArgument | undefined, env: EnvironmentSource, dispatcherOwned: boolean): string | null {
+ if (input === undefined) return null;
+ const token = privateInputToken(input, env);
+ if (!dispatcherOwned || token === null) throw new RouteError("argument-invalid", "the private dispatcher input file is not admitted");
+ return token;
+}
+
+function plan(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, dispatcherTransport: boolean, internalContext?: string, privateInput?: PrivateFileArgument): RoutePlan {
 	const invocation = parseInvocation(argv);
 	const configDir = path.join(skillsRoot, invocation.skill, "config");
 	const configPath = path.join(configDir, "mcporter.json");
@@ -332,10 +341,11 @@ function plan(argv: string[], skillsRoot: string, env: Record<string, string | u
 		// selectors, keep-alive policy, or any safe route environment key.
 		routeEnv[INTERNAL_INVOCATION_CONTEXT_ENV] = internalContext;
 	}
+	const privateArgument = admittedPrivateArgument(privateInput, env, dispatcherTransport && declaration.dispatcherOwned === true);
 	return {
 		configPath,
 		server,
-		argv: ["--config", configPath, invocation.verb, target, ...checkFlags(invocation.verb, flags)],
+		argv: ["--config", configPath, invocation.verb, target, ...checkFlags(invocation.verb, flags, privateArgument)],
 		env: routeEnv,
 	};
 }
@@ -381,8 +391,8 @@ export function planRoute(argv: string[], skillsRoot: string, env: Record<string
 }
 
 // Internal seam for a dispatcher after it has enforced its own policy.
-export function planDispatcherRoute(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, internalContext: string): RoutePlan {
-	return plan(argv, skillsRoot, env, true, internalContext);
+export function planDispatcherRoute(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, internalContext: string, privateInput?: PrivateFileArgument): RoutePlan {
+	return plan(argv, skillsRoot, env, true, internalContext, privateInput);
 }
 
 function refuse(code: string, message: string, exitCode: number): never {
