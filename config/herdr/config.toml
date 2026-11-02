@@ -84,3 +84,7 @@ rows = [["state_icon", "machine", "workspace", { token = "tab", rules = [{ equal
 [ui.sidebar.spaces]
 rows = [["state_icon", "workspace"], ["branch", "git_status"], [{ token = "$summary", dim = true }, "$progress"]]
 # <<< herdr-projects sidebar
+
+[session]
+# Keep saved panes and conversations; resume only selected work after restart.
+resume_agents_on_restore = false

@@ -173,3 +173,7 @@ config/monash-tools/
 /config/opencode/herdr-opencode/
 /config/opencode/herdr-tui-session.js
 /config/opencode/plugins/herdr-agent-state.js
+
+# Machine-local browser credential-provider configuration and run output.
+/config/agent-browser/one-password.json
+/.playwright-cli/
