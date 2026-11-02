@@ -42,6 +42,15 @@
         "name": "Nathan Vale"
       },
       "source": "./connectors"
+    },
+    {
+      "name": "monash",
+      "description": "A private home for Monash skills and tools, starting with explicit Azure Foundry routes for Codex and Claude Code.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Nathan Vale"
+      },
+      "source": "./monash"
     }
   ]
 }

@@ -1,0 +1,15 @@
+{
+  "name": "monash",
+  "version": "0.1.0",
+  "description": "A private home for Monash skills and tools, starting with explicit Azure Foundry routes for Codex and Claude Code.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "keywords": [
+    "monash",
+    "azure-foundry",
+    "codex",
+    "claude-code",
+    "herdr"
+  ]
+}

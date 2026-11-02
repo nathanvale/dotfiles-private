@@ -8,6 +8,12 @@
 			"reason": "Connectors tests use local tools and do not carry a Bun lockfile."
 		},
 		{
+			"name": "monash",
+			"path": "config/agents/plugins/monash",
+			"ownership": "no-nested-install",
+			"reason": "Monash tests are Python unittest suites run through its package scripts and need no Bun dependencies or lockfile."
+		},
+		{
 			"name": "my-second-brain-playground",
 			"path": "config/agents/plugins/my-second-brain-playground",
 			"ownership": "independent-lock",
