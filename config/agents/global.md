@@ -83,10 +83,10 @@
 - Agent-facing writing: read
   `$HOME/code/dotfiles/docs/agents/instruction-maintenance.md` before changing
   `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to.
-- Personal plugin development, install, refresh or activation; or skill creation,
-  review, editing, source, live address, migration, retirement, or CLI and
-  runtime routing: read
-  `$HOME/code/dotfiles/docs/agents/skills.md` and follow its skill-work map.
+- Skill or plugin creation, review, editing, installation, update, enablement,
+  source, live address, migration, retirement, or CLI and runtime routing,
+  including Matt Pocock, pstack and Pi: read
+  `$HOME/code/dotfiles/docs/agents/skills.md` and follow its owner map.
 - Generated file: edit its named source, then regenerate the output.
 - New or relocated code, repository, project packet, note, plan,
   specification, ticket, research, finding, proof, or runtime evidence: read

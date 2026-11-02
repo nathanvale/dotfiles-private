@@ -18,7 +18,7 @@ Scope, admission, and the edit rule:
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
 | [`work-placement.md`](work-placement.md) | Choosing or changing the owner of code, repositories, project packets, notes, plans, evidence, or runtime output |
-| [`skills.md`](skills.md) | Developing, installing, refreshing, or activating a personal plugin; or creating, reviewing, sourcing, migrating, or retiring a skill |
+| [`skills.md`](skills.md) | Skill or plugin creation, review, installation, updates, enablement, sources or migration, including Matt Pocock, pstack and Pi |
 | [`email.md`](email.md) | Answering a question about an accessible email |
 | [`browser-automation.md`](browser-automation.md) | Opening, reading, or acting on a page in Codex or Claude Code; Ovis or Home Assistant access; home network or WireGuard access to the Mini; starting or sharing local apps, Storybook or Herdr review pages across devices |
 | [`browser-authorization.md`](browser-authorization.md) | A connector, integration, or login needs browser consent, a provider-issued authorization link, or OAuth or device-code sign-in |

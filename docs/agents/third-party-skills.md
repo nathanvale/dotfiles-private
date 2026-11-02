@@ -1,15 +1,17 @@
 # Third-Party Skills
 
-## One route: the installer
+## Standalone skills: the installer
 
-Every skill you did not write follows the Matt Pocock pattern: `npx skills`
-owns its files, links, and machine lock. Keep installed payloads outside this
-repository. Add no copy under `config/agents/skills/third-party/`, no
+Standalone skills you did not write follow the Matt Pocock pattern: `npx skills`
+owns their files, links, and machine lock. Complete native plugin packages,
+including pstack, follow
+[the native installation owner](skills.md#matt-pocock-and-pstack-installations).
+Keep installed payloads outside this repository. Add no copy under `config/agents/skills/third-party/`, no
 repository lock record, and no `topology.json#thirdParty` declaration.
 Check installed command syntax with `npx skills --help`.
 
 ```sh
-# Choose a named skill; always restrict installation to these two agents.
+# Choose a named skill and restrict installation to the selected agents.
 npx skills add OWNER/REPO -g --skill SKILL_NAME -a claude-code -a codex
 npx skills list -g
 npx skills update SKILL_NAME -g
@@ -17,6 +19,8 @@ npx skills remove SKILL_NAME -g -a claude-code -a codex
 ```
 
 - Select the exact skills requested. Retired `loop-me` remains excluded.
+- Target every explicitly selected Harness, including Pi when it is in scope;
+  preserve each Harness's enablement rather than copying another's settings.
 - Use named updates so one update does not touch other skills. Updating
   resolves the current upstream source.
 - Preserve existing Claude visibility settings for these non-plugin skills.
