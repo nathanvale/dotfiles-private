@@ -88,6 +88,13 @@ const node = (input: Input) => `figma-node:${s(input, "fileKey")}:${s(input, "no
 const codeConnectRead = (input: Input): Call => ({ tool: "get_code_connect_map", args: { fileKey: s(input, "fileKey"), nodeId: s(input, "nodeId") } });
 const whoami = (): Call => ({ tool: "whoami", args: {} });
 
+// Exact eligible names from hosted tools/list, 2026-11-03. Sessions are
+// task correlation, not credentials or proof that a file is accessible.
+export const FILE_SESSION_TOOLS: ReadonlySet<string> = new Set([
+	"get_screenshot", "get_design_context", "get_motion_context", "get_metadata", "get_variable_defs", "get_figjam", "generate_diagram", "get_code_connect_map", "add_code_connect_map", "get_code_connect_suggestions", "send_code_connect_mappings", "get_context_for_code_connect", "use_figma", "get_libraries", "search_design_system", "upload_assets", "download_assets", "list_file_shaders",
+]);
+const sessionId: Check = (value) => typeof value === "string" && /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/.test(value);
+
 const WRITES: Readonly<Record<string, WriteSpec>> = {
 	add_code_connect_map: {
 		keys: { required: { fileKey: text, nodeId: text, source: text, componentName: text, label: text }, optional: { template: text, templateDataJson: text } },
@@ -186,6 +193,8 @@ const WRITES: Readonly<Record<string, WriteSpec>> = {
 };
 
 const READS = [
+	"create_session",
+	"get_figma_skill",
 	"whoami",
 	"get_metadata",
 	"get_design_context",
@@ -217,6 +226,10 @@ export function operationKind(operation: string): Kind | null {
 }
 
 export const OPERATION_NAMES: readonly string[] = [...READS, ...Object.keys(WRITES)];
+// get_figma_skill is a front-door alias for the hosted resources/read method;
+// the current Provider does not advertise it as a tool.
+export const PROVIDER_TOOLS = OPERATION_NAMES.filter((name) => name !== "get_figma_skill");
+const skillUri = (value: unknown): value is string => typeof value === "string" && (value === "skill://index.json" || /^skill:\/\/figma\/[a-z0-9-]+\/(?:SKILL\.md|references\/[a-zA-Z0-9_/-]+\.md)$/.test(value));
 
 // The whole catalogue, as `connectors schema` reports it.
 export const OPERATION_CATALOGUE: readonly { name: string; kind: Kind }[] = OPERATION_NAMES.map((name) => ({ name, kind: operationKind(name) as Kind }));
@@ -231,11 +244,27 @@ function hasShape(input: Input, keys: KeySpec): boolean {
 	return Object.entries(keys.required).every(([key, check]) => check(input[key])) && Object.keys(input).every((key) => (Object.hasOwn(keys.required, key) ? true : Object.hasOwn(keys.optional, key) && (keys.optional[key] as Check)(input[key])));
 }
 
+const SETUP_READ_KEYS: Readonly<Record<string, KeySpec>> = {
+	create_session: { required: { fileKey: (value) => typeof value === "string" && /^[0-9a-zA-Z]{22,128}$/.test(value), description: (value) => typeof value === "string" && value.length > 0 && value.length <= 2000 }, optional: {} },
+	get_figma_skill: { required: { uri: skillUri }, optional: {} },
+};
+const SETUP_READ_REPAIR: Readonly<Record<string, string>> = {
+	create_session: "create_session needs only fileKey (22 to 128 alphanumeric characters) and description (1 to 2000 characters)",
+	get_figma_skill: "get_figma_skill needs only uri: skill://index.json or skill://figma/<skill>/SKILL.md or references/<path>.md",
+};
+
+export function readInputRepair(operation: string, input: Input | null): string | null {
+	if (input?.sessionId !== undefined && !sessionId(input.sessionId)) return "sessionId must be the exact UUID returned by create_session";
+	const keys = Object.hasOwn(SETUP_READ_KEYS, operation) ? SETUP_READ_KEYS[operation] : undefined;
+	return keys === undefined || (input !== null && hasShape(input, keys)) ? null : (SETUP_READ_REPAIR[operation] as string);
+}
+
 // The pure check of a write's --input; null for anything else. The caller
 // never echoes the rejected value.
 export function writeInput(operation: string, input: Input | null): WriteInput | null {
 	const spec = Object.hasOwn(WRITES, operation) ? WRITES[operation] : undefined;
-	if (spec === undefined || input === null || !hasShape(input, spec.keys) || (spec.valid !== undefined && !spec.valid(input))) return null;
+	const keys = spec && FILE_SESSION_TOOLS.has(operation) ? { required: spec.keys.required, optional: { ...spec.keys.optional, sessionId } } : spec?.keys;
+	if (spec === undefined || keys === undefined || input === null || !hasShape(input, keys) || (spec.valid !== undefined && !spec.valid(input))) return null;
 	return { operation, input, spec };
 }
 
@@ -245,6 +274,6 @@ export const sendArgs = (write: WriteInput): Record<string, unknown> => (write.s
 export function acceptedKeys(operation: string): string | null {
 	const spec = Object.hasOwn(WRITES, operation) ? WRITES[operation] : undefined;
 	if (spec === undefined) return null;
-	const optional = Object.keys(spec.keys.optional);
+	const optional = [...Object.keys(spec.keys.optional), ...(FILE_SESSION_TOOLS.has(operation) ? ["sessionId"] : [])];
 	return `${operation} needs ${Object.keys(spec.keys.required).join(", ")}${optional.length ? `, with optional ${optional.join(", ")}` : ""}; no other key is admitted`;
 }

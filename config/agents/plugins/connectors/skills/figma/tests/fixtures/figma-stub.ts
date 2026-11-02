@@ -7,7 +7,7 @@
 // sees the Connectors envelope and supplies no cause or effect. Its call log
 // is test-owned evidence of what reached it.
 export const CATALOG = [
-	"whoami", "get_metadata", "get_design_context", "get_screenshot", "get_variable_defs", "download_assets", "get_motion_context", "get_figjam", "get_libraries", "search_design_system",
+	"create_session", "whoami", "get_metadata", "get_design_context", "get_screenshot", "get_variable_defs", "download_assets", "get_motion_context", "get_figjam", "get_libraries", "search_design_system",
 	"get_code_connect_map", "get_code_connect_suggestions", "get_context_for_code_connect", "list_generative_plugins", "get_generative_plugin", "list_shaders", "get_shader", "list_file_shaders",
 	"add_code_connect_map", "send_code_connect_mappings", "create_generative_plugin", "create_shader", "update_generative_plugin", "update_shader", "create_new_file", "generate_diagram", "use_figma",
 	"generate_figma_design", "upload_assets",
@@ -30,6 +30,8 @@ export interface FigmaStub {
 	failNext: { tool: string; skipEffect: boolean } | null;
 	// A Weave recipe's quoted cost; 0 runs at once without a quote.
 	weaveCost: number;
+	requireSession: boolean;
+	rejectNext: { tool: string; message: string } | null;
 	// The next use_figma reply succeeds but takes no visible effect.
 	silentUseFigma: boolean;
 	// Every upload POST the stub accepted, in order.
@@ -47,7 +49,8 @@ export function startFigmaStub(): FigmaStub {
 	const mappings = new Map<string, { componentName: string; source: string }[]>();
 	const plugins: Item[] = [];
 	const shaders: Item[] = [];
-	const files = new Map<string, string[]>([["FileKeyExisting01", ["Root"]]]);
+	const files = new Map<string, string[]>([["FileKeyExisting01", ["Root"]], ["FileKeyExisting00000001", ["Root"]], ["FileKeyOther00000000001", ["Root"]]]);
+	const sessions = new Set<string>();
 	const runs: { runId: string; status: string }[] = [{ runId: "run-0", status: "COMPLETED" }];
 	const fills = new Map<string, string>();
 	const slots = new Map<string, { fileKey: string; nodeId: string | null; used: boolean }>();
@@ -58,6 +61,11 @@ export function startFigmaStub(): FigmaStub {
 		return names === undefined ? null : { xml: names.map((name, index) => `<frame id="1:${index + 1}" name="${name}" />`).join("\n") };
 	};
 	const effects: Record<string, (args: Args) => unknown> = {
+		create_session: () => {
+			const sessionId = "9b7513a6-fc1a-4b25-945c-46f3b900b4de";
+			sessions.add(sessionId);
+			return { sessionId };
+		},
 		whoami: () => ({ email: "fixture@example.test", plans: [{ key: "team::1", name: "Fixture team", seat: "Full" }] }),
 		get_metadata: (args) => metadata(args.fileKey),
 		get_design_context: (args) => ({ code: `<div data-node-id="${args.nodeId}" data-fill="${fills.get(`${args.fileKey}:${args.nodeId}`) ?? "none"}" />` }),
@@ -144,7 +152,7 @@ export function startFigmaStub(): FigmaStub {
 		url: "",
 		calls: [],
 		failNext: null,
-		weaveCost: 0,
+		weaveCost: 0, requireSession: false, rejectNext: null,
 		silentUseFigma: false,
 		posts: [],
 		uploadOrigin: null,
@@ -168,27 +176,40 @@ export function startFigmaStub(): FigmaStub {
 			if (request.method !== "POST") return new Response(null, { status: 405 });
 			const url = new URL(request.url);
 			if (url.pathname.startsWith("/upload/")) return upload(url, request);
-			const message = (await request.json()) as { id?: number; method: string; params?: { protocolVersion?: string; name?: string; arguments?: Args } };
+			const message = (await request.json()) as { id?: number; method: string; params?: { protocolVersion?: string; name?: string; arguments?: Args; uri?: string } };
 			if (message.id === undefined) return new Response(null, { status: 202 });
 			const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: message.id, result });
-			if (message.method === "initialize") return reply({ protocolVersion: message.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "figma-stub", version: "1" } });
+			if (message.method === "initialize") return reply({ protocolVersion: message.params?.protocolVersion, capabilities: { tools: {}, resources: {} }, serverInfo: { name: "figma-stub", version: "1" } });
+			if (message.method === "resources/read") {
+				const uri = message.params?.uri;
+				stub.calls.push({ tool: "resources/read", args: { uri } });
+				return reply({ contents: [{ uri, mimeType: "text/markdown", text: "# Fixture design-to-code guidance" }] });
+			}
 			if (message.method === "tools/list") return reply({ tools: CATALOG.map((name) => ({ name, inputSchema: { type: "object", properties: {} } })) });
 			if (message.method !== "tools/call") return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "method not found" } });
-			const tool = message.params?.name ?? "";
-			const args = message.params?.arguments ?? {};
-			stub.calls.push({ tool, args });
-			const failing = stub.failNext?.tool === tool ? stub.failNext : null;
-			if (failing) stub.failNext = null;
-			const effect = effects[tool];
-			if (failing?.skipEffect) return new Response("upstream failure", { status: 500 });
-			const result = effect ? effect(args) : null;
-			if (failing) return new Response("upstream failure", { status: 500 });
-			if (result === null) return reply({ isError: true, content: [{ type: "text", text: "not found" }] });
-			return reply({ content: [{ type: "text", text: JSON.stringify(result) }] });
+			return callTool(message.params?.name ?? "", message.params?.arguments ?? {}, reply);
 		},
 	});
 	function origin(): string {
 		return `http://127.0.0.1:${server.port}`;
+	}
+	// Tool semantics are separate from HTTP and MCP handshake dispatch.
+	function callTool(tool: string, args: Args, reply: (result: unknown) => Response): Response {
+		stub.calls.push({ tool, args });
+		if (stub.rejectNext?.tool === tool) {
+			const rejection = stub.rejectNext;
+			stub.rejectNext = null;
+			return reply({ isError: true, content: [{ type: "text", text: rejection.message }] });
+		}
+		if (stub.requireSession && tool !== "create_session" && args.fileKey && !sessions.has(args.sessionId)) return reply({ isError: true, content: [{ type: "text", text: "Session id is required; call create_session first" }] });
+		const failing = stub.failNext?.tool === tool ? stub.failNext : null;
+		if (failing) stub.failNext = null;
+		const effect = effects[tool];
+		if (failing?.skipEffect) return new Response("upstream failure", { status: 500 });
+		const result = effect ? effect(args) : null;
+		if (failing) return new Response("upstream failure", { status: 500 });
+		if (result === null) return reply({ isError: true, content: [{ type: "text", text: "not found" }] });
+		return reply({ content: [{ type: "text", text: JSON.stringify(result) }] });
 	}
 	// One single-use slot: the POST places its bytes as a node fill or a new
 	// frame, as Figma documents for an upload URL.

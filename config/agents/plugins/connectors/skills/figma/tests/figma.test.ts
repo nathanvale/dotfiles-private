@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { planDispatcherRoute } from "../../../bin/provider-route.ts";
 import { createHarness, FIXTURES, type Harness } from "../../../tests/harness.ts";
-import { OPERATION_NAMES } from "../scripts/catalogue.ts";
+import { OPERATION_NAMES, PROVIDER_TOOLS } from "../scripts/catalogue.ts";
 import { INTERNAL_CONTEXT } from "../scripts/transport.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
@@ -55,10 +55,11 @@ const FIGMA_CATALOG = [...FIGMA_READ_TOOLS, ...FIGMA_WRITE_TOOLS, ...FIGMA_WEAVE
 // ADR 0005: the adapter reaches every catalog tool except two whose effect no
 // admitted read can yet observe; both remain required open capabilities.
 const FIGMA_NOT_ADMITTED = ["generate_figma_design", "weave_upload_asset"];
-const FIGMA_ADMITTED = FIGMA_CATALOG.filter((tool) => !FIGMA_NOT_ADMITTED.includes(tool)).sort();
+const FIGMA_ADMITTED = [...FIGMA_CATALOG.filter((tool) => !FIGMA_NOT_ADMITTED.includes(tool)), "create_session"].sort();
 // Names an upstream server can expose outside the catalog: the MCP prompt, a
 // tool named only in server instructions, and a broad dispatcher.
 const FIGMA_UNCATALOGUED = ["create_design_system_rules", "get_figma_skill", "executeWrite"];
+const SESSION_TOOL = "create_session";
 
 let harness: Harness;
 beforeEach(() => {
@@ -70,7 +71,7 @@ describe("Figma hosted Provider", () => {
 	test("the documented catalog oracle holds 18 read, 11 write, and 6 Weave tools", () => {
 		expect([FIGMA_READ_TOOLS.length, FIGMA_WRITE_TOOLS.length, FIGMA_WEAVE_TOOLS.length]).toEqual([18, 11, 6]);
 		expect(new Set(FIGMA_CATALOG).size).toBe(35);
-		expect(FIGMA_ADMITTED).toHaveLength(33);
+		expect(FIGMA_ADMITTED).toHaveLength(34);
 	});
 
 	test("registry fixes the hosted endpoint and admits exactly the adapter's catalog", () => {
@@ -84,9 +85,10 @@ describe("Figma hosted Provider", () => {
 			auth: "oauth",
 			clientName: "Claude Code",
 		});
-		expect(allowedTools).toHaveLength(33);
+		expect(allowedTools).toHaveLength(34);
 		expect([...allowedTools].sort()).toEqual(FIGMA_ADMITTED);
-		expect([...OPERATION_NAMES].sort()).toEqual(FIGMA_ADMITTED);
+		expect([...PROVIDER_TOOLS].sort()).toEqual(FIGMA_ADMITTED);
+		expect([...OPERATION_NAMES].sort()).toEqual([...FIGMA_ADMITTED, "get_figma_skill"].sort());
 		expect(JSON.parse(readFileSync(ROUTE, "utf8"))).toEqual({ defaultProvider: "figma-connectors", oauth: "mcporter", dispatcherOwned: true });
 	});
 
@@ -145,7 +147,7 @@ describe("Figma hosted Provider", () => {
 	function probeRegistry(): string {
 		const registry = JSON.parse(readFileSync(CONFIG, "utf8")) as { mcpServers: Record<string, { allowedTools: string[] }> };
 		const allowedTools = registry.mcpServers["figma-connectors"]?.allowedTools ?? [];
-		const advertised = [...FIGMA_CATALOG, ...FIGMA_UNCATALOGUED].join(",");
+		const advertised = [...FIGMA_CATALOG, SESSION_TOOL, ...FIGMA_UNCATALOGUED].join(",");
 		harness.write(
 			"figma-probe-registry.json",
 			JSON.stringify({ imports: [], mcpServers: { "figma-connectors": { command: path.join(FIXTURES, "stdio-probe-server.ts"), env: { PROBE_TOOL_NAMES: advertised }, allowedTools } } }),
