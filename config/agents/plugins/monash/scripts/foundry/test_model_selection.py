@@ -689,6 +689,33 @@ print(json.dumps([{{"name": name, "properties": {{"provisioningState": "Succeede
         wrapper = json.loads(self.wrapper_capture.read_text(encoding="utf-8"))
         self.assertEqual(wrapper[:4], ["inject", "AZURE_OPENAI_API_KEY", "op://synthetic/credential", "--"])
 
+    def test_restrictive_control_bundle_uses_the_selected_sol_route(self) -> None:
+        # Independent oracle: the bounded caller's exact capability reductions.
+        native = [
+            "-c", 'model_reasoning_effort="high"', "--no-daemon", "-a", "never",
+            "exec", "--ignore-user-config", "--sandbox", "read-only",
+            "--disable", "hooks", "--disable", "multi_agent", "--disable", "apps",
+            "--disable", "browser_use", "--disable", "computer_use",
+            "--disable", "unbounded_connection_retries",
+            "-c", 'web_search="disabled"',
+            "-c", "model_providers.monash_foundry.request_max_retries=0",
+            "-c", "model_providers.monash_foundry.stream_max_retries=0",
+        ]
+        result = self.run_cli("launch", "--model", "gpt-6.1-sol", "--agent", "codex",
+                              "--qualification", "--", *native)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        child = self.child_result()
+        self.assertEqual(child["argv"][-len(native):], native)
+        values = {key: value.strip('"') for key, value in
+                  (item.split("=", 1) for item in self.codex_argv_assignments(child["argv"]))}
+        self.assertEqual(values["web_search"], "disabled")
+        self.assertEqual(values["model_providers.monash_foundry.request_max_retries"], "0")
+        self.assertEqual(values["model_providers.monash_foundry.stream_max_retries"], "0")
+        self.assertEqual(values["model_provider"], "monash_foundry")
+        self.assertEqual(values["model"], "gpt-6.1-sol")
+        self.assertEqual(self.effort_values(child["argv"]), ["high"])
+        self.assertEqual(child["env"], {"AZURE_OPENAI_API_KEY": "synthetic-child-key"})
+
     def test_codex_effort_defaults_and_other_routes_are_unchanged(self) -> None:
         sol = self.run_cli("launch", "--model", "gpt-6.1-sol", "--agent", "codex", "--qualification")
         self.assertEqual(sol.returncode, 0, sol.stderr)

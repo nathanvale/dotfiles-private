@@ -408,13 +408,27 @@ official sources with `python3 scripts/foundry/refresh_codex_catalog.py >
 scripts/foundry/codex-models.json`. Requalify the catalogue when upgrading
 Codex.
 
-The route sets `model_reasoning_effort="medium"` unless the caller supplies the
-one supported native override, `-c model_reasoning_effort="LEVEL"` (also
+The route sets `model_reasoning_effort="medium"` unless the caller supplies
+`-c model_reasoning_effort="LEVEL"` (also
 `--config` and `--config=`), once. The launcher then omits its own default and
 leaves the caller's argument last and unchanged. `LEVEL` must be one the pinned
 catalogue lists for the selected deployment (`gpt-5.5`: low, medium, high,
 xhigh; `gpt-6.1-sol`: low, medium, high, xhigh, max, ultra). A deployment with
 no catalogue entry has no known levels, so the override is refused.
+
+The same native config forms accept three capability reductions, once per key:
+
+- `web_search="disabled"` (the bare string `disabled` is also accepted).
+- `model_providers.monash_foundry.request_max_retries=0`.
+- `model_providers.monash_foundry.stream_max_retries=0`.
+
+Values use these exact literals; retry counts accept only the integer literal
+`0`. Other providers, duplicate keys, and `--search` combined with disabled
+search are refused before credential delivery. Accepted arguments remain last
+and unchanged in the native argv. These settings reduce tools or retries;
+they leave the provider, endpoint, model, catalogue and authentication pinned.
+They do not alone prove read-only isolation, hook/MCP restrictions, or a bounded
+process lifetime; the invocation owner still verifies those controls.
 
 All other native Codex `--config` or `-c`, `--profile` or `-p`, `--oss`, and
 `--local-provider`, `--remote`, and `--remote-auth-token-env` arguments are rejected because they could change provider,
