@@ -13,16 +13,44 @@ shipped with this personal skill. Use native `auth login` for a complete form,
 or the plugin's `credential.fill` request for one staged field. Agents do not
 invoke the private `credential.resolve` protocol directly.
 
-Use a unique safe session name for each task, and retain that name for session
-reuse. Include the dedicated config on every invocation:
+Start each task with a new unique safe session name. Verify that the dedicated
+config has its approved domains and `ignoreHttpsErrors` absent or false, with
+no extra launch arguments or browser attachment. Use an explicit environment
+allowlist on every invocation, including startup,
+so ambient `OP_*` and `AGENT_BROWSER_*` variables cannot override the launch:
 
 ```sh
-agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> open <approved-origin>
-agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> snapshot -i --json
+env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
+  PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> session info --json
 ```
 
+Before the first `open`, require `success: true`, the chosen `data.session`,
+`data.namespace: agent-credentials`, `data.active: false`, and null values for
+`data.pid`, `data.runtime` and `data.runtimeError`. For any active or unknown
+session, choose another new name; leave that browser and any unsaved work
+intact. Then open the approved origin with the same allowlisted environment:
+
+```sh
+env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
+  PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> open <approved-origin>
+```
+
+Retain this owned session across login stages, account verification, work and
+review. Reuse only a session whose safe creation through this flow is known.
+For an unknown or pre-existing session, start a new owned session and reopen
+the saved server-side draft; preserve the other browser and any unsaved work.
+
+Agent Browser 0.41.0 can retain disabled certificate verification in an already
+running browser after the config file is restored. Its `session info` output
+does not expose effective TLS verification. The provider validates the current
+config file; it cannot attest the TLS state of an existing browser. This route
+establishes TLS verification when creating its task-owned browser under the
+trusted same-user model.
+
 1. Verify the protected page's account before work. If already signed in as
-   the approved account, reuse that session.
+   the approved account, reuse only this safely created owned session.
 2. On a login page, observe the visible username/password/submit controls.
    Verify the password input is masked and that selectors match the approved
    binding. Check `stream status`; if enabled, run `stream disable` before
@@ -31,7 +59,9 @@ agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session
    both `<login>` arguments and its exact HTTPS origin:
 
    ```sh
-   agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> auth login <login> --credential-provider one-password --item <login> --url <approved-origin> --no-navigate --json
+   env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
+     PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+     agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> auth login <login> --credential-provider one-password --item <login> --url <approved-origin> --no-navigate --json
    ```
 
 4. Wait for the protected page's expected account marker, then verify its URL
@@ -48,7 +78,9 @@ For a username-first form, observe the current origin and input, then fill its
 approved binding through the same dedicated session:
 
 ```sh
-agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> plugin run one-password credential.fill --payload '{"login":"<approved binding>","field":"username","session":"<task-session>"}' --json
+env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
+  PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> plugin run one-password credential.fill --payload '{"login":"<approved binding>","field":"username","session":"<task-session>"}' --json
 ```
 
 Require `data.status: filled`. Observe and click the site's Next control once.
@@ -75,7 +107,7 @@ page that changes between checks.
 - [Pinned native batch transport](https://github.com/vercel-labs/agent-browser/blob/v0.41.0/cli/src/main.rs#L2275).
 
 The config allows only approved website and runtime domains and disables state-save
-intent. Use the fresh browser it launches; profile attachment and saved-state
+intent. Use the fresh owned lifecycle above; profile attachment and saved-state
 imports cannot provide the domain controls. Browser sessions carry account
 authority. This is trusted same-user automation, not compromised-agent
 isolation. Desktop logout or Keychain lock may still block SSH custody.

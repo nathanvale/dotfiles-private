@@ -22,12 +22,14 @@ Keep submission separate. Before using standing draft authority, read
 ## Browser and automatic login
 
 In Pi, Claude Code and Codex, use the installed dedicated Agent Browser route
-from [one-password](../one-password/references/agent-browser.md). Use one short,
-unique task session per portal and include its dedicated configuration on every
-command. Keep login, draft preparation and review in that same session.
+from [one-password](../one-password/references/agent-browser.md). Follow its
+fresh owned-session startup and environment allowlist for each portal. Include
+the dedicated configuration on every command. Keep login, draft preparation
+and review in that same safely created session.
 
-Reuse a signed-in session only after verifying the intended account. At a login
-wall, read the portal reference and check its enabled dedicated-browser binding.
+Reuse that owned signed-in session only after verifying the intended account.
+At a login wall, read the portal reference and check its enabled
+dedicated-browser binding.
 Use native auth login for `timesheets.oncore`, or the staged credential-fill
 route for `timesheets.fasttrack`, on the binding's exact HTTPS origin.
 The one-password reference owns credential delivery and login checks. Verify
