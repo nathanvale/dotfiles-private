@@ -26,6 +26,11 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
   agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" session info --json
 ```
 
+Shell variables do not survive independent tool calls. Carry the returned
+`data.session` identifier in the active task context and use that exact value
+for `<task-session-from-startup>` in every later block. A missing task identity
+blocks continuation; follow the fresh-start and saved-draft recovery below.
+
 Before the first `open`, require `success: true`, `data.session` equal to
 `task_session`, `data.namespace: agent-credentials`, `data.active: false`, and
 null values for `data.pid`, `data.runtime` and `data.runtimeError`. This checks
@@ -35,6 +40,7 @@ preserve existing browsers and unsaved work. Then open the approved origin
 with the same allowlisted environment:
 
 ```sh
+task_session="<task-session-from-startup>"
 env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
   PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
   agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" open <approved-origin>
@@ -62,6 +68,7 @@ trusted same-user model.
    both `<login>` arguments and its exact HTTPS origin:
 
    ```sh
+   task_session="<task-session-from-startup>"
    env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
      PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
      agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" auth login <login> --credential-provider one-password --item <login> --url <approved-origin> --no-navigate --json
@@ -81,6 +88,7 @@ For a username-first form, observe the current origin and input, then fill its
 approved binding through the same dedicated session:
 
 ```sh
+task_session="<task-session-from-startup>"
 env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
   PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
   agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" plugin run one-password credential.fill \
