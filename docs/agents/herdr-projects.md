@@ -36,8 +36,17 @@ selected coordinator and qualify source, installation and activation separately.
 
 ## Distributed work
 
-- Use `default` for new work on each execution host. Preserve live workers in
-  other sessions until their handbacks; consolidation does not relocate them.
+- Place new work in the named project session Nathan selected on its execution
+  host. Qualify that session and its board route before dispatch; hold new work
+  while either is unavailable. Keep existing tasks, reviewers and coordinator
+  conversations in their original sessions through handback. A Herdr pane move
+  stays within one session, and Projects binds task actions and coordinator
+  state to the original socket. Use that owning session for live task actions;
+  redelegation and archive/restore are not session-transfer routes.
+- Ovis and its Projects front door each select one local Herdr socket. Boards
+  can list host-wide tasks, but that list does not qualify Open, Talk or Retry
+  for a task linked to another session. Verify those actions in the task's
+  owning session before relying on them in Ovis.
 - Use the Mini as the coordination host and preferred execution host. Keep the
   laptop available for explicitly assigned work. Resolve host addresses and
   session sockets from local configuration, not shared instructions.
@@ -66,9 +75,25 @@ selected coordinator and qualify source, installation and activation separately.
 
 - Keep work in its owning project. Reuse an existing task for the same scope;
   add or delegate work only within Nathan's request and the selected role.
-- Write short outcome titles and descriptions containing requirements,
-  exclusions and acceptance evidence. Keep model, review, attempts, limits and
-  merge choices in supported settings rather than operational prose.
+- For new tasks admitted to the contract, put five short fields first in the
+  native task description; omit inapplicable fields:
+  - Outcome: deliverable and done condition.
+  - Scope: owned paths and exclusions.
+  - Held decisions: missing facts and the claims they block.
+  - Proof: the existing check or independent review owner for each claim.
+  - Stop: authorized completion and approval boundary.
+- Link source revisions, accepted decisions and earlier plans/verdicts through
+  existing history. Keep superseded text outside the current contract.
+- Choose proportionate existing checks before implementation. Prove any missing
+  check rejects corrupted real input through its actual validator.
+- Keep models, review, attempts, limits and merge choices in supported settings.
+  Read back effective values and provenance before dispatch.
+- Verify the workflow enforces the Stop boundary. Review PASS grants no
+  external-write authority.
+- On resume of a task using the contract, reconcile source and check/review
+  state with it. Preserve existing task descriptions and retained history. Carry
+  accepted decisions forward; route engineering waits to their owner and release
+  condition. Ask only for needed decisions, authority or authentication.
 - For native delegated tasks, let the board own its workers, worktrees, checks
   and reviews. Inspect its state before intervening through Herdr, Git or the
   forge. Verify the supported lifecycle fits the task's source, path and
