@@ -5,7 +5,8 @@
 | Skill | Owner | Everyday action |
 | --- | --- | --- |
 | Personal | `config/agents/plugins/personal/` | Edit the plugin source and refresh the native plugin. |
-| Third-party, including Matt Pocock | `npx skills` | Use its global add, list, update, and remove commands; follow [third-party skills](third-party-skills.md). |
+| Matt Pocock and other standalone third-party skills | `npx skills` | Use its global add, list, update, and remove commands; follow [third-party skills](third-party-skills.md). |
+| pstack | Each Harness's native plugin or package manager | Keep the complete upstream package and a qualified Harness adapter; follow the installation rules below. |
 | GOG, Herdr, `find-skills` (pending migration to the installer) | `config/agents/skills/third-party/` | Leave as is; [third-party skills](third-party-skills.md) records the pending migration. |
 | Project-only | Owning project | Keep discovery within that project. |
 | Codex-installed or another plugin | That Harness or plugin | Use its native management route. |
@@ -15,6 +16,49 @@ Its native manifests select enabled skills. Claude reads explicit directories;
 Codex reads `library/`. `optional/fix-microphone/` remains available to Claude
 and excluded from Codex. Keep disabled and absent skills out of that Harness's
 manifest selection. Claude's `skillOverrides` does not apply to plugin skills.
+
+## Matt Pocock and pstack installations
+
+- Keep Matt Pocock installer-owned. Preserve the selected skills and each
+  Harness's disabled choices; an upstream recommendation does not authorise a
+  switch to plugins or installation of the whole collection.
+- Keep pstack plugin-owned in Claude Code and Codex. Use Pi's native package
+  route for its complete package and adapter. Installing only its skill folders
+  loses shared documentation, agent definitions and plugin namespaces.
+- Give each package one enabled source per Harness. Keep pstack out of the
+  `npx skills` lock. Give Pi its own pinned package source rather than another
+  Harness's cache path, so cache removal cannot break Pi.
+- Build compatibility packages from a recorded upstream revision with a
+  reproducible transformation, an update owner and a rollback source. Change
+  their source and reinstall through the native manager; leave installed caches
+  under that manager's control.
+- Preserve manual invocation when restricting automatic discovery. Codex uses
+  `agents/openai.yaml` with `policy.allow_implicit_invocation: false`; Claude's
+  `disable-model-invocation` field alone does not provide that Codex policy.
+  Check Pi's installed loader rather than assuming either setting applies.
+- Qualify a replacement in every affected machine and Harness before removing
+  its working source. Check manager ownership, complete package resources, a
+  fresh model-visible catalogue, explicit selection and a small read-only
+  workflow. Include delegation when that workflow requires it. Report tool and
+  model adaptations and untested workflows separately from a passing check.
+
+### Pi package boundaries
+
+- Manage Pi packages with `pi install`, `pi list`, `pi update` and `pi remove`.
+  A local compatibility source stays pinned until its replacement is qualified;
+  a native update command does not rebuild that source automatically.
+- Keep Matt in the shared installer payload. Pi also discovers
+  `~/.agents/skills`; verify its actual loader before adding duplicate aliases.
+- Namespace pstack's Pi skill names as `pstack-<name>` to preserve Matt's
+  unprefixed names. Invoke them with `/skill:pstack-<name>` and retain the
+  upstream package's relative resources.
+- Treat an extension that adds delegation as a capability change. Qualify its
+  agent profiles and inherited model/tool policy before enabling it. A passing
+  read-only explainer does not qualify writable agents or every pstack workflow.
+- Before removing a source, retain its exact registration, package revision,
+  resource filters and compatibility receipt. Roll back through the owning
+  manager and verify discovery again. Remove a stale alias only after checking
+  its stored target, unresolved state and absent installer ownership.
 
 ## Personal work
 
