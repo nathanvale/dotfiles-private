@@ -19,8 +19,6 @@ source = Path(sys.argv[1]).read_text()
 replacements = {
     "OP_PATH='/opt/homebrew/bin/op'": 'OP_PATH="$DOTFILES_DIR/bin/op"',
     "reader='/usr/bin/security'": 'reader="$DOTFILES_DIR/bin/security"',
-    '/usr/bin/sudo -n': '"$DOTFILES_DIR/bin/sudo" -n',
-    '/bin/launchctl asuser': '"$DOTFILES_DIR/bin/launchctl" asuser',
     '/usr/bin/codesign --verify': '"$DOTFILES_DIR/bin/codesign" --verify',
     '/usr/bin/stat ': '"$DOTFILES_DIR/bin/stat" ',
     '$(/usr/bin/id -u)': '$("$DOTFILES_DIR/bin/id" -u)',
@@ -32,6 +30,17 @@ for old, new in replacements.items():
 Path(sys.argv[2]).write_text(source)
 PY_COPY
 chmod 700 "$SUBJECT"
+
+# Only the test-owned helper substitutes launchctl. Production has no override.
+mkdir -p "$TEST_ROOT/dotfiles/credentials"
+python3 - "${SOURCE_SUBJECT%/*}/dotfiles/credentials/read-desktop-keychain.py" "$TEST_ROOT/dotfiles/credentials/read-desktop-keychain.py" <<'PY_HELPER'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+old = 'LAUNCHCTL = "/bin/launchctl"'
+assert old in source
+Path(sys.argv[2]).write_text(source.replace(old, 'LAUNCHCTL = os.environ["DOTFILES_DIR"] + "/bin/launchctl"'))
+PY_HELPER
 
 
 # The wrapper prefers the login Keychain under HOME. A test-owned HOME keeps
@@ -260,18 +269,61 @@ EOF
 
   cat >"$fixture/bin/sudo" <<'EOF'
 #!/bin/bash
+[[ ! -e "${0%/*}/sudo-refused" ]] || exit 1
 [[ "$1" == -n ]] || exit 64
 shift
 if [[ "$1" == -u ]]; then shift 2; fi
 exec "$@"
 EOF
   cat >"$fixture/bin/launchctl" <<'EOF'
-#!/bin/bash
-[[ "$1" == asuser && "$2" =~ ^[0-9]+$ ]] || exit 64
-shift 2
-# Model the desktop context only inside this private fake process.
-export FIXTURE_DESKTOP_CONTEXT=1
-exec "$@"
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import plistlib
+import signal
+import stat
+import subprocess
+import sys
+
+root = Path(__file__).parent
+mode = (root / "launchctl-mode").read_text() if (root / "launchctl-mode").exists() else "ok"
+operation = sys.argv[1]
+if operation == "bootstrap":
+    if mode == "bootstrap-denied":
+        sys.exit(1)
+    assert sys.argv[2] == f"gui/{os.getuid()}"
+    path = Path(sys.argv[3])
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    job = plistlib.loads(path.read_bytes())
+    fifo = Path(job["StandardOutPath"])
+    assert stat.S_ISFIFO(fifo.stat().st_mode)
+    assert stat.S_IMODE(fifo.stat().st_mode) == 0o600
+    assert set(job["EnvironmentVariables"]) == {"HOME", "PATH"}
+    assert job["AbandonProcessGroup"] is False
+    assert job["ExitTimeOut"] == 1
+    assert job["ProgramArguments"][4] == str(root / "security")
+    with fifo.open("wb", buffering=0) as output:
+        process = subprocess.Popen(job["ProgramArguments"],
+            env={**job["EnvironmentVariables"], "FIXTURE_DESKTOP_CONTEXT": "1"},
+            stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+    (root / "gui-job-pid").write_text(str(process.pid))
+    (root / "gui-job-target").write_text(sys.argv[2] + "/" + job["Label"])
+elif operation == "bootout":
+    if not (root / "gui-job-pid").exists():
+        sys.exit(3)
+    assert sys.argv[2] == (root / "gui-job-target").read_text()
+    try:
+        os.killpg(int((root / "gui-job-pid").read_text()), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    (root / "gui-job-pid").unlink()
+    (root / "gui-job-removed").touch()
+    if mode == "bootout-denied":
+        sys.exit(1)
+else:
+    sys.exit(64)
 EOF
   chmod +x "$fixture/bin/sudo" "$fixture/bin/launchctl"
 
@@ -294,6 +346,10 @@ case "$mode" in
   desktop-only)
     [[ "${FIXTURE_DESKTOP_CONTEXT:-}" == 1 ]] || exit 36
     printf 'ops_KEYCHAIN_SENTINEL\n'
+    ;;
+  desktop-hang)
+    [[ "${FIXTURE_DESKTOP_CONTEXT:-}" == 1 ]] || exit 36
+    exec sleep 30
     ;;
   interaction-denied)
     printf 'security: User interaction is not allowed.\n' >&2
@@ -812,13 +868,52 @@ blocked_error="$(DOTFILES_DIR="$blocked_fixture" PATH="$blocked_fixture/bin:$PAT
 set -e
 assert_contains "$blocked_error" '"status":"blocked","command":"check","code":"token-file-missing","keychain_status":"item-missing","keychain_reader_exit":44' 'blocked check names the Keychain reason behind the .env failure'
 
-# SSH can use the existing desktop audit context without forwarding a token
-# through sudo or launchctl arguments.
+# SSH must reach the same user's GUI session without passwordless sudo or a
+# plaintext fallback. The fake launchctl validates the private job and FIFO.
 desktop_fixture="$TEST_ROOT/desktop-context"
 make_fixture "$desktop_fixture"
 printf 'desktop-only' >"$desktop_fixture/bin/security-mode"
+: >"$desktop_fixture/bin/sudo-refused"
+rm "$desktop_fixture/.env"
 desktop_output="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
 assert_contains "$desktop_output" '"token_source":"desktop-keychain"' 'SSH uses the desktop Keychain context after an interaction refusal'
 assert_not_contains "$desktop_output" 'KEYCHAIN_SENTINEL' 'desktop context output excludes the token'
+
+[[ -e "$desktop_fixture/bin/gui-job-removed" && ! -e "$desktop_fixture/bin/gui-job-pid" ]] || fail 'desktop job is removed before custody succeeds'
+pass 'desktop job is removed before custody succeeds'
+
+for desktop_mode in bootstrap-denied bootout-denied; do
+  printf '%s' "$desktop_mode" >"$desktop_fixture/bin/launchctl-mode"
+  set +e
+  desktop_error="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+  desktop_status=$?
+  set -e
+  [[ "$desktop_status" -eq 3 ]] || fail "$desktop_mode blocks custody without an env fallback"
+  pass "$desktop_mode blocks custody without an env fallback"
+  assert_contains "$desktop_error" '"keychain_status":"unavailable","keychain_reader_exit":1' "$desktop_mode reports failed desktop delivery"
+  assert_not_contains "$desktop_error" 'SENTINEL' "$desktop_mode never releases token bytes"
+done
+printf 'ok' >"$desktop_fixture/bin/launchctl-mode"
+
+printf 'interaction-denied' >"$desktop_fixture/bin/security-mode"
+set +e
+desktop_locked="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+desktop_status=$?
+set -e
+[[ "$desktop_status" -eq 3 ]] || fail 'locked desktop fails closed'
+pass 'locked desktop fails closed'
+assert_contains "$desktop_locked" '"keychain_status":"unavailable","keychain_reader_exit":36' 'locked desktop preserves native refusal'
+
+printf 'desktop-hang' >"$desktop_fixture/bin/security-mode"
+desktop_started="$SECONDS"
+set +e
+desktop_timeout="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+desktop_status=$?
+set -e
+[[ "$desktop_status" -eq 3 && $((SECONDS - desktop_started)) -lt 15 ]] || fail 'stalled desktop custody is bounded'
+pass 'stalled desktop custody is bounded'
+assert_contains "$desktop_timeout" '"keychain_status":"timeout","keychain_reader_exit":null' 'stalled desktop reports timeout'
+[[ -e "$desktop_fixture/bin/gui-job-removed" && ! -e "$desktop_fixture/bin/gui-job-pid" ]] || fail 'timeout removes the desktop job and reader group'
+pass 'timeout removes the desktop job and reader group'
 
 printf '1..%d\n' "$pass_count"

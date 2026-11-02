@@ -279,6 +279,59 @@
         ]
       },
       {
+        "id": "claude-sonnet-5-5",
+        "display_name": "Claude Sonnet 5.5",
+        "availability": "available",
+        "bindings": [
+          {
+            "resource_id": "claude",
+            "deployment": "claude-sonnet-5-5",
+            "protocol": "azure-anthropic-messages",
+            "model_format": "Anthropic",
+            "availability": "available",
+            "provisioning_state": "Succeeded",
+            "observed": true,
+            "reason": null
+          }
+        ],
+        "routes": [
+          {
+            "agent": "codex",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "Codex Responses protocol is not documented for the Anthropic model format",
+            "evidence": []
+          },
+          {
+            "agent": "claude",
+            "status": "qualified",
+            "implemented": true,
+            "compatibility": "compatible",
+            "binding_resource_id": "claude",
+            "reason": "Native Foundry Entra launch on Laptop, Sonnet 5.5 High, completed inference and a harmless Read tool on 2 November 2026; Mini is not qualified by this receipt.",
+            "evidence": [
+              {
+                "observed": true,
+                "kind": "native-inference-and-file-read-tool",
+                "host": "laptop",
+                "reference": "/Users/nathanvale/.local/state/experience-sdk/task-contract-pilot-20261102/sonnet-route-proof.stdout"
+              }
+            ]
+          },
+          {
+            "agent": "opencode",
+            "status": "untested",
+            "implemented": false,
+            "compatibility": "incompatible",
+            "binding_resource_id": null,
+            "reason": "No documented OpenCode route for Claude Sonnet 5.5",
+            "evidence": []
+          }
+        ]
+      },
+      {
         "id": "claude-sonnet-4.6",
         "display_name": "Claude Sonnet 4.6",
         "availability": "available",
