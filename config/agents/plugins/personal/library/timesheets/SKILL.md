@@ -1,6 +1,6 @@
 ---
 name: timesheets
-description: "Prepare Nathan's weekly FastTrack360 and OnCore drafts in personal Chrome, show screenshots, and submit only after approval."
+description: "Log in automatically, prepare Nathan's weekly FastTrack360 and OnCore drafts, show screenshots, and submit only after approval."
 ---
 
 # Timesheets
@@ -19,9 +19,40 @@ Keep submission separate. Before using standing draft authority, read
   request naming each ready portal. Load each reference before that portal.
 - Unknown portal outside the Friday run: ask which portal.
 
-## Native browser
+## Browser and automatic login
 
-Use the browser surface supplied by the active Harness:
+In Pi, Claude Code and Codex, use the installed dedicated Agent Browser route
+from [one-password](../one-password/references/agent-browser.md). Follow its
+fresh owned-session startup and environment allowlist for each portal. Include
+the dedicated configuration on every command. Keep login, draft preparation
+and review in that same safely created session.
+
+Reuse that owned signed-in session only after verifying the intended account.
+At a login wall, read the portal reference and check its enabled
+dedicated-browser binding.
+Use native auth login for `timesheets.oncore`, or the staged credential-fill
+route for `timesheets.fasttrack`, on the binding's exact HTTPS origin.
+The one-password reference owns credential delivery and login checks. Verify
+the protected account before opening a timesheet. Keep credentials outside
+model-visible commands and screenshots.
+
+Use the portal reference for navigation, entries, saving and screenshots.
+Observe child tabs before switching to them. Take a fresh page observation
+after navigation or a page replacement. CAPTCHA, passkey, MFA, device-trust and
+recovery are exceptional handoffs. A missing binding or failed custody check
+blocks that portal; report its concrete repair instead of repeatedly asking
+Nathan to sign in.
+
+Keep the owned session open while awaiting approval when the runtime permits.
+On resumption, recheck the account, period, contract and saved entries against
+the approval receipt. If the session expired, repeat the approved login route
+and reopen the saved draft. Obtain fresh evidence and approval when the draft
+changed or its identity cannot be established. Close only the owned session
+after completion or explicit abandonment.
+
+## User-present fallback
+
+Use a native personal browser when Nathan explicitly selects that route:
 
 - Codex Desktop: use connected personal `@Chrome`, profile `nathanvale.com`.
   Reuse its matching tab or create one visible task tab. Verify the actual
@@ -33,12 +64,9 @@ Use the browser surface supplied by the active Harness:
 Stay in the visible task tab, except for a child tab explicitly opened by the
 selected portal workflow. Keep that child in the same native browser and task.
 
-For a login wall, use the composable [one-password browser-login route](../one-password/references/browser-login.md).
-Select `timesheets.oncore` or `timesheets.fasttrack` from its local whitelist.
-Use only its exact allowlisted login in the same visible native tab. CAPTCHA,
-passkey, MFA, device-trust and recovery remain exceptional handoffs. Take a fresh
-page observation after navigation, page replacement, or any action that can
-invalidate earlier references.
+For a native login wall, follow the supported fallback in
+[one-password browser login](../one-password/references/browser-login.md).
+Keep the fallback separate from unattended login proof.
 
 ## Checkpoint
 
@@ -54,7 +82,7 @@ cookies, authentication-bearing URLs, browser identifiers, and screenshots.
 2. `proposing`: identify the requested period from its canonical list row.
    Verify the contract or placement, editable state, and existing rows.
 3. `draft authority`: after checking exceptions, apply the standing pattern
-   for an ordinary current week without another question. Obtain confirmation
+   for an ordinary requested week without another question. Obtain confirmation
    for exceptions or conflicting saved rows, not routine empty rows. An ad hoc
    supplied pattern also grants draft authority for its stated period.
 4. `writing`: apply only the confirmed draft entries. Re-observe after an
@@ -75,8 +103,9 @@ cookies, authentication-bearing URLs, browser identifiers, and screenshots.
 9. `proving`: re-observe the same tab and prove the final submitted state.
 
 Before dispatch, any draft edit invalidates the entire evidence set and its
-approval. Return to `writing`, restore `authorized_attempts: 0`, then repeat the
-review and approval phases with a fresh complete evidence set.
+approval. Restore `authorized_attempts: 0`. Preserve conflicting saved rows and
+obtain the portal's required decision before editing. Repeat review and approval
+with a fresh complete evidence set after any authorised changes.
 
 ## Write gates
 

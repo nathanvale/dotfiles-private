@@ -23,8 +23,10 @@ exception. Keep ordinary personal Chrome work on the native surface below.
 - Codex `@Chrome` unavailable for a signed-in task: stop and ask Nathan to
   connect Chrome. `@Browser` has none of his sessions, so it is not a
   substitute for signed-in work.
-- A skill that names its own surface keeps it. `timesheets` uses personal
-  `@Chrome` for the Friday workflow.
+- A skill that names its own surface keeps it. The
+  [timesheets workflow](../../config/agents/plugins/personal/library/timesheets/SKILL.md)
+  uses its dedicated Agent Browser session for approved login, draft preparation,
+  screenshot review and separately approved submission.
 
 ## Boundary
 
@@ -38,6 +40,9 @@ exception. Keep ordinary personal Chrome work on the native surface below.
   action that can invalidate earlier references.
 - Keep credentials, cookies, authentication-bearing URLs, browser identifiers,
   and screenshots out of checkpoints, receipts, and notes.
+- For requested timesheet approval, keep the actual screenshots only in the
+  workflow's private evidence directory and show them to Nathan. Its approval
+  receipt holds the ordered hashes and draft values, not image data.
 - The Harness owns attachment. Never copy, enumerate, or attach to a Chrome
   profile directory yourself.
 

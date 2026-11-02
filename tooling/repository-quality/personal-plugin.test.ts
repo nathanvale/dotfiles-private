@@ -106,7 +106,7 @@ test("tracked provider payload runs the vendor protocol outside the checkout", (
 	for (const { input, output } of [
 		{
 			input: '{"protocol":"agent-browser.plugin.v1","type":"plugin.manifest"}',
-			output: '{"protocol":"agent-browser.plugin.v1","success":true,"manifest":{"name":"one-password","capabilities":["credential.read"]}}\n',
+			output: '{"protocol":"agent-browser.plugin.v1","success":true,"manifest":{"name":"one-password","capabilities":["credential.read","credential.fill"]}}\n',
 		},
 		{
 			input: "malformed-private-request",

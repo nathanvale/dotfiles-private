@@ -6,6 +6,40 @@ Canonical target: the authenticated Candidate Portal timesheet list with a
 visible period row and status, or its explicit empty state. A login page,
 historical detail, or opened period detail is not the canonical target.
 
+## Automatic login
+
+Start through [1Password's owned-session startup](../../one-password/references/agent-browser.md#installed-route),
+then use the existing token-backed `timesheets.fasttrack` binding with its
+[staged credential-fill route](../../one-password/references/agent-browser.md#staged-login).
+Reuse only that task's known safely created owned session, after verifying its
+protected account.
+
+1. At the username-first screen, observe its unique username input and Next
+   button. The observed input on 2 November 2026 was `#lgUserName`.
+2. Fill `username` through the plugin. On a confirmed filled result, click Next
+   once and wait for the password stage.
+3. Verify the unique password input is masked. The observed input was
+   `#lgPassword`. Fill `password` through the same plugin and session.
+4. Observe and click Login once. The observed control was `button.btn-login`.
+5. Verify Candidate Portal's protected name and candidate number against the
+   private approved binding before opening Time And Attendance.
+
+Re-observe controls when the page changes. A different account, rejected login,
+missing binding or uncertain fill stops that attempt. Native complete-form
+`auth login` does not handle FastTrack's intermediate Next screen.
+
+The dedicated browser needs the approved FastTrack origin and Google Maps
+runtime hosts `maps.google.com`, `maps.googleapis.com` and `maps.gstatic.com`.
+Without them, the app can redirect after login but fail before rendering the
+protected account. Keep credential delivery restricted to the FastTrack origin.
+
+FastTrack permits one active browser or device for this account. Run its login
+and timesheet work sequentially across Macs and harnesses. A new login can
+invalidate the other session. If the site explicitly says it signed out this
+session because another browser or device signed in, acknowledge its Ok control
+once, observe the login form, then use the same approved staged route. Reopen
+and recheck the saved draft before relying on an earlier screenshot approval.
+
 ## Navigation and state
 
 - Click Quick Access once. Inspect the tab list and switch to its new child tab.
