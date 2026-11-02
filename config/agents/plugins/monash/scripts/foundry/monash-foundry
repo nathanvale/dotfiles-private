@@ -1,0 +1,2505 @@
+#!/usr/bin/env python3
+"""Launch native Codex, Claude Code, or OpenCode through Monash Foundry routes."""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import platform
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_CONFIG = SCRIPT_DIR / "config.json"
+DEFAULT_WRAPPER = Path.home() / "code" / "dotfiles" / "bin" / "with-one-password-token"
+ENV_HOP = Path("/usr/bin/env")
+PROVIDER_ID = "monash_foundry"
+PROVIDER_NAME = "Monash Foundry Azure Responses"
+CODEX_CATALOG = SCRIPT_DIR / "codex-models.json"
+CODEX_EFFORT_KEY = "model_reasoning_effort"
+CODEX_DEFAULT_EFFORT = "medium"
+
+WRAPPER_ENV_NAMES = ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR")
+CODEX_ENV_HOP_NAMES = (
+    "COLORTERM",
+    "TERM_PROGRAM",
+    "HERDR_ENV",
+    "HERDR_SOCKET_PATH",
+    "HERDR_SESSION",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_PANE_ID",
+    "HERDR_AGENT",
+)
+
+COMMAND_KEYS = frozenset({"codex", "claude", "opencode", "with_one_password_token", "az"})
+TOP_LEVEL_KEYS = frozenset(
+    {"tenant", "subscription", "codex", "claude", "opencode", "commands", "inventory", "host_profiles"}
+)
+MODEL_IDS = (
+    "gpt-5.5",
+    "gpt-5.4-nano",
+    "claude-sonnet-5",
+    "claude-sonnet-4.6",
+    "claude-haiku-4.5",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "kimi-k2.7-code",
+    "kimi-k2.6",
+    "gpt-6.1-sol",
+)
+MODEL_STATUSES = frozenset({"qualified", "untested", "failed"})
+MODEL_AVAILABILITIES = frozenset({"available", "stale", "unavailable"})
+MODEL_COMPATIBILITIES = frozenset({"compatible", "candidate", "incompatible"})
+MODEL_PROTOCOLS = frozenset(
+    {"azure-openai-responses", "azure-anthropic-messages", "azure-openai-chat-completions", "unverified"}
+)
+MODEL_FORMATS = frozenset({"OpenAI", "Anthropic", "DeepSeek", "MoonshotAI"})
+RESOURCE_IDS = frozenset({"gpt", "claude"})
+MODEL_AGENTS = frozenset({"codex", "claude", "opencode"})
+REQUIRED_MODEL_AGENTS = frozenset({"codex", "claude"})
+OPENCODE_MODEL_FORMATS = frozenset({"OpenAI", "DeepSeek", "MoonshotAI"})
+OPENCODE_RECIPE_MODELS = frozenset(
+    {"gpt-5.4-nano", "deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6", "kimi-k2.7-code"}
+)
+AGENT_PROTOCOLS = {
+    "codex": "azure-openai-responses",
+    "claude": "azure-anthropic-messages",
+    "opencode": "azure-openai-chat-completions",
+}
+AGENT_MODEL_FORMATS = {
+    "codex": "OpenAI",
+    "claude": "Anthropic",
+}
+OPENCODE_PROVIDER_ID = "azure"
+OPENCODE_MINIMUM_VERSION = (1, 18, 27)
+OPENCODE_AUTH_CONTENT = json.dumps({"azure": {"type": "oauth"}}, separators=(",", ":"))
+HERDR_OPENCODE_INTEGRATION_VERSION = "11"
+
+PROXY_ROUTING_ENV = frozenset(
+    {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    }
+)
+
+# These names are removed from the child environment. The values are never
+# inspected or printed. This includes proxy routing state, which must not
+# silently redirect credential-bearing native traffic. AZURE_CONFIG_DIR is
+# intentionally preserved because it selects the existing Azure CLI
+# credential cache for Claude's Entra route.
+CONFLICTING_ENV = frozenset(
+    {
+        "CODEX_HOME",
+        "OP_SERVICE_ACCOUNT_TOKEN",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
+        "OPENAI_SERVICE_TIER",
+        "CODEX_SERVICE_TIER",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY_MONASH",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_TENANT_ID",
+        "AZURE_SUBSCRIPTION_ID",
+        "AZURE_TOKEN_CREDENTIALS",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_FEDERATED_TOKEN_FILE",
+        "AZURE_CLIENT_CERTIFICATE_PATH",
+        "AZURE_CLIENT_CERTIFICATE_PASSWORD",
+        "AZURE_CLIENT_SEND_CERTIFICATE_CHAIN",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+        "AZURE_AUTHORITY_HOST",
+        "AZURE_ADDITIONALLY_ALLOWED_TENANTS",
+        "IDENTITY_ENDPOINT",
+        "IDENTITY_HEADER",
+        "MSI_ENDPOINT",
+        "MSI_SECRET",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_URL",
+        "ANTHROPIC_CUSTOM_HEADERS",
+        "ANTHROPIC_FOUNDRY_API_KEY",
+        "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+        "ANTHROPIC_FOUNDRY_BASE_URL",
+        "ANTHROPIC_FOUNDRY_RESOURCE",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "CLAUDE_CODE_API_KEY_HELPER",
+        "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+        "CLAUDE_CODE_USE_MANTLE",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+        "ANTHROPIC_BEDROCK_BASE_URL",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "CLOUD_ML_REGION",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "HERDR_AGENT",
+        "LM_STUDIO_BASE_URL",
+        "OPENCODE_AUTH_CONTENT",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_DIR",
+        "OPENCODE_CONFIG_CONTENT",
+        "OPENCODE_DB",
+        "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "OPENCODE_MODELS_PATH",
+        "OPENCODE_MODELS_URL",
+        "OPENCODE_MODEL",
+        "OPENCODE_PLUGIN_META_FILE",
+        "OPENCODE_PURE",
+        "OPENCODE_TUI_CONFIG",
+        "OPENCODE_TEST_HOME",
+    }
+) | PROXY_ROUTING_ENV
+
+# A caller's Claude --settings value is merged into the one command-line
+# settings object this launcher passes. It may not name anything that selects
+# the provider, credential, home, or model the launcher pins.
+CLAUDE_SETTINGS_RESERVED_ENV = CONFLICTING_ENV | {"AZURE_CONFIG_DIR", "HOME", "XDG_CONFIG_HOME"}
+CLAUDE_SETTINGS_RESERVED_KEYS = frozenset(
+    {"apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod", "forceLoginOrgUUID", "model"}
+)
+CLAUDE_SETTINGS_MAX_BYTES = 1024 * 1024
+CLAUDE_SETTINGS_REPAIR = "pass one absolute private settings file or one JSON object after --settings, without provider or credential values"
+# Stands in for the --settings value in a plan whose composed settings must not
+# reach argv; exec_plan swaps in /dev/fd/N for a private descriptor at launch.
+PRIVATE_SETTINGS_ARGV = "<private-settings-descriptor>"
+
+
+class LauncherError(Exception):
+    """An expected launcher failure with a safe repair action."""
+
+    def __init__(self, message: str, repair: Optional[str] = None, code: int = 3):
+        super().__init__(message)
+        self.message = message
+        self.repair = repair
+        self.code = code
+
+
+class UsageError(LauncherError):
+    def __init__(self, message: str):
+        super().__init__(message, code=2)
+
+
+class ConfigError(LauncherError):
+    def __init__(self, message: str, repair: Optional[str] = None):
+        super().__init__(message, repair=repair, code=2)
+
+
+@dataclass(frozen=True)
+class Invocation:
+    command: Optional[str]
+    config_path: Optional[str]
+    dry_run: bool
+    help_requested: bool
+    native_args: Tuple[str, ...]
+    had_delimiter: bool
+    model_id: Optional[str] = None
+    agent: Optional[str] = None
+    qualification: bool = False
+    refresh: bool = False
+    json_output: bool = False
+
+
+@dataclass(frozen=True)
+class CodexConfig:
+    base_url: str
+    deployment: str
+    credential_ref: str
+
+
+@dataclass(frozen=True)
+class ClaudeConfig:
+    resource: str
+    opus: Optional[str]
+    sonnet: str
+    haiku: str
+    sonnet5: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class OpenCodeResourceConfig:
+    resource: str
+    base_url: str
+
+
+@dataclass(frozen=True)
+class OpenCodeConfig:
+    resources: Dict[str, OpenCodeResourceConfig]
+    minimum_version: str
+
+
+@dataclass(frozen=True)
+class InventoryResource:
+    id: str
+    resource: str
+    resource_group: str
+    availability: str
+    observed: bool
+    error: Optional[str]
+
+
+@dataclass(frozen=True)
+class ModelBinding:
+    resource_id: str
+    deployment: str
+    protocol: str
+    model_format: str
+    availability: str
+    provisioning_state: Optional[str]
+    observed: bool
+    reason: Optional[str]
+
+
+@dataclass(frozen=True)
+class ModelRoute:
+    agent: str
+    status: str
+    implemented: bool
+    compatibility: str
+    binding_resource_id: Optional[str]
+    reason: Optional[str]
+    evidence: Tuple[Dict[str, object], ...]
+
+
+@dataclass(frozen=True)
+class ModelDefinition:
+    id: str
+    display_name: str
+    availability: str
+    bindings: Tuple[ModelBinding, ...]
+    routes: Tuple[ModelRoute, ...]
+
+
+@dataclass(frozen=True)
+class ModelInventory:
+    schema_version: int
+    snapshot_observed_at: str
+    snapshot_source: str
+    resources: Tuple[InventoryResource, ...]
+    models: Tuple[ModelDefinition, ...]
+
+
+@dataclass(frozen=True)
+class ModelSelection:
+    model: ModelDefinition
+    route: ModelRoute
+    binding: ModelBinding
+
+
+@dataclass(frozen=True)
+class FoundryConfig:
+    path: Path
+    tenant: str
+    subscription: str
+    codex: CodexConfig
+    claude: ClaudeConfig
+    commands: Dict[str, str]
+    inventory: Optional[ModelInventory] = None
+    opencode: Optional[OpenCodeConfig] = None
+
+
+@dataclass(frozen=True)
+class ResolvedCommand:
+    path: Path
+    source: str
+
+
+@dataclass(frozen=True)
+class LaunchPlan:
+    agent: str
+    provider: str
+    deployment: str
+    cli: ResolvedCommand
+    exec_path: Path
+    exec_argv: Tuple[str, ...]
+    env: Dict[str, str]
+    removed_env: Tuple[str, ...]
+    auth_description: str
+    forwarded_arg_count: int
+    model_id: Optional[str] = None
+    qualification: bool = False
+    resource: Optional[str] = None
+    wrapper: Optional[ResolvedCommand] = None
+    az: Optional[ResolvedCommand] = None
+    # Composed Claude settings held in memory until exec; never printed.
+    private_settings: Optional[str] = field(default=None, repr=False)
+
+
+def print_help(stream: object = sys.stdout) -> None:
+    print(
+        """Usage:
+  monash-foundry
+  monash-foundry [--config PATH] [--dry-run] codex  [-- NATIVE_ARGS...]
+  monash-foundry [--config PATH] [--dry-run] claude [-- NATIVE_ARGS...]
+  monash-foundry [--config PATH] check
+  monash-foundry [--config PATH] models [--refresh] [--json]
+  monash-foundry [--config PATH] launch --model STABLE_ID --agent codex|claude|opencode [--qualification] [-- NATIVE_ARGS...]
+  monash-foundry --help
+
+Choose Codex or Claude Code in a TTY, or select one explicitly. OpenCode is
+available only through explicit model selection.
+
+Examples:
+  monash-foundry codex
+  monash-foundry claude -- --continue
+  monash-foundry --dry-run codex -- --ignore-user-config --ephemeral
+  monash-foundry check
+  monash-foundry models --json
+  monash-foundry launch --model claude-sonnet-5 --agent claude --qualification
+  monash-foundry launch --model gpt-5.4-nano --agent opencode --qualification -- run
+
+The default config is config.json beside this launcher. Native arguments must follow
+the -- delimiter and are passed as argv without shell evaluation. Provider,
+home, and routing overrides are reserved by this launcher.
+""",
+        file=stream,
+    )
+
+
+def parse_invocation(argv: Sequence[str]) -> Invocation:
+    args = list(argv)
+    had_delimiter = "--" in args
+    if had_delimiter:
+        delimiter = args.index("--")
+        prefix = args[:delimiter]
+        native_args = tuple(args[delimiter + 1 :])
+    else:
+        prefix = args
+        native_args = ()
+
+    command: Optional[str] = None
+    config_path: Optional[str] = None
+    dry_run = False
+    help_requested = False
+    model_id: Optional[str] = None
+    selected_agent: Optional[str] = None
+    qualification = False
+    refresh = False
+    json_output = False
+    index = 0
+
+    while index < len(prefix):
+        token = prefix[index]
+        if token in ("-h", "--help"):
+            help_requested = True
+            index += 1
+            continue
+        if token == "--dry-run":
+            if dry_run:
+                raise UsageError("--dry-run was provided more than once")
+            dry_run = True
+            index += 1
+            continue
+        if token == "--config":
+            if config_path is not None:
+                raise UsageError("--config was provided more than once")
+            if index + 1 >= len(prefix):
+                raise UsageError("--config requires a path")
+            config_path = prefix[index + 1]
+            if not config_path:
+                raise UsageError("--config requires a non-empty path")
+            index += 2
+            continue
+        if token.startswith("--config="):
+            if config_path is not None:
+                raise UsageError("--config was provided more than once")
+            config_path = token.split("=", 1)[1]
+            if not config_path:
+                raise UsageError("--config requires a non-empty path")
+            index += 1
+            continue
+        if token in ("codex", "claude", "check", "models", "launch"):
+            if command is not None:
+                raise UsageError("choose one launcher command")
+            command = token
+            index += 1
+            continue
+        if token == "--refresh":
+            if command != "models":
+                raise UsageError("--refresh applies only to models")
+            if refresh:
+                raise UsageError("--refresh was provided more than once")
+            refresh = True
+            index += 1
+            continue
+        if token == "--json":
+            if command != "models":
+                raise UsageError("--json applies only to models")
+            if json_output:
+                raise UsageError("--json was provided more than once")
+            json_output = True
+            index += 1
+            continue
+        if token == "--qualification":
+            if command != "launch":
+                raise UsageError("--qualification applies only to launch")
+            if qualification:
+                raise UsageError("--qualification was provided more than once")
+            qualification = True
+            index += 1
+            continue
+        if token == "--model" or token.startswith("--model="):
+            if command != "launch":
+                raise UsageError("--model selection requires launch")
+            if model_id is not None:
+                raise UsageError("--model was provided more than once")
+            if token == "--model":
+                if index + 1 >= len(prefix) or not prefix[index + 1]:
+                    raise UsageError("launch --model requires a stable catalogue ID")
+                model_id = prefix[index + 1]
+                index += 2
+            else:
+                model_id = token.split("=", 1)[1]
+                if not model_id:
+                    raise UsageError("launch --model requires a stable catalogue ID")
+                index += 1
+            continue
+        if token == "--agent" or token.startswith("--agent="):
+            if command != "launch":
+                raise UsageError("--agent selection requires launch")
+            if selected_agent is not None:
+                raise UsageError("--agent was provided more than once")
+            if token == "--agent":
+                if index + 1 >= len(prefix) or not prefix[index + 1]:
+                    raise UsageError("launch --agent requires codex, claude, or opencode")
+                selected_agent = prefix[index + 1]
+                index += 2
+            else:
+                selected_agent = token.split("=", 1)[1]
+                if not selected_agent:
+                    raise UsageError("launch --agent requires codex, claude, or opencode")
+                index += 1
+            if selected_agent not in MODEL_AGENTS:
+                raise UsageError("launch --agent must be codex, claude, or opencode")
+            continue
+        raise UsageError("unrecognized launcher argument; use --help")
+
+    if help_requested:
+        return Invocation(
+            command=command,
+            config_path=config_path,
+            dry_run=dry_run,
+            help_requested=True,
+            native_args=native_args,
+            had_delimiter=had_delimiter,
+            model_id=model_id,
+            agent=selected_agent,
+            qualification=qualification,
+            refresh=refresh,
+            json_output=json_output,
+        )
+
+    if command in ("check", "models") and had_delimiter:
+        raise UsageError(f"{command} does not accept native arguments")
+    if command is None and native_args:
+        raise UsageError("native arguments require codex or claude")
+    if command == "check" and dry_run:
+        raise UsageError("--dry-run applies only to codex or claude")
+    if command == "models" and dry_run:
+        raise UsageError("--dry-run applies only to codex or claude")
+    if command == "launch":
+        if model_id is None:
+            raise UsageError("launch requires --model STABLE_ID")
+        if selected_agent is None:
+            raise UsageError("launch requires --agent codex|claude|opencode")
+    elif any(value is not None for value in (model_id, selected_agent)) or qualification:
+        raise UsageError("model selection options require launch")
+    if command != "models" and (refresh or json_output):
+        raise UsageError("--refresh and --json apply only to models")
+
+    return Invocation(
+        command=command,
+        config_path=config_path,
+        dry_run=dry_run,
+        help_requested=help_requested,
+        native_args=native_args,
+        had_delimiter=had_delimiter,
+        model_id=model_id,
+        agent=selected_agent,
+        qualification=qualification,
+        refresh=refresh,
+        json_output=json_output,
+    )
+
+
+def _safe_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"config field {field} must be a non-empty string")
+    if any(ord(character) < 32 for character in value):
+        raise ConfigError(f"config field {field} contains control characters")
+    return value
+
+
+def _object(value: object, field: str) -> Dict[str, object]:
+    if not isinstance(value, dict):
+        raise ConfigError(f"config field {field} must be an object")
+    return value
+
+
+def _reject_unknown_fields(value: Dict[str, object], allowed: frozenset[str], field: str) -> None:
+    if set(value) - allowed:
+        raise ConfigError(f"config field {field} contains an unsupported key")
+
+
+def _optional_text(value: object, field: str) -> Optional[str]:
+    if value is None:
+        return None
+    return _safe_text(value, field)
+
+
+def _enum_text(value: object, field: str, allowed: frozenset[str]) -> str:
+    text = _safe_text(value, field)
+    if text not in allowed:
+        raise ConfigError(f"config field {field} has an unsupported value")
+    return text
+
+
+def _version_tuple(value: str, field: str) -> Tuple[int, int, int]:
+    parts = value.split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        raise ConfigError(f"config field {field} must be a major.minor.patch version")
+    return tuple(int(part) for part in parts)  # type: ignore[return-value]
+
+
+def _parse_inventory(value: object) -> Optional[ModelInventory]:
+    if value is None:
+        return None
+
+    raw = _object(value, "inventory")
+    _reject_unknown_fields(
+        raw,
+        frozenset({"schema_version", "snapshot_observed_at", "snapshot_source", "resources", "models"}),
+        "inventory",
+    )
+    if raw.get("schema_version") != 1:
+        raise ConfigError("config field inventory.schema_version must be 1")
+    snapshot_observed_at = _safe_text(raw.get("snapshot_observed_at"), "inventory.snapshot_observed_at")
+    snapshot_source = _safe_text(raw.get("snapshot_source"), "inventory.snapshot_source")
+
+    raw_resources = raw.get("resources")
+    if not isinstance(raw_resources, list) or not raw_resources:
+        raise ConfigError("config field inventory.resources must be a non-empty array")
+    resources: List[InventoryResource] = []
+    resource_ids = set()
+    for index, value in enumerate(raw_resources):
+        field = f"inventory.resources[{index}]"
+        item = _object(value, field)
+        _reject_unknown_fields(
+            item,
+            frozenset({"id", "resource", "resource_group", "availability", "observed", "error"}),
+            field,
+        )
+        resource_id = _safe_text(item.get("id"), f"{field}.id")
+        if resource_id not in RESOURCE_IDS or resource_id in resource_ids:
+            raise ConfigError(f"config field {field}.id is not a unique known resource")
+        resource_ids.add(resource_id)
+        observed = item.get("observed")
+        if not isinstance(observed, bool):
+            raise ConfigError(f"config field {field}.observed must be boolean")
+        resources.append(
+            InventoryResource(
+                id=resource_id,
+                resource=_safe_text(item.get("resource"), f"{field}.resource"),
+                resource_group=_safe_text(item.get("resource_group"), f"{field}.resource_group"),
+                availability=_enum_text(item.get("availability"), f"{field}.availability", MODEL_AVAILABILITIES),
+                observed=observed,
+                error=_optional_text(item.get("error"), f"{field}.error"),
+            )
+        )
+    if resource_ids != RESOURCE_IDS:
+        raise ConfigError("config field inventory.resources must contain gpt and claude")
+
+    raw_models = raw.get("models")
+    if not isinstance(raw_models, list) or not raw_models:
+        raise ConfigError("config field inventory.models must be a non-empty array")
+    models: List[ModelDefinition] = []
+    model_ids = set()
+    for index, value in enumerate(raw_models):
+        field = f"inventory.models[{index}]"
+        item = _object(value, field)
+        _reject_unknown_fields(item, frozenset({"id", "display_name", "availability", "bindings", "routes"}), field)
+        model_id = _safe_text(item.get("id"), f"{field}.id")
+        if model_id not in MODEL_IDS or model_id in model_ids:
+            raise ConfigError(f"config field {field}.id is not a unique known model")
+        model_ids.add(model_id)
+
+        raw_bindings = item.get("bindings")
+        if not isinstance(raw_bindings, list) or not raw_bindings:
+            raise ConfigError(f"config field {field}.bindings must be a non-empty array")
+        bindings: List[ModelBinding] = []
+        binding_keys = set()
+        for binding_index, value in enumerate(raw_bindings):
+            binding_field = f"{field}.bindings[{binding_index}]"
+            binding = _object(value, binding_field)
+            _reject_unknown_fields(
+                binding,
+                frozenset(
+                    {
+                        "resource_id",
+                        "deployment",
+                        "protocol",
+                        "model_format",
+                        "availability",
+                        "provisioning_state",
+                        "observed",
+                        "reason",
+                    }
+                ),
+                binding_field,
+            )
+            resource_id = _safe_text(binding.get("resource_id"), f"{binding_field}.resource_id")
+            if resource_id not in RESOURCE_IDS:
+                raise ConfigError(f"config field {binding_field}.resource_id is not a known resource")
+            deployment = _safe_text(binding.get("deployment"), f"{binding_field}.deployment")
+            protocol = _enum_text(binding.get("protocol"), f"{binding_field}.protocol", MODEL_PROTOCOLS)
+            binding_key = (resource_id, deployment, protocol)
+            if binding_key in binding_keys:
+                raise ConfigError(f"config field {binding_field} duplicates a resource/deployment/protocol binding")
+            binding_keys.add(binding_key)
+            observed = binding.get("observed")
+            if not isinstance(observed, bool):
+                raise ConfigError(f"config field {binding_field}.observed must be boolean")
+            provisioning_state = _optional_text(
+                binding.get("provisioning_state"), f"{binding_field}.provisioning_state"
+            )
+            bindings.append(
+                ModelBinding(
+                    resource_id=resource_id,
+                    deployment=deployment,
+                    protocol=protocol,
+                    model_format=_enum_text(binding.get("model_format"), f"{binding_field}.model_format", MODEL_FORMATS),
+                    availability=_enum_text(
+                        binding.get("availability"), f"{binding_field}.availability", MODEL_AVAILABILITIES
+                    ),
+                    provisioning_state=provisioning_state,
+                    observed=observed,
+                    reason=_optional_text(binding.get("reason"), f"{binding_field}.reason"),
+                )
+            )
+
+        raw_routes = item.get("routes")
+        if not isinstance(raw_routes, list) or not raw_routes:
+            raise ConfigError(f"config field {field}.routes must be a non-empty array")
+        routes: List[ModelRoute] = []
+        route_agents = set()
+        for route_index, value in enumerate(raw_routes):
+            route_field = f"{field}.routes[{route_index}]"
+            route = _object(value, route_field)
+            _reject_unknown_fields(
+                route,
+                frozenset(
+                    {
+                        "agent",
+                        "status",
+                        "implemented",
+                        "compatibility",
+                        "binding_resource_id",
+                        "reason",
+                        "evidence",
+                    }
+                ),
+                route_field,
+            )
+            agent = _safe_text(route.get("agent"), f"{route_field}.agent")
+            if agent not in MODEL_AGENTS or agent in route_agents:
+                raise ConfigError(f"config field {route_field}.agent is not unique and known")
+            route_agents.add(agent)
+            implemented = route.get("implemented")
+            if not isinstance(implemented, bool):
+                raise ConfigError(f"config field {route_field}.implemented must be boolean")
+            binding_resource_id = route.get("binding_resource_id")
+            if binding_resource_id is not None:
+                binding_resource_id = _safe_text(binding_resource_id, f"{route_field}.binding_resource_id")
+                if binding_resource_id not in {candidate.resource_id for candidate in bindings}:
+                    raise ConfigError(f"config field {route_field}.binding_resource_id has no model binding")
+            raw_evidence = route.get("evidence")
+            if not isinstance(raw_evidence, list):
+                raise ConfigError(f"config field {route_field}.evidence must be an array")
+            evidence: List[Dict[str, object]] = []
+            for evidence_index, value in enumerate(raw_evidence):
+                evidence_field = f"{route_field}.evidence[{evidence_index}]"
+                evidence_item = _object(value, evidence_field)
+                _reject_unknown_fields(
+                    evidence_item,
+                    frozenset({"observed", "kind", "host", "reference"}),
+                    evidence_field,
+                )
+                if evidence_item.get("observed") is not True:
+                    raise ConfigError(f"config field {evidence_field}.observed must be true")
+                evidence.append(
+                    {
+                        "observed": True,
+                        "kind": _safe_text(evidence_item.get("kind"), f"{evidence_field}.kind"),
+                        "host": _safe_text(evidence_item.get("host"), f"{evidence_field}.host"),
+                        "reference": _safe_text(evidence_item.get("reference"), f"{evidence_field}.reference"),
+                    }
+                )
+            routes.append(
+                ModelRoute(
+                    agent=agent,
+                    status=_enum_text(route.get("status"), f"{route_field}.status", MODEL_STATUSES),
+                    implemented=implemented,
+                    compatibility=_enum_text(
+                        route.get("compatibility"), f"{route_field}.compatibility", MODEL_COMPATIBILITIES
+                    ),
+                    binding_resource_id=binding_resource_id,
+                    reason=_optional_text(route.get("reason"), f"{route_field}.reason"),
+                    evidence=tuple(evidence),
+                )
+            )
+        if not REQUIRED_MODEL_AGENTS.issubset(route_agents):
+            raise ConfigError(f"config field {field}.routes must contain codex and claude")
+        models.append(
+            ModelDefinition(
+                id=model_id,
+                display_name=_safe_text(item.get("display_name"), f"{field}.display_name"),
+                availability=_enum_text(item.get("availability"), f"{field}.availability", MODEL_AVAILABILITIES),
+                bindings=tuple(bindings),
+                routes=tuple(routes),
+            )
+        )
+    if set(model_ids) != set(MODEL_IDS):
+        raise ConfigError("config field inventory.models must contain the ten stable catalogue IDs")
+
+    return ModelInventory(
+        schema_version=1,
+        snapshot_observed_at=snapshot_observed_at,
+        snapshot_source=snapshot_source,
+        resources=tuple(resources),
+        models=tuple(models),
+    )
+
+
+def load_config(path: Path) -> FoundryConfig:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except FileNotFoundError:
+        raise ConfigError(
+            f"Foundry config was not found at {path}",
+            "provide the coordinator config.json or pass --config PATH",
+        )
+    except (OSError, json.JSONDecodeError):
+        raise ConfigError(
+            f"Foundry config could not be read at {path}",
+            "provide a readable JSON config.json or pass --config PATH",
+        )
+
+    root = _object(raw, "root")
+    _reject_unknown_fields(root, TOP_LEVEL_KEYS, "root")
+    tenant = _safe_text(root.get("tenant"), "tenant")
+    subscription = _safe_text(root.get("subscription"), "subscription")
+
+    codex = _object(root.get("codex"), "codex")
+    _reject_unknown_fields(codex, frozenset({"base_url", "deployment", "credential_ref"}), "codex")
+    codex_config = CodexConfig(
+        base_url=_safe_text(codex.get("base_url"), "codex.base_url"),
+        deployment=_safe_text(codex.get("deployment"), "codex.deployment"),
+        credential_ref=_safe_text(codex.get("credential_ref"), "codex.credential_ref"),
+    )
+    try:
+        endpoint = urlsplit(codex_config.base_url)
+        valid_endpoint = (
+            endpoint.scheme == "https" and bool(endpoint.hostname)
+            and endpoint.hostname.endswith(".openai.azure.com")
+            and endpoint.hostname != ".openai.azure.com"
+            and endpoint.port in (None, 443)
+            and endpoint.path.rstrip("/") == "/openai/v1"
+            and not endpoint.username and not endpoint.password
+            and not endpoint.query and not endpoint.fragment
+        )
+    except ValueError:
+        valid_endpoint = False
+    if not valid_endpoint:
+        raise ConfigError("Codex endpoint is not an Azure HTTPS Responses endpoint",
+                          "set codex.base_url to the verified resource's https://RESOURCE.openai.azure.com/openai/v1 URL")
+
+    opencode_config: Optional[OpenCodeConfig] = None
+    if root.get("opencode") is not None:
+        opencode = _object(root.get("opencode"), "opencode")
+        _reject_unknown_fields(opencode, frozenset({"resources", "minimum_version"}), "opencode")
+        raw_opencode_resources = _object(opencode.get("resources"), "opencode.resources")
+        if set(raw_opencode_resources) != RESOURCE_IDS:
+            raise ConfigError("config field opencode.resources must contain gpt and claude")
+        opencode_resources: Dict[str, OpenCodeResourceConfig] = {}
+        for resource_id in sorted(RESOURCE_IDS):
+            resource_field = f"opencode.resources.{resource_id}"
+            resource_config = _object(raw_opencode_resources.get(resource_id), resource_field)
+            _reject_unknown_fields(resource_config, frozenset({"resource", "base_url"}), resource_field)
+            opencode_resource = _safe_text(resource_config.get("resource"), f"{resource_field}.resource")
+            opencode_base_url = _safe_text(resource_config.get("base_url"), f"{resource_field}.base_url")
+            try:
+                opencode_endpoint = urlsplit(opencode_base_url)
+                valid_opencode_endpoint = (
+                    opencode_endpoint.scheme == "https"
+                    and opencode_endpoint.hostname is not None
+                    and opencode_endpoint.hostname.casefold() == f"{opencode_resource}.services.ai.azure.com".casefold()
+                    and opencode_endpoint.port in (None, 443)
+                    and opencode_endpoint.path.rstrip("/") == "/openai/v1"
+                    and not opencode_endpoint.username
+                    and not opencode_endpoint.password
+                    and not opencode_endpoint.query
+                    and not opencode_endpoint.fragment
+                )
+            except ValueError:
+                valid_opencode_endpoint = False
+            if not valid_opencode_endpoint:
+                raise ConfigError(
+                    f"OpenCode endpoint for {resource_id} is not its Azure services chat endpoint",
+                    f"set {resource_field}.base_url to https://RESOURCE.services.ai.azure.com/openai/v1",
+                )
+            opencode_resources[resource_id] = OpenCodeResourceConfig(
+                resource=opencode_resource,
+                base_url=opencode_base_url,
+            )
+        minimum_version = _safe_text(opencode.get("minimum_version"), "opencode.minimum_version")
+        if _version_tuple(minimum_version, "opencode.minimum_version") < OPENCODE_MINIMUM_VERSION:
+            raise ConfigError(
+                "config field opencode.minimum_version is below the supported native OpenCode version",
+                "set opencode.minimum_version to 1.18.27 or newer",
+            )
+        opencode_config = OpenCodeConfig(
+            resources=opencode_resources,
+            minimum_version=minimum_version,
+        )
+
+    host_profiles = root.get("host_profiles")
+    if host_profiles is not None and not isinstance(host_profiles, dict):
+        raise ConfigError("config field host_profiles must be an object keyed by stable profile ID")
+
+    claude = _object(root.get("claude"), "claude")
+    _reject_unknown_fields(claude, frozenset({"resource", "opus", "sonnet", "haiku", "sonnet5"}), "claude")
+    claude_config = ClaudeConfig(
+        resource=_safe_text(claude.get("resource"), "claude.resource"),
+        opus=None if claude.get("opus") is None else _safe_text(claude.get("opus"), "claude.opus"),
+        sonnet=_safe_text(claude.get("sonnet"), "claude.sonnet"),
+        haiku=_safe_text(claude.get("haiku"), "claude.haiku"),
+        sonnet5=None if claude.get("sonnet5") is None else _safe_text(claude.get("sonnet5"), "claude.sonnet5"),
+    )
+
+    commands: Dict[str, str] = {}
+    if "commands" in root:
+        command_values = _object(root.get("commands"), "commands")
+        _reject_unknown_fields(command_values, COMMAND_KEYS, "commands")
+        for key, value in command_values.items():
+            commands[key] = _safe_text(value, f"commands.{key}")
+
+    inventory = _parse_inventory(root.get("inventory"))
+
+    return FoundryConfig(
+        path=path,
+        tenant=tenant,
+        subscription=subscription,
+        codex=codex_config,
+        claude=claude_config,
+        commands=commands,
+        inventory=inventory,
+        opencode=opencode_config,
+    )
+
+
+def _configured_path(config: FoundryConfig, key: str) -> Optional[Path]:
+    value = config.commands.get(key)
+    if value is None:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path
+
+
+def resolve_command(
+    config: FoundryConfig,
+    key: str,
+    name: str,
+    default_path: Optional[Path] = None,
+) -> ResolvedCommand:
+    explicit = _configured_path(config, key)
+    if explicit is not None:
+        if explicit.is_file() and os.access(explicit, os.X_OK):
+            return ResolvedCommand(explicit, "config")
+        raise LauncherError(
+            f"configured {name} executable is unavailable",
+            f"make commands.{key} executable or remove that override from config.json",
+        )
+
+    if default_path is not None and default_path.is_file() and os.access(default_path, os.X_OK):
+        return ResolvedCommand(default_path, "~/.local/bin" if name != "with-one-password-token" else "dotfiles wrapper")
+
+    discovered = shutil.which(name)
+    if discovered:
+        return ResolvedCommand(Path(discovered), "PATH")
+
+    raise LauncherError(
+        f"{name} executable was not found",
+        f"install {name} or provide commands.{key} in config.json",
+    )
+
+
+def sanitized_environment(source: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, str], Tuple[str, ...]]:
+    environment = dict(os.environ if source is None else source)
+    removed = []
+    for name in sorted(CONFLICTING_ENV):
+        if name in environment:
+            removed.append(name)
+            del environment[name]
+    return environment, tuple(removed)
+
+
+def validated_herdr_agent(agent: str, source: Optional[Dict[str, str]] = None) -> Optional[str]:
+    environment = os.environ if source is None else source
+    return agent if environment.get("HERDR_AGENT") == agent else None
+
+
+def toml_literal(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def codex_override(key: str, value: object) -> Tuple[str, str]:
+    return ("-c", f"{key}={toml_literal(value)}")
+
+
+def safe_public_env_value(value: Optional[str]) -> Optional[str]:
+    if not value or any(ord(character) < 32 for character in value):
+        return None
+    return value
+
+
+def codex_wrapper_environment(environment: Dict[str, str]) -> Dict[str, str]:
+    result = {name: environment[name] for name in WRAPPER_ENV_NAMES if name in environment}
+    # The wrapper derives its SSH-context Keychain fallback from the inherited
+    # SSH_CONNECTION, then scrubs it. Forward only a genuine inherited value to the
+    # wrapper itself, never to the Codex environment hop, and never create one.
+    ssh_connection = safe_public_env_value(environment.get("SSH_CONNECTION"))
+    if ssh_connection is not None:
+        result["SSH_CONNECTION"] = ssh_connection
+    if environment.get("HERDR_AGENT") == "codex":
+        result["HERDR_AGENT"] = "codex"
+    return result
+
+
+def codex_environment_hop(environment: Dict[str, str]) -> Tuple[str, ...]:
+    term = safe_public_env_value(environment.get("TERM")) or "xterm-256color"
+    assignments = [f"TERM={term}"]
+    for name in CODEX_ENV_HOP_NAMES:
+        if name == "HERDR_AGENT" and environment.get(name) != "codex":
+            continue
+        value = safe_public_env_value(environment.get(name))
+        if value is not None:
+            assignments.append(f"{name}={value}")
+    return (str(ENV_HOP), *assignments)
+
+
+def codex_route_args(
+    config: CodexConfig,
+    native_args: Sequence[str],
+    cli: ResolvedCommand,
+    native_effort: Optional[str] = None,
+) -> Tuple[str, ...]:
+    catalog = CODEX_CATALOG
+    if not catalog.is_file():
+        raise ConfigError("the bundled Codex model catalogue is missing", "reinstall the complete Foundry snapshot")
+    controls: List[str] = [str(cli.path)]
+    for key, value in (
+        ("model_provider", PROVIDER_ID),
+        ("model", config.deployment),
+        ("model_catalog_json", str(catalog)),
+        (f"model_providers.{PROVIDER_ID}.name", PROVIDER_NAME),
+        (f"model_providers.{PROVIDER_ID}.base_url", config.base_url),
+        (f"model_providers.{PROVIDER_ID}.env_key", "AZURE_OPENAI_API_KEY"),
+        (f"model_providers.{PROVIDER_ID}.wire_api", "responses"),
+        (f"model_providers.{PROVIDER_ID}.requires_openai_auth", False),
+        # A caller's validated native effort rides in native_args, so the
+        # launcher default is omitted rather than set twice.
+        *(() if native_effort is not None else ((CODEX_EFFORT_KEY, CODEX_DEFAULT_EFFORT),)),
+        ("service_tier", "default"),
+    ):
+        controls.extend(codex_override(key, value))
+    controls.extend(native_args)
+    return tuple(controls)
+
+
+def _long_option(token: str, name: str) -> bool:
+    return token == name or token.startswith(name + "=")
+
+
+def _short_option(token: str, name: str) -> bool:
+    return token == name or token.startswith(name + "=") or token.startswith(name) and len(token) > len(name)
+
+
+def codex_catalog_reasoning_levels(deployment: str) -> Optional[Tuple[str, ...]]:
+    """Reasoning levels Codex's own pinned catalogue lists for a deployment, or None."""
+    try:
+        catalog = json.loads(CODEX_CATALOG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    entries = catalog.get("models") if isinstance(catalog, dict) else None
+    for entry in entries if isinstance(entries, list) else ():
+        if isinstance(entry, dict) and entry.get("slug") == deployment:
+            levels = entry.get("supported_reasoning_levels")
+            if not isinstance(levels, list):
+                return None
+            efforts = tuple(level.get("effort") for level in levels if isinstance(level, dict))
+            return efforts if efforts and all(isinstance(effort, str) for effort in efforts) else None
+    return None
+
+
+def _codex_native_effort(assignment: str, deployment: str) -> Optional[str]:
+    """Validate a native -c value. None when it names any key but the effort."""
+    key, separator, raw = assignment.partition("=")
+    if not separator or key != CODEX_EFFORT_KEY:
+        return None
+    levels = codex_catalog_reasoning_levels(deployment)
+    if levels is None:
+        raise UsageError(
+            f"Codex native {CODEX_EFFORT_KEY} needs a pinned catalogue entry for deployment {deployment}"
+        )
+    effort = raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] == '"' else raw
+    if effort not in levels:
+        raise UsageError(
+            f"Codex native {CODEX_EFFORT_KEY} must be one of {', '.join(levels)} for deployment {deployment}"
+        )
+    return effort
+
+
+def validate_codex_native_args(native_args: Sequence[str], deployment: str) -> Optional[str]:
+    """Refuse reserved Codex overrides; return the validated native effort, if any.
+
+    Only the exact reasoning-effort key is allowed through -c/--config, once,
+    and only at a level Codex's own catalogue lists for the deployment.
+    """
+    native_effort: Optional[str] = None
+    index = 0
+    while index < len(native_args):
+        token = native_args[index]
+        if token == "--":
+            break
+        if token in ("-c", "--config") or token.startswith("--config="):
+            if token in ("-c", "--config"):
+                assignment = native_args[index + 1] if index + 1 < len(native_args) else ""
+                consumed = 2
+            else:
+                assignment, consumed = token.split("=", 1)[1], 1
+            effort = _codex_native_effort(assignment, deployment)
+            if effort is None:
+                raise UsageError("Codex native --config and -c overrides are reserved by monash-foundry")
+            if native_effort is not None:
+                raise UsageError(f"Codex native {CODEX_EFFORT_KEY} may be provided only once")
+            native_effort = effort
+            index += consumed
+            continue
+        if _long_option(token, "--config") or _short_option(token, "-c"):
+            raise UsageError("Codex native --config and -c overrides are reserved by monash-foundry")
+        if _long_option(token, "--profile") or _short_option(token, "-p"):
+            raise UsageError("Codex native --profile and -p overrides are reserved by monash-foundry")
+        if token == "--oss" or token.startswith("--oss="):
+            raise UsageError("Codex native --oss is not allowed through the Foundry route")
+        if _long_option(token, "--local-provider"):
+            raise UsageError("Codex native --local-provider is not allowed through the Foundry route")
+        if _long_option(token, "--remote") or _long_option(token, "--remote-auth-token-env"):
+            raise UsageError("Codex remote servers are not allowed through the Foundry route")
+
+        model_value: Optional[str] = None
+        consumes_next = False
+        if token in ("--model", "-m"):
+            if index + 1 >= len(native_args):
+                raise UsageError("Codex native --model requires the configured deployment")
+            model_value = native_args[index + 1]
+            consumes_next = True
+        elif token.startswith("--model="):
+            model_value = token.split("=", 1)[1]
+        elif token.startswith("-m="):
+            model_value = token.split("=", 1)[1]
+        elif token.startswith("-m") and not token.startswith("--"):
+            model_value = token[2:]
+
+        if model_value is not None and model_value != deployment:
+            raise UsageError("Codex native model selection must equal the configured deployment")
+        index += 2 if consumes_next else 1
+    return native_effort
+
+
+def _claude_settings_refusal(message: str) -> LauncherError:
+    return LauncherError(message, CLAUDE_SETTINGS_REPAIR, code=2)
+
+
+def _json_object_without_duplicates(pairs: List[Tuple[str, object]]) -> Dict[str, object]:
+    result: Dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(name: str) -> object:
+    raise ValueError("non-standard JSON constant")
+
+
+def read_claude_settings_file(path_text: str) -> str:
+    """Read a caller settings file only when it is a private, bounded, regular file."""
+    path = Path(path_text)
+    if not path.is_absolute():
+        raise _claude_settings_refusal("Claude native --settings file must be an absolute path")
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        raise _claude_settings_refusal("Claude native --settings file is unreadable or is a symbolic link")
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise _claude_settings_refusal("Claude native --settings file must be a regular file")
+        if info.st_uid != os.getuid():
+            raise _claude_settings_refusal("Claude native --settings file must be owned by the current user")
+        if info.st_mode & 0o022:
+            raise _claude_settings_refusal("Claude native --settings file must not be group or world writable")
+        chunks: List[bytes] = []
+        remaining = CLAUDE_SETTINGS_MAX_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError:
+        raise _claude_settings_refusal("Claude native --settings file is unreadable")
+    finally:
+        os.close(descriptor)
+    data = b"".join(chunks)
+    if len(data) > CLAUDE_SETTINGS_MAX_BYTES:
+        raise _claude_settings_refusal("Claude native --settings file is too large")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise _claude_settings_refusal("Claude native --settings file must be UTF-8 JSON")
+
+
+def parse_claude_settings(value: str) -> Dict[str, object]:
+    """Validate one caller settings value (inline JSON object or file path).
+
+    Messages name only reserved setting names, never caller-supplied values:
+    a Projects hook file carries a task token.
+    """
+    text = value if value.lstrip().startswith("{") else read_claude_settings_file(value)
+    try:
+        settings = json.loads(
+            text,
+            object_pairs_hook=_json_object_without_duplicates,
+            parse_constant=_reject_json_constant,
+        )
+    except (ValueError, RecursionError):
+        raise _claude_settings_refusal(
+            "Claude native --settings must be one valid JSON object without duplicate keys"
+        )
+    if not isinstance(settings, dict):
+        raise _claude_settings_refusal("Claude native --settings must be one JSON object")
+
+    reserved_keys = sorted(CLAUDE_SETTINGS_RESERVED_KEYS.intersection(settings))
+    if reserved_keys:
+        raise _claude_settings_refusal(
+            f"Claude native --settings cannot set {', '.join(reserved_keys)}; "
+            "monash-foundry owns provider, credential, and model selection"
+        )
+    if "hooks" in settings and not isinstance(settings["hooks"], dict):
+        raise _claude_settings_refusal("Claude native --settings hooks must be a JSON object")
+    if "env" in settings:
+        env = settings["env"]
+        if not isinstance(env, dict) or not all(isinstance(item, str) for item in env.values()):
+            raise _claude_settings_refusal("Claude native --settings env must be an object of string values")
+        conflicts = sorted(CLAUDE_SETTINGS_RESERVED_ENV.intersection(env))
+        if conflicts:
+            raise _claude_settings_refusal(
+                f"Claude native --settings env cannot set {', '.join(conflicts)}; "
+                "monash-foundry owns provider, credential, home, and model environment"
+            )
+    return settings
+
+
+def extract_claude_settings(
+    native_args: Sequence[str],
+) -> Tuple[Tuple[str, ...], Optional[Dict[str, object]]]:
+    """Remove one caller --settings value from native args and return it validated.
+
+    Arguments after a second `--` are positional and left untouched. Without a
+    caller --settings the native args are returned exactly as given.
+    """
+    remaining: List[str] = []
+    values: List[str] = []
+    index = 0
+    while index < len(native_args):
+        token = native_args[index]
+        if token == "--":
+            remaining.extend(native_args[index:])
+            break
+        if token == "--settings":
+            if index + 1 >= len(native_args) or native_args[index + 1].startswith("-"):
+                raise _claude_settings_refusal("Claude native --settings requires one file path or JSON object")
+            values.append(native_args[index + 1])
+            index += 2
+            continue
+        if token.startswith("--settings="):
+            values.append(token.split("=", 1)[1])
+            index += 1
+            continue
+        remaining.append(token)
+        index += 1
+    if not values:
+        return tuple(native_args), None
+    if len(values) > 1:
+        raise _claude_settings_refusal("Claude native --settings may be provided only once")
+    if not values[0].strip():
+        raise _claude_settings_refusal("Claude native --settings requires one file path or JSON object")
+    return tuple(remaining), parse_claude_settings(values[0])
+
+
+def compose_claude_settings(
+    caller: Optional[Dict[str, object]], pinned_env: Dict[str, str]
+) -> Dict[str, object]:
+    """One settings object: every caller setting kept, launcher env pins last."""
+    settings = dict(caller or {})
+    caller_env = dict(settings.pop("env", {}))
+    settings["env"] = {**caller_env, **pinned_env}
+    return settings
+
+
+def validate_claude_native_args(
+    native_args: Sequence[str], config: ClaudeConfig, exact_deployment: Optional[str] = None
+) -> Tuple[Tuple[str, ...], str]:
+    if exact_deployment is not None:
+        selected = False
+        index = 0
+        while index < len(native_args):
+            token = native_args[index]
+            if token == "--":
+                break
+            if _long_option(token, "--settings"):
+                raise UsageError("Claude native --settings is reserved by monash-foundry")
+            if any(_long_option(token, option) for option in ("--cloud", "--environment", "--fallback-model")):
+                raise UsageError("Claude cloud environments and fallback models are not allowed through the Foundry route")
+
+            model_value: Optional[str] = None
+            consumes_next = False
+            if token in ("--model", "-m"):
+                if index + 1 >= len(native_args):
+                    raise UsageError("Claude native --model requires the selected deployment")
+                model_value = native_args[index + 1]
+                consumes_next = True
+            elif token.startswith("--model="):
+                model_value = token.split("=", 1)[1]
+            elif token.startswith("-m="):
+                model_value = token.split("=", 1)[1]
+            elif token.startswith("-m") and not token.startswith("--"):
+                model_value = token[2:]
+
+            if model_value is not None:
+                if model_value != exact_deployment:
+                    raise UsageError("Claude native model selection must equal the selected deployment")
+                if selected:
+                    raise UsageError("Claude native --model may be provided only once")
+                selected = True
+            index += 2 if consumes_next else 1
+        if selected:
+            return tuple(native_args), exact_deployment
+        return ("--model", exact_deployment, *native_args), exact_deployment
+
+    aliases = {
+        "opus": config.opus,
+        "sonnet": config.sonnet,
+        "haiku": config.haiku,
+        "sonnet5": config.sonnet5,
+    }
+    aliases = {name: value for name, value in aliases.items() if value is not None}
+    allowed = set(aliases) | set(aliases.values())
+    selected: Optional[str] = None
+    index = 0
+
+    while index < len(native_args):
+        token = native_args[index]
+        if token == "--":
+            break
+        if _long_option(token, "--settings"):
+            raise UsageError("Claude native --settings is reserved by monash-foundry")
+        if any(_long_option(token, option) for option in ("--cloud", "--environment", "--fallback-model")):
+            raise UsageError("Claude cloud environments and fallback models are not allowed through the Foundry route")
+
+        model_value: Optional[str] = None
+        consumes_next = False
+        if token in ("--model", "-m"):
+            if index + 1 >= len(native_args):
+                raise UsageError("Claude native --model requires a configured alias or deployment")
+            model_value = native_args[index + 1]
+            consumes_next = True
+        elif token.startswith("--model="):
+            model_value = token.split("=", 1)[1]
+        elif token.startswith("-m="):
+            model_value = token.split("=", 1)[1]
+        elif token.startswith("-m") and not token.startswith("--"):
+            model_value = token[2:]
+
+        if model_value is not None:
+            if model_value not in allowed:
+                raise UsageError("Claude native model selection must be a configured alias or deployment")
+            if selected is not None:
+                raise UsageError("Claude native --model may be provided only once")
+            selected = model_value
+        index += 2 if consumes_next else 1
+
+    if selected is None:
+        return ("--model", config.sonnet, *native_args), config.sonnet
+    return tuple(native_args), aliases.get(selected, selected)
+
+
+def opencode_recipe_config(
+    model_id: str, deployment: str, base_url: str, *, qualification_fixture: bool
+) -> Dict[str, object]:
+    if model_id not in OPENCODE_RECIPE_MODELS:
+        raise LauncherError(f"model {model_id} has no documented OpenCode native recipe")
+
+    model_options: Dict[str, object] = {}
+    if model_id == "kimi-k2.6":
+        model_options["options"] = {"systemMessageMode": "system"}
+    elif model_id == "kimi-k2.7-code":
+        model_options.update(
+            {
+                "provider": {"npm": "@ai-sdk/openai-compatible"},
+                "reasoning": True,
+                "tool_call": True,
+                "interleaved": {"field": "reasoning_content"},
+            }
+        )
+
+    route_config: Dict[str, object] = {
+        "enabled_providers": [OPENCODE_PROVIDER_ID],
+        "model": f"{OPENCODE_PROVIDER_ID}/{model_id}",
+        "provider": {
+            OPENCODE_PROVIDER_ID: {
+                "options": {
+                    "baseURL": base_url,
+                    "useCompletionUrls": True,
+                    "setCacheKey": False,
+                },
+                "models": {model_id: {"id": deployment, **model_options}},
+            }
+        },
+    }
+    if qualification_fixture:
+        route_config.update(
+            {
+                "permission": "deny",
+                "agent": {"build": {"permission": {"read": "allow"}}},
+            }
+        )
+    return route_config
+
+
+def opencode_native_config_dir(environment: Dict[str, str]) -> Path:
+    raw_home = environment.get("XDG_CONFIG_HOME")
+    config_home = Path(raw_home).expanduser() if raw_home else Path.home() / ".config"
+    if not config_home.is_absolute():
+        config_home = Path.cwd() / config_home
+    return (config_home / "opencode").resolve()
+
+
+def require_herdr_opencode_asset(path: Path, integration_id: str) -> Path:
+    if not path.is_file():
+        raise LauncherError(
+            "Herdr OpenCode integration v11 is unavailable",
+            "install Herdr OpenCode integration v11 before launching OpenCode",
+        )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise LauncherError(
+            "Herdr OpenCode integration v11 could not be read",
+            "repair the Herdr OpenCode integration and retry",
+        )
+    if (
+        f"HERDR_INTEGRATION_ID={integration_id}" not in text
+        or f"HERDR_INTEGRATION_VERSION={HERDR_OPENCODE_INTEGRATION_VERSION}" not in text
+    ):
+        raise LauncherError(
+            "the OpenCode plugin is not the supported Herdr integration",
+            "install Herdr OpenCode integration v11 and retry",
+        )
+    return path.resolve()
+
+
+def prepare_opencode_custody(
+    environment: Dict[str, str], route_config: Dict[str, object]
+) -> Tuple[Dict[str, object], Path, Path]:
+    canonical = opencode_native_config_dir(environment)
+    server_plugin = require_herdr_opencode_asset(
+        canonical / "plugins" / "herdr-agent-state.js",
+        "opencode",
+    )
+    tui_plugin = require_herdr_opencode_asset(
+        canonical / "herdr-tui-session.js",
+        "opencode-tui",
+    )
+    home_opencode = Path.home() / ".opencode"
+    if home_opencode.is_dir():
+        raise LauncherError(
+            "OpenCode home .opencode configuration cannot be isolated",
+            "move $HOME/.opencode aside before launching a Foundry OpenCode route",
+        )
+
+    try:
+        route_root = Path(tempfile.mkdtemp(prefix="monash-foundry-opencode-"))
+        route_dir = route_root / "opencode"
+        route_dir.mkdir(mode=0o700)
+        os.chmod(route_root, 0o700)
+        os.chmod(route_dir, 0o700)
+        owned_config = dict(route_config)
+        owned_config["plugin"] = [server_plugin.as_uri()]
+        tui_config = {"plugin": [tui_plugin.as_uri()]}
+        config_text = json.dumps(owned_config, sort_keys=True, separators=(",", ":"))
+        (route_dir / "opencode.json").write_text(config_text + "\n", encoding="utf-8")
+        (route_dir / "tui.jsonc").write_text(
+            json.dumps(tui_config, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(route_dir / "opencode.json", 0o600)
+        os.chmod(route_dir / "tui.jsonc", 0o600)
+    except OSError as error:
+        raise LauncherError(
+            "OpenCode route custody configuration could not be prepared",
+            "repair temporary-directory permissions and retry",
+        ) from error
+
+    environment.update(
+        {
+            "XDG_CONFIG_HOME": str(route_root),
+            "OPENCODE_CONFIG_DIR": str(route_dir),
+            "OPENCODE_TUI_CONFIG": str(route_dir / "tui.jsonc"),
+            "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
+            "OPENCODE_CONFIG_CONTENT": config_text,
+        }
+    )
+    return owned_config, route_dir, route_dir / "tui.jsonc"
+
+
+def validate_opencode_native_args(native_args: Sequence[str]) -> None:
+    for token in native_args:
+        if _long_option(token, "--model") or _short_option(token, "-m"):
+            raise UsageError("OpenCode native --model and -m are reserved by monash-foundry")
+        if _long_option(token, "--config"):
+            raise UsageError("OpenCode native --config is reserved by monash-foundry")
+        if _long_option(token, "--agent"):
+            raise UsageError("OpenCode native --agent is reserved by monash-foundry")
+        if _long_option(token, "--session") or token == "-s":
+            raise UsageError("OpenCode native session selection is reserved by monash-foundry")
+        if _long_option(token, "--continue") or token == "-c":
+            raise UsageError("OpenCode native session continuation is reserved by monash-foundry")
+        if _long_option(token, "--fork"):
+            raise UsageError("OpenCode native session forking is reserved by monash-foundry")
+        if token == "attach" or _long_option(token, "--attach"):
+            raise UsageError("OpenCode native attach and --attach remote-server overrides are reserved by monash-foundry")
+        if _long_option(token, "--pure") or _long_option(token, "--no-pure"):
+            raise UsageError("OpenCode native --pure and --no-pure overrides are reserved by monash-foundry")
+
+
+def verify_opencode_version(
+    cli: ResolvedCommand, minimum_version: str, environment: Dict[str, str]
+) -> str:
+    minimum = _version_tuple(minimum_version, "opencode.minimum_version")
+    try:
+        result = subprocess.run(
+            [str(cli.path), "--version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise LauncherError(
+            "OpenCode version could not be verified",
+            f"install or activate OpenCode {'.'.join(map(str, OPENCODE_MINIMUM_VERSION))} or newer",
+        )
+    if result.returncode != 0:
+        raise LauncherError(
+            "OpenCode version could not be verified",
+            f"install or activate OpenCode {'.'.join(map(str, OPENCODE_MINIMUM_VERSION))} or newer",
+        )
+    match = re.search(r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)", result.stdout + "\n" + result.stderr)
+    if match is None:
+        raise LauncherError(
+            "OpenCode did not report a supported semantic version",
+            f"install or activate OpenCode {'.'.join(map(str, OPENCODE_MINIMUM_VERSION))} or newer",
+        )
+    actual = tuple(int(match.group(index)) for index in range(1, 4))
+    if actual < minimum:
+        version = ".".join(map(str, actual))
+        required = ".".join(map(str, minimum))
+        raise LauncherError(
+            f"OpenCode {version} lacks the native Azure OAuth route required by this launcher",
+            f"install or activate OpenCode {required} or newer",
+        )
+    return ".".join(map(str, actual))
+
+
+def _inventory_resource_map(inventory: ModelInventory) -> Dict[str, InventoryResource]:
+    return {resource.id: resource for resource in inventory.resources}
+
+
+def _inventory_model_map(inventory: ModelInventory) -> Dict[str, ModelDefinition]:
+    return {model.id: model for model in inventory.models}
+
+
+def select_model_route(
+    config: FoundryConfig, model_id: str, agent: str, qualification: bool = False
+) -> ModelSelection:
+    inventory = config.inventory
+    if inventory is None:
+        raise ConfigError(
+            "model inventory is not configured",
+            "add the inventory extension to config.json before using models or launch",
+        )
+    if agent not in MODEL_AGENTS:
+        raise UsageError("launch --agent must be codex, claude, or opencode")
+    if agent == "opencode" and config.opencode is None:
+        raise ConfigError(
+            "OpenCode route configuration is not configured",
+            "add opencode.resources and opencode.minimum_version to config.json",
+        )
+    model = _inventory_model_map(inventory).get(model_id)
+    if model is None:
+        raise UsageError(f"unknown stable model ID: {model_id}")
+    route = next((candidate for candidate in model.routes if candidate.agent == agent), None)
+    if route is None:
+        raise LauncherError(f"model {model_id} has no {agent} route; no substitution is available")
+    if route.binding_resource_id is None:
+        reason = route.reason or "the selected agent has no exact resource binding"
+        raise UsageError(f"model {model_id} is incompatible with {agent}: {reason}")
+    candidate_bindings = [
+        candidate for candidate in model.bindings if candidate.resource_id == route.binding_resource_id
+    ]
+    if not candidate_bindings:
+        raise LauncherError(f"model {model_id} has no exact {agent} deployment binding")
+    expected_protocol = AGENT_PROTOCOLS[agent]
+    binding = next(
+        (candidate for candidate in candidate_bindings if candidate.protocol == expected_protocol),
+        candidate_bindings[0],
+    )
+    expected_resource_id = "gpt" if agent == "codex" else "claude"
+    if agent != "opencode" and binding.resource_id != expected_resource_id:
+        raise LauncherError(
+            f"model {model_id} has no {agent} protocol binding on the native {expected_resource_id} resource"
+        )
+    resource = next(
+        (candidate for candidate in inventory.resources if candidate.id == binding.resource_id),
+        None,
+    )
+    if resource is None:
+        raise LauncherError(f"model {model_id} has no concrete inventory resource for {agent}")
+    if agent == "codex":
+        endpoint = urlsplit(config.codex.base_url)
+        expected_hostname = f"{resource.resource}.openai.azure.com"
+        if endpoint.hostname is None or endpoint.hostname.casefold() != expected_hostname.casefold():
+            raise LauncherError(
+                f"selected Codex endpoint does not match inventory resource {resource.resource}"
+            )
+    elif agent == "claude":
+        if config.claude.resource != resource.resource:
+            raise LauncherError(
+                f"selected Claude resource does not match inventory resource {resource.resource}"
+            )
+    else:
+        assert config.opencode is not None
+        opencode_resource = config.opencode.resources.get(binding.resource_id)
+        if opencode_resource is None:
+            raise LauncherError(
+                f"OpenCode has no configured endpoint for inventory resource {binding.resource_id}"
+            )
+        endpoint = urlsplit(opencode_resource.base_url)
+        expected_hostname = f"{resource.resource}.services.ai.azure.com"
+        if opencode_resource.resource != resource.resource:
+            raise LauncherError(
+                f"selected OpenCode resource does not match inventory resource {resource.resource}"
+            )
+        if endpoint.hostname is None or endpoint.hostname.casefold() != expected_hostname.casefold():
+            raise LauncherError(
+                f"selected OpenCode endpoint does not match inventory resource {resource.resource}"
+            )
+    if resource.availability != "available" or not resource.observed:
+        reason = resource.error or "the selected inventory resource is stale or unobserved"
+        raise LauncherError(f"model {model_id} is not available for {agent}: {reason}")
+    if model.availability != "available" or binding.availability != "available" or not binding.observed:
+        reason = binding.reason or "the exact deployment is not currently available"
+        raise LauncherError(f"model {model_id} is not available for {agent}: {reason}")
+    if binding.protocol != expected_protocol:
+        raise LauncherError(
+            f"model {model_id} binding protocol is not compatible with {agent}: "
+            f"expected {expected_protocol}"
+        )
+    if agent == "opencode":
+        if binding.model_format not in OPENCODE_MODEL_FORMATS:
+            raise LauncherError(
+                f"model {model_id} binding model format is not compatible with opencode: "
+                f"expected one of {', '.join(sorted(OPENCODE_MODEL_FORMATS))}"
+            )
+        if model_id not in OPENCODE_RECIPE_MODELS:
+            raise LauncherError(
+                f"model {model_id} has no documented OpenCode native recipe; no substitution is available"
+            )
+    else:
+        expected_model_format = AGENT_MODEL_FORMATS[agent]
+        if binding.model_format != expected_model_format:
+            raise LauncherError(
+                f"model {model_id} binding model format is not compatible with {agent}: "
+                f"expected {expected_model_format}"
+            )
+    if not route.implemented:
+        reason = route.reason or "the native route is not implemented"
+        raise LauncherError(f"model {model_id} is not implemented for {agent}: {reason}")
+    if route.compatibility != "compatible":
+        reason = route.reason or "the native protocol is not compatible"
+        raise UsageError(f"model {model_id} is incompatible with {agent}: {reason}")
+    if route.status == "failed":
+        reason = route.reason or "a prior native observation failed"
+        raise LauncherError(f"model {model_id} failed qualification for {agent}: {reason}")
+    if route.status == "untested" and not qualification:
+        raise LauncherError(
+            f"model {model_id} is untested for {agent}; pass --qualification for an explicit foreground trial"
+        )
+    if route.status not in {"qualified", "untested"}:
+        raise LauncherError(f"model {model_id} has no launchable evidence state for {agent}")
+
+    return ModelSelection(model=model, route=route, binding=binding)
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _deployment_rows(value: object) -> Optional[List[Dict[str, object]]]:
+    if isinstance(value, list):
+        rows = value
+    elif isinstance(value, dict) and isinstance(value.get("value"), list):
+        rows = value["value"]
+    else:
+        return None
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _refresh_inventory(config: FoundryConfig) -> Tuple[ModelInventory, str, str]:
+    inventory = config.inventory
+    if inventory is None:
+        raise ConfigError(
+            "model inventory is not configured",
+            "add the inventory extension to config.json before using models or launch",
+        )
+
+    environment, _ = sanitized_environment()
+    environment["AZURE_CONFIG_DIR"] = str(
+        Path(environment.get("AZURE_CONFIG_DIR") or str(Path.home() / ".azure")).expanduser().resolve()
+    )
+    try:
+        az = resolve_command(config, "az", "az", Path.home() / ".local" / "bin" / "az")
+    except LauncherError:
+        az = None
+
+    resources = list(inventory.resources)
+    models = list(inventory.models)
+    resource_updates: Dict[str, InventoryResource] = {}
+    binding_updates: Dict[Tuple[str, str, str, str], ModelBinding] = {}
+
+    for resource in resources:
+        expected: List[Tuple[str, ModelBinding]] = []
+        for model in models:
+            for binding in model.bindings:
+                if binding.resource_id == resource.id:
+                    expected.append((model.id, binding))
+
+        if az is None:
+            resource_updates[resource.id] = replace(
+                resource,
+                availability="stale",
+                observed=False,
+                error="Azure CLI is unavailable",
+            )
+            for model_id, binding in expected:
+                binding_updates[(model_id, binding.resource_id, binding.deployment, binding.protocol)] = replace(
+                    binding,
+                    availability="stale",
+                    provisioning_state=None,
+                    observed=False,
+                    reason="Azure CLI is unavailable",
+                )
+            continue
+
+        command = [
+            str(az.path),
+            "cognitiveservices",
+            "account",
+            "deployment",
+            "list",
+            "--subscription",
+            config.subscription,
+            "--resource-group",
+            resource.resource_group,
+            "--name",
+            resource.resource,
+            "--output",
+            "json",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+                timeout=15,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            result = None
+        except OSError:
+            result = None
+
+        if result is None or result.returncode != 0:
+            error = "Azure deployment query timed out" if result is None else "Azure deployment query failed"
+            resource_updates[resource.id] = replace(
+                resource,
+                availability="stale",
+                observed=False,
+                error=error,
+            )
+            for model_id, binding in expected:
+                binding_updates[(model_id, binding.resource_id, binding.deployment, binding.protocol)] = replace(
+                    binding,
+                    availability="stale",
+                    provisioning_state=None,
+                    observed=False,
+                    reason=error,
+                )
+            continue
+
+        try:
+            rows = _deployment_rows(json.loads(result.stdout))
+        except (TypeError, json.JSONDecodeError):
+            rows = None
+        if rows is None:
+            error = "Azure deployment query returned invalid JSON"
+            resource_updates[resource.id] = replace(
+                resource,
+                availability="stale",
+                observed=False,
+                error=error,
+            )
+            for model_id, binding in expected:
+                binding_updates[(model_id, binding.resource_id, binding.deployment, binding.protocol)] = replace(
+                    binding,
+                    availability="stale",
+                    provisioning_state=None,
+                    observed=False,
+                    reason=error,
+                )
+            continue
+
+        by_name: Dict[str, Dict[str, object]] = {}
+        for row in rows:
+            name = row.get("name")
+            if isinstance(name, str) and name not in by_name:
+                by_name[name] = row
+        resource_available = True
+        for model_id, binding in expected:
+            row = by_name.get(binding.deployment)
+            if row is None:
+                resource_available = False
+                binding_updates[(model_id, binding.resource_id, binding.deployment, binding.protocol)] = replace(
+                    binding,
+                    availability="unavailable",
+                    provisioning_state=None,
+                    observed=True,
+                    reason="exact deployment was not returned by Azure CLI",
+                )
+                continue
+            properties = row.get("properties")
+            properties = properties if isinstance(properties, dict) else {}
+            provisioning_state = properties.get("provisioningState")
+            provisioning_state = provisioning_state if isinstance(provisioning_state, str) else None
+            model_properties = properties.get("model")
+            model_properties = model_properties if isinstance(model_properties, dict) else {}
+            reported_format = model_properties.get("format")
+            format_matches = reported_format == binding.model_format
+            available = provisioning_state == "Succeeded" and format_matches
+            if not available:
+                resource_available = False
+            if provisioning_state != "Succeeded":
+                reason = "deployment is not in Succeeded state"
+            elif not format_matches:
+                reason = "Azure model format does not match the inventory binding"
+            else:
+                reason = None
+            binding_updates[(model_id, binding.resource_id, binding.deployment, binding.protocol)] = replace(
+                binding,
+                availability="available" if available else "unavailable",
+                provisioning_state=provisioning_state,
+                observed=True,
+                reason=reason,
+            )
+        resource_updates[resource.id] = replace(
+            resource,
+            availability="available" if resource_available else "unavailable",
+            observed=True,
+            error=None if resource_available else "one or more exact deployments are unavailable",
+        )
+
+    refreshed_models: List[ModelDefinition] = []
+    for model in models:
+        refreshed_bindings = tuple(
+            binding_updates.get(
+                (model.id, binding.resource_id, binding.deployment, binding.protocol), binding
+            )
+            for binding in model.bindings
+        )
+        if any(binding.availability == "unavailable" for binding in refreshed_bindings):
+            availability = "unavailable"
+        elif any(binding.availability == "stale" for binding in refreshed_bindings):
+            availability = "stale"
+        else:
+            availability = "available"
+        refreshed_models.append(replace(model, availability=availability, bindings=refreshed_bindings))
+
+    refreshed = replace(
+        inventory,
+        resources=tuple(resource_updates[resource.id] for resource in resources),
+        models=tuple(refreshed_models),
+    )
+    if any(binding.availability == "unavailable" for model in refreshed.models for binding in model.bindings):
+        state = "unavailable"
+    elif any(resource.availability == "stale" for resource in refreshed.resources):
+        state = "stale"
+    else:
+        state = "fresh"
+    return refreshed, state, _utc_timestamp()
+
+
+def _inventory_payload(inventory: ModelInventory, mode: str, state: str, observed_at: str) -> Dict[str, object]:
+    return {
+        "schema_version": 1,
+        "command": "models",
+        "mode": mode,
+        "state": state,
+        "observed_at": observed_at,
+        "resources": [
+            {
+                "id": resource.id,
+                "resource": resource.resource,
+                "resource_group": resource.resource_group,
+                "availability": resource.availability,
+                "observed": resource.observed,
+                "error": resource.error,
+            }
+            for resource in inventory.resources
+        ],
+        "models": [
+            {
+                "id": model.id,
+                "display_name": model.display_name,
+                "availability": model.availability,
+                "bindings": [
+                    {
+                        "resource_id": binding.resource_id,
+                        "resource": next(
+                            resource.resource
+                            for resource in inventory.resources
+                            if resource.id == binding.resource_id
+                        ),
+                        "resource_group": next(
+                            resource.resource_group
+                            for resource in inventory.resources
+                            if resource.id == binding.resource_id
+                        ),
+                        "deployment": binding.deployment,
+                        "protocol": binding.protocol,
+                        "model_format": binding.model_format,
+                        "availability": binding.availability,
+                        "provisioning_state": binding.provisioning_state,
+                        "observed": binding.observed,
+                        "reason": binding.reason,
+                    }
+                    for binding in model.bindings
+                ],
+                "routes": [
+                    {
+                        "agent": route.agent,
+                        "status": route.status,
+                        "implemented": route.implemented,
+                        "compatibility": route.compatibility,
+                        "binding_resource_id": route.binding_resource_id,
+                        "reason": route.reason,
+                        "evidence": list(route.evidence),
+                    }
+                    for route in model.routes
+                ],
+            }
+            for model in inventory.models
+        ],
+    }
+
+
+def print_model_inventory(inventory: ModelInventory, mode: str, state: str, observed_at: str) -> None:
+    print(f"mode={mode} state={state} observed_at={observed_at}")
+    for model in inventory.models:
+        route_state = ",".join(f"{route.agent}:{route.status}" for route in model.routes)
+        print(f"{model.id} availability={model.availability} routes={route_state}")
+
+
+def build_plan(
+    config: FoundryConfig,
+    agent: str,
+    native_args: Sequence[str],
+    selection: Optional[ModelSelection] = None,
+) -> LaunchPlan:
+    environment, removed_env = sanitized_environment()
+    herdr_agent = validated_herdr_agent(agent)
+    if herdr_agent is not None:
+        environment["HERDR_AGENT"] = herdr_agent
+
+    if agent == "codex":
+        codex_config = config.codex
+        if selection is not None:
+            codex_config = replace(codex_config, deployment=selection.binding.deployment)
+        cli = resolve_command(config, "codex", "codex", Path.home() / ".local" / "bin" / "codex")
+        wrapper = resolve_command(
+            config,
+            "with_one_password_token",
+            "with-one-password-token",
+            DEFAULT_WRAPPER,
+        )
+        native_effort = validate_codex_native_args(native_args, codex_config.deployment)
+        native_argv = codex_route_args(codex_config, native_args, cli, native_effort)
+        if not (ENV_HOP.is_file() and os.access(ENV_HOP, os.X_OK)):
+            raise LauncherError(
+                "the required terminal environment hop is unavailable",
+                "provide /usr/bin/env on the launch host",
+            )
+        wrapper_environment = codex_wrapper_environment(environment)
+        exec_argv = (
+            str(wrapper.path),
+            "inject",
+            "AZURE_OPENAI_API_KEY",
+            config.codex.credential_ref,
+            "--",
+            *codex_environment_hop(environment),
+            *native_argv,
+        )
+        return LaunchPlan(
+            agent="codex",
+            provider="Monash Foundry Azure Responses",
+            deployment=codex_config.deployment,
+            cli=cli,
+            exec_path=wrapper.path,
+            exec_argv=exec_argv,
+            env=wrapper_environment,
+            removed_env=removed_env,
+            auth_description="1Password wrapper, process-scoped",
+            forwarded_arg_count=len(native_args),
+            model_id=selection.model.id if selection is not None else None,
+            qualification=selection is not None and selection.route.status == "untested",
+            wrapper=wrapper,
+        )
+
+    if agent == "claude":
+        cli = resolve_command(config, "claude", "claude", Path.home() / ".local" / "bin" / "claude")
+        az = resolve_command(config, "az", "az", Path.home() / ".local" / "bin" / "az")
+        # A caller --settings (Herdr Projects passes its turn-end hooks this way)
+        # is validated and composed into the single settings object below; any
+        # other native --settings form is still refused by the validator.
+        claude_native_args, caller_settings = extract_claude_settings(native_args)
+        if selection is None:
+            claude_args, deployment = validate_claude_native_args(claude_native_args, config.claude)
+        else:
+            claude_args, deployment = validate_claude_native_args(
+                claude_native_args,
+                config.claude,
+                exact_deployment=selection.binding.deployment,
+            )
+        environment.update(
+            {
+                "CLAUDE_CODE_USE_FOUNDRY": "1",
+                "ANTHROPIC_FOUNDRY_RESOURCE": config.claude.resource,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": config.claude.sonnet,
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": config.claude.haiku,
+            }
+        )
+        if config.claude.opus is not None:
+            environment["ANTHROPIC_DEFAULT_OPUS_MODEL"] = config.claude.opus
+        environment["AZURE_CONFIG_DIR"] = str(Path(environment.get("AZURE_CONFIG_DIR") or str(Path.home() / ".azure")).expanduser().resolve())
+        # Settings.env overrides inherited environment. Pin routing at the
+        # command-line settings tier while keeping caller hooks and other settings.
+        pinned_env = {name: "" for name in CONFLICTING_ENV if name not in {"CODEX_HOME", "CLAUDE_CONFIG_DIR"}}
+        for name in ("CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_FOUNDRY_RESOURCE",
+                     "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                     "ANTHROPIC_DEFAULT_HAIKU_MODEL", "AZURE_CONFIG_DIR", "HERDR_AGENT"):
+            if name in environment:
+                pinned_env[name] = environment[name]
+        settings_text = json.dumps(compose_claude_settings(caller_settings, pinned_env), sort_keys=True)
+        # Pins alone hold no secret and stay inline. Caller settings can carry
+        # a Projects hook token or other secrets, so they never enter argv: the
+        # plan keeps them in memory and exec_plan hands Claude a private descriptor.
+        private_settings = None if caller_settings is None else settings_text
+        exec_argv = (
+            str(cli.path),
+            "--settings",
+            settings_text if private_settings is None else PRIVATE_SETTINGS_ARGV,
+            *claude_args,
+        )
+        return LaunchPlan(
+            agent="claude",
+            provider="Monash Foundry Claude via Entra",
+            deployment=deployment,
+            cli=cli,
+            exec_path=cli.path,
+            exec_argv=exec_argv,
+            env=environment,
+            removed_env=removed_env,
+            auth_description="Azure CLI Entra session",
+            forwarded_arg_count=len(native_args),
+            model_id=selection.model.id if selection is not None else None,
+            qualification=selection is not None and selection.route.status == "untested",
+            az=az,
+            private_settings=private_settings,
+        )
+
+    if agent == "opencode":
+        if selection is None:
+            raise UsageError("OpenCode requires explicit launch model selection")
+        if config.opencode is None:
+            raise ConfigError(
+                "OpenCode route configuration is not configured",
+                "add opencode.resources and opencode.minimum_version to config.json",
+            )
+        opencode_resource = config.opencode.resources.get(selection.binding.resource_id)
+        if opencode_resource is None:
+            raise ConfigError(
+                f"OpenCode has no configured endpoint for inventory resource {selection.binding.resource_id}",
+                "add both gpt and claude entries under opencode.resources",
+            )
+        cli = resolve_command(config, "opencode", "opencode", Path.home() / ".local" / "bin" / "opencode")
+        cli = replace(cli, path=cli.path.resolve())
+        validate_opencode_native_args(native_args)
+        deployment = selection.binding.deployment
+        route_config = opencode_recipe_config(
+            selection.model.id,
+            deployment,
+            opencode_resource.base_url,
+            qualification_fixture=selection.route.status == "untested",
+        )
+        environment.update(
+            {
+                "AZURE_CONFIG_DIR": str(
+                    Path(environment.get("AZURE_CONFIG_DIR") or str(Path.home() / ".azure"))
+                    .expanduser()
+                    .resolve()
+                ),
+                "OPENCODE_AUTH_CONTENT": OPENCODE_AUTH_CONTENT,
+            }
+        )
+        prepare_opencode_custody(environment, route_config)
+        exec_argv = (
+            str(cli.path),
+            "--model",
+            f"{OPENCODE_PROVIDER_ID}/{selection.model.id}",
+            *native_args,
+        )
+        return LaunchPlan(
+            agent="opencode",
+            provider="Monash Foundry OpenCode Azure chat",
+            deployment=deployment,
+            cli=cli,
+            exec_path=cli.path,
+            exec_argv=exec_argv,
+            env=environment,
+            removed_env=removed_env,
+            auth_description="native OpenCode Azure OAuth via az",
+            forwarded_arg_count=len(native_args),
+            model_id=selection.model.id,
+            qualification=selection.route.status == "untested",
+            resource=opencode_resource.resource,
+        )
+
+    raise UsageError("choose codex, claude, opencode, or check")
+
+
+def azure_repair(config: FoundryConfig) -> str:
+    login = "az login --tenant " + json.dumps(config.tenant)
+    select = "az account set --subscription " + json.dumps(config.subscription)
+    return login + " && " + select
+
+
+def verify_azure_account(config: FoundryConfig, az: ResolvedCommand, environment: Dict[str, str]) -> str:
+    try:
+        result = subprocess.run(
+            [str(az.path), "account", "show", "--output", "json"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise LauncherError(
+            "Azure CLI could not verify the current account",
+            azure_repair(config),
+        )
+
+    if result.returncode != 0:
+        raise LauncherError(
+            "Azure CLI is not logged in through the configured default account",
+            azure_repair(config),
+        )
+
+    try:
+        account = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        raise LauncherError(
+            "Azure CLI returned no usable account diagnostics",
+            azure_repair(config),
+        )
+    if not isinstance(account, dict):
+        raise LauncherError(
+            "Azure CLI returned no usable account diagnostics",
+            azure_repair(config),
+        )
+
+    account_id = account.get("id")
+    account_name = account.get("name")
+    if not isinstance(account_id, str) or not isinstance(account_name, str):
+        raise LauncherError(
+            "Azure CLI did not report the configured subscription identity",
+            azure_repair(config),
+        )
+    subscription_matches = account_id == config.subscription or account_name.casefold() == config.subscription.casefold()
+    if not subscription_matches:
+        raise LauncherError(
+            "Azure CLI default subscription does not match the Foundry config",
+            azure_repair(config),
+        )
+    if account.get("state") != "Enabled":
+        raise LauncherError(
+            "Azure CLI reported that the configured subscription is not enabled",
+            azure_repair(config),
+        )
+    if account.get("isDefault") is not True:
+        raise LauncherError(
+            "Azure CLI did not report the configured subscription as the default account",
+            azure_repair(config),
+        )
+
+    if account.get("tenantId") != config.tenant:
+        raise LauncherError("Azure CLI tenant does not match the configured tenant ID", azure_repair(config))
+    return "tenant_identity=verified"
+
+
+def host_label() -> str:
+    host = platform.node().split(".", 1)[0].strip()
+    return host or "unknown"
+
+
+def status_line(plan: LaunchPlan) -> str:
+    model = f" model={plan.model_id}" if plan.model_id is not None else ""
+    qualification = " qualification=explicit" if plan.qualification else ""
+    resource = f" resource={plan.resource}" if plan.resource is not None else ""
+    return f"host={host_label()} agent={plan.agent} provider={plan.provider} deployment={plan.deployment}{resource}{model}{qualification}"
+
+
+def print_dry_run(plan: LaunchPlan) -> None:
+    print("dry-run: no credentials, Azure CLI, or provider request performed")
+    print(status_line(plan))
+    print(f"native_cli={plan.cli.path} source={plan.cli.source}")
+    if plan.wrapper is not None:
+        print("auth=1Password wrapper, credential reference hidden")
+    elif plan.agent == "opencode":
+        print("auth=native OpenCode Azure OAuth via az, not checked in dry-run")
+    else:
+        print("auth=Azure CLI Entra, not checked in dry-run")
+    print("homes=canonical defaults; CODEX_HOME and CLAUDE_CONFIG_DIR removed")
+    print(f"forwarded_native_args={plan.forwarded_arg_count} preserved; values hidden")
+    print("auth_health=unknown model_health=unknown")
+
+
+def print_check_failure(label: str, error: LauncherError) -> None:
+    print(f"FAIL {label}: {error.message}", file=sys.stderr)
+    if error.repair:
+        print(f"repair: {error.repair}", file=sys.stderr)
+
+
+def run_check(config: FoundryConfig) -> int:
+    environment, removed_env = sanitized_environment()
+    print(f"config=valid path={config.path}")
+    print(f"environment=provider/auth conflicts removed count={len(removed_env)}")
+    print("homes=canonical defaults; CODEX_HOME and CLAUDE_CONFIG_DIR removed")
+
+    failures = 0
+    try:
+        codex_plan = build_plan(config, "codex", ())
+        print(f"codex=ready cli={codex_plan.cli.path} source={codex_plan.cli.source} auth=wrapper-deferred")
+    except LauncherError as error:
+        failures += 1
+        print_check_failure("codex", error)
+
+    try:
+        claude_plan = build_plan(config, "claude", ())
+        assert claude_plan.az is not None
+        tenant_status = verify_azure_account(config, claude_plan.az, claude_plan.env)
+        print(
+            f"claude=ready cli={claude_plan.cli.path} source={claude_plan.cli.source} "
+            f"auth=verified-via-az {tenant_status}"
+        )
+    except LauncherError as error:
+        failures += 1
+        print_check_failure("claude", error)
+
+    if config.opencode is not None:
+        try:
+            opencode_cli = resolve_command(
+                config,
+                "opencode",
+                "opencode",
+                Path.home() / ".local" / "bin" / "opencode",
+            )
+            version = verify_opencode_version(opencode_cli, config.opencode.minimum_version, environment)
+            print(f"opencode=ready cli={opencode_cli.path} source={opencode_cli.source} version={version}")
+        except LauncherError as error:
+            failures += 1
+            print_check_failure("opencode", error)
+
+    print("model_health=unknown; check performs no provider request")
+    return 3 if failures else 0
+
+
+def open_private_settings_descriptor(payload: str) -> int:
+    """Return an inheritable read-only descriptor on an already-unlinked private file.
+
+    The only named moment is the empty 0600 file mkstemp creates. The name is
+    never trusted: the read-only descriptor must be the same inode as the one
+    mkstemp returned (a swap by rename, unlink-and-recreate, or symlink is
+    refused), and the payload is written only after the file has no name left
+    (a hard link made in the gap is refused). No named file ever holds the
+    settings and nothing outlives the process that inherits the descriptor. The
+    result is at least 3, so it cannot shadow stdio.
+    """
+    raw_directory = os.environ.get("TMPDIR") or "/tmp"
+    directory = Path(raw_directory)
+    if not directory.is_absolute() or not directory.is_dir():
+        raise LauncherError(
+            "the temporary directory for private Claude settings is unavailable",
+            "set TMPDIR to an existing absolute directory and retry",
+        )
+    substituted = LauncherError(
+        "the private Claude settings file was replaced while it was being prepared",
+        "use a private TMPDIR that other users cannot write to and retry",
+    )
+    write_fd = -1
+    read_fd = -1
+    name: Optional[str] = None
+    try:
+        write_fd, name = tempfile.mkstemp(prefix="monash-foundry-claude-settings-", dir=str(directory))
+        read_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW)
+        created, reopened = os.fstat(write_fd), os.fstat(read_fd)
+        if (created.st_dev, created.st_ino) != (reopened.st_dev, reopened.st_ino):
+            raise substituted
+        os.unlink(name)
+        name = None
+        if os.fstat(write_fd).st_nlink != 0:
+            raise substituted
+        pending = memoryview(payload.encode("utf-8"))
+        while pending:
+            pending = pending[os.write(write_fd, pending):]
+        return fcntl.fcntl(read_fd, fcntl.F_DUPFD, 3)
+    except OSError as error:
+        raise LauncherError(
+            "private Claude settings could not be prepared",
+            "repair temporary-directory permissions and retry",
+        ) from error
+    finally:
+        for descriptor in (write_fd, read_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+        if name is not None:
+            # Refused before the unlink: remove what is at the name. It never
+            # held the payload, which is written only after the check above.
+            try:
+                os.unlink(name)
+            except OSError:
+                pass
+
+
+def exec_plan(plan: LaunchPlan) -> None:
+    argv = list(plan.exec_argv)
+    settings_fd = -1
+    if plan.private_settings is not None:
+        # build_plan always places the --settings value at argv[2].
+        if len(argv) < 3 or argv[1] != "--settings" or argv[2] != PRIVATE_SETTINGS_ARGV:
+            raise LauncherError("private Claude settings have no argument slot", "report this launcher defect")
+        settings_fd = open_private_settings_descriptor(plan.private_settings)
+        argv[2] = f"/dev/fd/{settings_fd}"
+    try:
+        os.execve(str(plan.exec_path), argv, plan.env)
+    except OSError:
+        raise LauncherError(
+            f"could not start the native {plan.agent} process",
+            f"verify {plan.cli.path} and rerun monash-foundry check",
+        )
+    finally:
+        if settings_fd >= 0:
+            os.close(settings_fd)
+
+
+def choose_agent() -> Optional[str]:
+    print("Choose a Monash Foundry agent:")
+    print("  1) Codex")
+    print("  2) Claude Code")
+    print("  q) Cancel")
+    while True:
+        try:
+            sys.stdout.write("Selection: ")
+            sys.stdout.flush()
+            answer = sys.stdin.readline()
+        except KeyboardInterrupt:
+            raise
+        if not answer:
+            return None
+        choice = answer.strip().casefold()
+        if choice in {"1", "codex"}:
+            return "codex"
+        if choice in {"2", "claude", "claude code"}:
+            return "claude"
+        if choice in {"q", "quit", "cancel"}:
+            return None
+        print("Choose 1 for Codex, 2 for Claude Code, or q to cancel.")
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    try:
+        invocation = parse_invocation(sys.argv[1:] if argv is None else argv)
+        if invocation.help_requested:
+            print_help()
+            return 0
+
+        command = invocation.command
+        if command is None:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                print_help()
+                return 0
+            command = choose_agent()
+            if command is None:
+                return 0
+
+        config_path = (
+            Path(invocation.config_path).expanduser()
+            if invocation.config_path is not None
+            else DEFAULT_CONFIG
+        )
+        config = load_config(config_path)
+
+        if command == "check":
+            return run_check(config)
+
+        if command == "models":
+            if config.inventory is None:
+                raise ConfigError(
+                    "model inventory is not configured",
+                    "add the inventory extension to config.json before using models",
+                )
+            if invocation.refresh:
+                inventory, state, observed_at = _refresh_inventory(config)
+                mode = "refresh"
+            else:
+                inventory = config.inventory
+                state = "snapshot"
+                observed_at = inventory.snapshot_observed_at
+                mode = "snapshot"
+            if invocation.json_output:
+                print(json.dumps(_inventory_payload(inventory, mode, state, observed_at), sort_keys=True))
+            else:
+                print_model_inventory(inventory, mode, state, observed_at)
+            return 3 if state in {"stale", "unavailable"} else 0
+
+        selection: Optional[ModelSelection] = None
+        if command == "launch":
+            assert invocation.model_id is not None
+            assert invocation.agent is not None
+            selection = select_model_route(
+                config,
+                invocation.model_id,
+                invocation.agent,
+                invocation.qualification,
+            )
+            command = invocation.agent
+
+        plan = build_plan(config, command, invocation.native_args, selection=selection)
+        if invocation.dry_run:
+            print_dry_run(plan)
+            return 0
+
+        if plan.agent == "claude":
+            assert plan.az is not None
+            verify_azure_account(config, plan.az, plan.env)
+        elif plan.agent == "opencode":
+            assert config.opencode is not None
+            verify_opencode_version(plan.cli, config.opencode.minimum_version, plan.env)
+
+        print(status_line(plan), file=sys.stderr, flush=True)
+        exec_plan(plan)
+        return 0
+    except LauncherError as error:
+        print(f"error: {error.message}", file=sys.stderr)
+        if error.repair:
+            print(f"repair: {error.repair}", file=sys.stderr)
+        return error.code
+    except KeyboardInterrupt:
+        print("error: cancelled", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

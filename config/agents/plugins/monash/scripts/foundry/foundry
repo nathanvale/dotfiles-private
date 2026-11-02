@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Enter the private Monash Foundry Herdr session, or the Monash launch picker."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+
+from monash_hosts import HostProfile, HostProfileError, HostProfileRegistry
+
+
+SESSION_NAME = "monash-foundry"
+DEFAULT_CONFIG = Path(__file__).resolve().with_name("config.json")
+
+
+def pause_for_tty() -> None:
+    """Keep a transient Herdr pane visible after a launcher preflight error."""
+    if sys.stdin.isatty():
+        try:
+            input("Press Enter to close this pane. ")
+        except EOFError:
+            pass
+
+
+def menu(config: Path) -> int:
+    coordinator = Path(__file__).resolve().with_name("monash")
+    if not coordinator.is_file() or not os.access(coordinator, os.X_OK):
+        print(
+            f"Foundry menu unavailable: expected executable {coordinator}",
+            file=sys.stderr,
+        )
+        pause_for_tty()
+        return 2
+
+    result = subprocess.run([str(coordinator), "--config", str(config), "launch"], check=False)
+    if result.returncode:
+        print(
+            f"Foundry menu stopped with exit status {result.returncode}. "
+            "Review the repair action above.",
+            file=sys.stderr,
+        )
+        pause_for_tty()
+    return result.returncode
+
+
+def private_config() -> Path:
+    return Path(__file__).resolve().with_name("herdr.toml")
+
+
+def require_private_config() -> Path | None:
+    config = private_config()
+    if not config.is_file() or config.is_symlink():
+        print(f"Private Herdr config is unavailable: {config}", file=sys.stderr)
+        return None
+    return config
+
+
+def config_path(args: argparse.Namespace) -> Path:
+    return Path(args.config).expanduser().resolve() if args.config else DEFAULT_CONFIG
+
+
+def resolve_host_profile(host: str, args: argparse.Namespace) -> HostProfile | None:
+    try:
+        registry = HostProfileRegistry.load(config_path(args))
+        return registry.get(host)
+    except HostProfileError as error:
+        print(f"Foundry host profile is invalid: {error}", file=sys.stderr)
+        return None
+
+
+def attach_local(config: Path) -> int:
+    herdr = shutil.which("herdr") or "/opt/homebrew/bin/herdr"
+    if not Path(herdr).is_file():
+        print(f"Herdr is unavailable at {herdr}.", file=sys.stderr)
+        pause_for_tty()
+        return 2
+    environment = os.environ.copy()
+    environment["HERDR_CONFIG_PATH"] = str(config)
+    os.execve(herdr, [herdr, "--session", SESSION_NAME], environment)
+    return 127  # Unreachable, retained for type checkers.
+
+
+def attach_ssh(profile: HostProfile) -> int:
+    """Attach an SSH host profile's dedicated Herdr session.
+
+    The remote command is assembled as a literal argv tuple and quoted only
+    once, at the point it crosses into ssh's single trailing shell string
+    (mirroring ``monash_remote.py``'s ``_ssh_argv``). No caller-supplied SSH
+    option or remote command ever reaches this function.
+    """
+    ssh = shutil.which("ssh") or "/usr/bin/ssh"
+    if not Path(ssh).is_file():
+        print(f"SSH is unavailable at {ssh}.", file=sys.stderr)
+        pause_for_tty()
+        return 2
+    remote_config = profile.remote_install_root / "herdr.toml"
+    remote_command = (
+        "env",
+        f"HERDR_CONFIG_PATH={remote_config}",
+        str(profile.herdr_executable),
+        "--session",
+        profile.herdr_session,
+    )
+    os.execv(ssh, [ssh, "-tt", profile.ssh_alias, shlex.join(remote_command)])
+    return 127  # Unreachable, retained for type checkers.
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Open the private Monash Foundry Herdr session, or the Monash launch picker."
+    )
+    parser.add_argument("--config", help="Monash Foundry config path")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--host", metavar="PROFILE_ID", help="attach the named host profile from config.json")
+    group.add_argument(
+        "--local", action="store_true",
+        help="migration alias for --host laptop; refuses if profile laptop is not configured",
+    )
+    group.add_argument(
+        "--mini", action="store_true",
+        help="migration alias for --host mini; refuses if profile mini is not configured",
+    )
+    group.add_argument("--menu", action="store_true", help="open the Monash host, model, and agent picker")
+    return parser.parse_args(argv)
+
+
+def selected_host(args: argparse.Namespace) -> str | None:
+    """Resolve --host, or its fixed --local/--mini migration aliases.
+
+    Aliases only fix the profile ID; they never assume a transport. The
+    normal registry lookup and profile.transport dispatch still decide local
+    versus SSH, so an alias refuses cleanly if its named profile is absent.
+    """
+    if args.local:
+        return "laptop"
+    if args.mini:
+        return "mini"
+    return args.host
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    inside_herdr = os.environ.get("HERDR_ENV") == "1"
+    host = selected_host(args)
+
+    if args.menu or (inside_herdr and host is None):
+        return menu(config_path(args))
+
+    if host is None:
+        print(
+            "foundry requires --host PROFILE_ID (or --local/--mini) or --menu; no host profile is assumed.",
+            file=sys.stderr,
+        )
+        pause_for_tty()
+        return 2
+
+    profile = resolve_host_profile(host, args)
+    if profile is None:
+        pause_for_tty()
+        return 2
+
+    if profile.transport == "local":
+        if inside_herdr:
+            print(
+                "Already inside Herdr. Use foundry --menu to select a model here.",
+                file=sys.stderr,
+            )
+            return 2
+        config = require_private_config()
+        if config is None:
+            pause_for_tty()
+            return 2
+        return attach_local(config)
+
+    return attach_ssh(profile)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

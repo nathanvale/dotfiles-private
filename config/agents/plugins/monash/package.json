@@ -1,0 +1,10 @@
+{
+	"name": "monash-plugin",
+	"private": true,
+	"version": "0.1.0",
+	"description": "Monash plugin. Its Python unittest suite and syntax and compile check are qualified on Python 3.11 and run through python3.11, not whichever python3 is first on PATH.",
+	"scripts": {
+		"test": "python3.11 -B -m unittest discover -s scripts/foundry -p 'test_*.py'",
+		"typecheck": "python3.11 -B -c \"import pathlib; root = pathlib.Path('scripts/foundry'); files = sorted(p for p in root.iterdir() if p.is_file() and (p.suffix == '.py' or (p.suffix == '' and b'python' in b''.join(p.read_bytes().splitlines()[:1])))); [compile(p.read_bytes(), str(p), 'exec') for p in files]; print('compiled', len(files), 'Python files with Python 3.11: a syntax and compile check only, not static typing')\""
+	}
+}

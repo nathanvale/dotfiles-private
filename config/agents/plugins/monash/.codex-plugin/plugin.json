@@ -1,0 +1,22 @@
+{
+  "name": "monash",
+  "version": "0.1.0",
+  "description": "A private home for Monash skills and tools, starting with explicit Azure Foundry routes for Codex and Claude Code.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Monash",
+    "shortDescription": "Use private Monash skills and tools",
+    "longDescription": "A private home for Monash skills and tools, with explicit Azure Foundry routes for Codex and Claude Code as its first skill.",
+    "developerName": "Nathan Vale",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Use the Monash plugin's skills and tools."
+  }
+}
