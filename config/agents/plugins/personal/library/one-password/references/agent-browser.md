@@ -41,6 +41,12 @@ agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session
 6. Close the owned browser with `close` when the task ends. Use the same config
    and session. Keep cookies and state exports out of logs, chat and source.
 
+Native `auth login` in 0.41.0 requires both credential controls together. It has
+no username-first or intermediate `Next` stage. A generic MCP stdin fill is not
+an approved credential-provider consumer. Treat a staged login as unsupported;
+use a verified existing session or the explicitly selected user-present fallback.
+Do not expose credentials to work around this limit.
+
 The config allows only the approved website domains and disables state-save
 intent. Use the fresh browser it launches; profile attachment and saved-state
 imports cannot provide the domain controls. Browser sessions carry account

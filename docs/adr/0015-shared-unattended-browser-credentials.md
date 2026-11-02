@@ -44,6 +44,13 @@ Code shell mode. This is an unattended-login exception to ADR-0011, not a return
 to the retired browser relay infrastructure. ADR-0014's native Codex route
 remains available for its supported runtime.
 
+Nathan's 2 November 2026 timesheets uplift extends this exception to the
+timesheets consumer's draft preparation, screenshot review and separately
+approved submission in the same dedicated session. The consumer retains its
+identity, period, draft and screenshot-bound approval checks. This avoids a
+session transfer to personal Chrome. Other user-browser work retains its native
+harness route.
+
 ## Consequences
 
 - Positive: supported native auth-login code owns form entry and submission;
@@ -64,6 +71,11 @@ controlled logout recovery through installed payloads on both Macs and each
 harness. Verify configured Connectors consumers and live Jira reads before and
 after old-token revocation. Keep natural expiry and reboot recovery distinct
 from controlled logout proof.
+
+For timesheets, qualify each portal with a saved draft reopened from its
+canonical list and a complete private screenshot evidence set. Stop before
+submission until Nathan approves that exact set. A new login or resumed task
+must recheck the saved draft before using an approval.
 
 ## References
 

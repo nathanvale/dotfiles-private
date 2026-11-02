@@ -1,6 +1,6 @@
 interface:
   display_name: "Timesheets"
   short_description: "Prepare weekly drafts and show approval screenshots"
-  default_prompt: "Use $timesheets to prepare both Friday drafts in personal Chrome and show screenshots before submission."
+  default_prompt: "Use $timesheets to prepare both weekly drafts with approved automatic login where supported, and show screenshots for my approval before submission."
 policy:
   allow_implicit_invocation: false

@@ -6,6 +6,16 @@ Canonical target: the authenticated Candidate Portal timesheet list with a
 visible period row and status, or its explicit empty state. A login page,
 historical detail, or opened period detail is not the canonical target.
 
+## Login capability
+
+The 2 November 2026 check found a username-first `Next` screen. Agent Browser
+0.41.0's native `auth login` requires username and password controls together;
+the existing FastTrack binding is not enabled for that dedicated route. Do not
+claim unattended FastTrack login from OnCore's success or pass credentials to
+generic fill commands. Reuse a verified FastTrack session when available, or
+ask Nathan to select the user-present fallback. A new private staged credential
+consumer needs its own implementation and qualification before this gap closes.
+
 ## Navigation and state
 
 - Click Quick Access once. Inspect the tab list and switch to its new child tab.
