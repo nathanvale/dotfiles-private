@@ -13,14 +13,16 @@ shipped with this personal skill. Use native `auth login` for a complete form,
 or the plugin's `credential.fill` request for one staged field. Agents do not
 invoke the private `credential.resolve` protocol directly.
 
-Generate a fresh UUID-based session name for each task; retain it only for
-that task's owned lifecycle. Verify that the dedicated config has its approved
+Generate a fresh UUID in its 32-character hex form for each task; retain it
+only for that task's owned lifecycle. Omit prefixes and separators because
+macOS limits the complete socket path, including the home and namespace.
+Verify that the dedicated config has its approved
 domains and `ignoreHttpsErrors` absent or false, with no extra launch arguments
 or browser attachment. Use the environment allowlist on every invocation so
 ambient `OP_*` and `AGENT_BROWSER_*` variables cannot override the launch:
 
 ```sh
-task_session="login-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+task_session="$(uuidgen | tr '[:upper:]' '[:lower:]' | tr -d '-')"
 env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
   PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
   agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" session info --json
