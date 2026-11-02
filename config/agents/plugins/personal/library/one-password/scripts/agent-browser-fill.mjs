@@ -20,7 +20,8 @@ function parseRequest(input) {
 		field: /** @type {'username' | 'password'} */ (request.field) };
 }
 
-async function checkConfig() {
+/** @param {string} origin */
+async function checkConfig(origin) {
 	const path = join(homedir(), ".config/agent-browser/one-password.json");
 	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
@@ -28,7 +29,10 @@ async function checkConfig() {
 		if (!stat.isFile() || stat.uid !== userInfo().uid || (stat.mode & 0o077) !== 0) refuse();
 		const config = JSON.parse(await file.readFile("utf8"));
 		if (config.namespace !== "agent-credentials" || config.restoreSave !== "never" ||
-			config.debug === true || config.trace || config.record || config.state || config.cdp || config.profile) refuse();
+			config.debug === true || config.trace || config.record || config.state || config.cdp || config.profile ||
+			(config.ignoreHttpsErrors !== undefined && config.ignoreHttpsErrors !== false) || !Array.isArray(config.allowedDomains) ||
+			config.allowedDomains.some((/** @type {unknown} */ domain) => typeof domain !== "string" || !domain.trim()) ||
+			!config.allowedDomains.includes(new URL(origin).hostname)) refuse();
 	} finally { await file.close(); }
 	return path;
 }
@@ -69,7 +73,7 @@ function guard(origin, selector, field, after = false) {
 		if (input.tagName !== "INPUT" || input.disabled || input.readOnly || box.width <= 0 || box.height <= 0 ||
 			style.visibility !== "visible" || style.display === "none" || Number(style.opacity) === 0 ||
 			!${JSON.stringify(field === "password" ? ["password"] : ["text", "email", "tel"])}.includes(input.type)) throw Error("input-refused");
-		if (${after} ? document.activeElement !== input : input.value.length !== 0) throw Error("input-state-refused");
+		if (${after} ? document.activeElement !== input || input.value.length === 0 : input.value.length !== 0) throw Error("input-state-refused");
 		return true;
 	})()`;
 }
@@ -81,7 +85,7 @@ export async function fillAgentBrowserCredential(input) {
 	try {
 		const { login, session, field } = parseRequest(input);
 		const { entry, settings } = await loadAgentBrowserBinding(login, [`${field}Selector`]);
-		const config = await checkConfig();
+		const config = await checkConfig(entry.origin);
 		const args = ["--config", config, "--session", session, "--json"];
 		const selector = String(settings[`${field}Selector`]);
 		const url = browserData(await browser([...args, "get", "url"])).url;

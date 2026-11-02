@@ -23,7 +23,7 @@ async function scenario(changes = {}) {
 	await mkdir(join(home, ".local/bin"), { recursive: true });
 	await mkdir(join(home, ".config/agent-browser"), { recursive: true });
 	await writeFile(join(home, ".config/agent-browser/one-password.json"), JSON.stringify({
-		namespace: "agent-credentials", restoreSave: "never", ...changes.browserConfig,
+		namespace: "agent-credentials", restoreSave: "never", allowedDomains: ["login.example.test"], ...changes.browserConfig,
 	}), { mode: changes.browserConfigMode ?? 0o600 });
 	await writeFile(join(home, ".local/state/browser-automation/logins.json"), JSON.stringify(changes.config ?? { version: 1, logins: [entry] }), { mode: changes.mode ?? 0o600 });
 	for (const name of ["browser-login.mjs", "agent-browser-provider.mjs", "agent-browser-fill.mjs"]) await cp(new URL(`../scripts/${name}`, import.meta.url), join(home, name));
@@ -46,7 +46,10 @@ async function scenario(changes = {}) {
 	let browserCalls = [];
 	try { browserCalls = (await readFile(join(home, "browser-calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse); }
 	catch (error) { if (error.code !== "ENOENT") throw error; }
-	return { response: JSON.parse(result.stdout), args, output: result.stdout, browserCalls };
+	let filledSelectors = [];
+	try { filledSelectors = (await readFile(join(home, "browser-fills.jsonl"), "utf8")).trim().split("\n").map(JSON.parse); }
+	catch (error) { if (error.code !== "ENOENT") throw error; }
+	return { response: JSON.parse(result.stdout), args, output: result.stdout, browserCalls, filledSelectors };
 }
 
 test("private provider delivers the exact credential only through the vendor protocol", async () => {
@@ -127,8 +130,21 @@ for (const change of [
 	{ browser: { url: "https://wrong.example.test" } },
 	{ browser: { url: "https://user:credential@login.example.test" } },
 	{ browser: { streaming: true } },
-	{ browser: { invalidInput: true } },
+	{ browser: { inputCount: 0 } },
+	{ browser: { inputCount: 2 } },
+	...[
+		{ tagName: "TEXTAREA" }, { type: "text" }, { disabled: true }, { readOnly: true },
+		{ width: 0 }, { height: 0 }, { visibility: "hidden" }, { display: "none" },
+		{ opacity: "0" }, { value: "already-filled" },
+	].map(input => ({ browser: { input } })),
 	{ browserConfig: { restoreSave: "always" } },
+	{ browserConfig: { allowedDomains: undefined } },
+	{ browserConfig: { allowedDomains: [] } },
+	{ browserConfig: { allowedDomains: [""] } },
+	{ browserConfig: { allowedDomains: ["login.example.test", 1] } },
+	{ browserConfig: { allowedDomains: ["wrong.example.test"] } },
+	{ browserConfig: { ignoreHttpsErrors: true } },
+	{ browserConfig: { ignoreHttpsErrors: "true" } },
 	{ browserConfigMode: 0o644 },
 	{ message: { ...fillMessage, request: { ...fillMessage.request, session: "--headed" } } },
 	{ message: { ...fillMessage, request: { ...fillMessage.request, selector: "#other" } } },
@@ -160,3 +176,27 @@ test("staged username needs only its observed selector; complete-form auth still
 	expect(complete.response).toEqual({ protocol: "agent-browser.plugin.v1", success: false, error: "approved-credential-unavailable" });
 	expect(complete.args).toBeUndefined();
 });
+
+for (const browser of [
+	{ batchInput: { value: "changed-after-preflight" } },
+	{ batchInput: { type: "text" } },
+	{ batchOrigin: "https://wrong.example.test" },
+]) {
+	test(`staged batch guard refuses before native fill: ${JSON.stringify(browser)}`, async () => {
+		const run = await scenario({ message: fillMessage, browser });
+		expect(run.response.data).toEqual({ status: "blocked", effect: "partial-or-unknown", cause: "staged-fill-effect-unconfirmed" });
+		expect(run.args).toBeDefined();
+		expect(run.filledSelectors).toEqual([]);
+		expect(run.browserCalls.filter(call => call.args.includes("batch"))).toHaveLength(1);
+	});
+}
+
+for (const browser of [{ clearAfterFill: true }, { blurAfterFill: true }]) {
+	test(`staged post-fill guard refuses an unconfirmed input: ${JSON.stringify(browser)}`, async () => {
+		const run = await scenario({ message: fillMessage, browser });
+		expect(run.response.data).toEqual({ status: "blocked", effect: "partial-or-unknown", cause: "staged-fill-effect-unconfirmed" });
+		expect(run.filledSelectors).toEqual(["#password"]);
+		expect(run.browserCalls.filter(call => call.args.includes("batch"))).toHaveLength(1);
+		expect(run.output).not.toContain("fixture-password-not-a-real-secret");
+	});
+}
