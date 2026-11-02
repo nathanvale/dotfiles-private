@@ -13,28 +13,31 @@ shipped with this personal skill. Use native `auth login` for a complete form,
 or the plugin's `credential.fill` request for one staged field. Agents do not
 invoke the private `credential.resolve` protocol directly.
 
-Start each task with a new unique safe session name. Verify that the dedicated
-config has its approved domains and `ignoreHttpsErrors` absent or false, with
-no extra launch arguments or browser attachment. Use an explicit environment
-allowlist on every invocation, including startup,
-so ambient `OP_*` and `AGENT_BROWSER_*` variables cannot override the launch:
+Generate a fresh UUID-based session name for each task; retain it only for
+that task's owned lifecycle. Verify that the dedicated config has its approved
+domains and `ignoreHttpsErrors` absent or false, with no extra launch arguments
+or browser attachment. Use the environment allowlist on every invocation so
+ambient `OP_*` and `AGENT_BROWSER_*` variables cannot override the launch:
 
 ```sh
+task_session="login-$(uuidgen | tr '[:upper:]' '[:lower:]')"
 env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
   PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
-  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> session info --json
+  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" session info --json
 ```
 
-Before the first `open`, require `success: true`, the chosen `data.session`,
-`data.namespace: agent-credentials`, `data.active: false`, and null values for
-`data.pid`, `data.runtime` and `data.runtimeError`. For any active or unknown
-session, choose another new name; leave that browser and any unsaved work
-intact. Then open the approved origin with the same allowlisted environment:
+Before the first `open`, require `success: true`, `data.session` equal to
+`task_session`, `data.namespace: agent-credentials`, `data.active: false`, and
+null values for `data.pid`, `data.runtime` and `data.runtimeError`. This checks
+for a live daemon collision; it does not prove ownership, past use or TLS
+state. For any active or unconfirmed result, generate another fresh name and
+preserve existing browsers and unsaved work. Then open the approved origin
+with the same allowlisted environment:
 
 ```sh
 env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
   PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
-  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> open <approved-origin>
+  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" open <approved-origin>
 ```
 
 Retain this owned session across login stages, account verification, work and
@@ -61,7 +64,7 @@ trusted same-user model.
    ```sh
    env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
      PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
-     agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> auth login <login> --credential-provider one-password --item <login> --url <approved-origin> --no-navigate --json
+     agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" auth login <login> --credential-provider one-password --item <login> --url <approved-origin> --no-navigate --json
    ```
 
 4. Wait for the protected page's expected account marker, then verify its URL
@@ -80,7 +83,8 @@ approved binding through the same dedicated session:
 ```sh
 env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" \
   PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
-  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> plugin run one-password credential.fill --payload '{"login":"<approved binding>","field":"username","session":"<task-session>"}' --json
+  agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session "$task_session" plugin run one-password credential.fill \
+  --payload "{\"login\":\"<approved binding>\",\"field\":\"username\",\"session\":\"$task_session\"}" --json
 ```
 
 Require `data.status: filled`. Observe and click the site's Next control once.

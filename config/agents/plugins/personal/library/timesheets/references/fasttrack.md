@@ -8,10 +8,11 @@ historical detail, or opened period detail is not the canonical target.
 
 ## Automatic login
 
-Use the existing token-backed `timesheets.fasttrack` binding and the staged
-`credential.fill` route in
-[1Password's Agent Browser reference](../../one-password/references/agent-browser.md#staged-login).
-Reuse a protected session only after verifying its account.
+Start through [1Password's owned-session startup](../../one-password/references/agent-browser.md#installed-route),
+then use the existing token-backed `timesheets.fasttrack` binding with its
+[staged credential-fill route](../../one-password/references/agent-browser.md#staged-login).
+Reuse only that task's known safely created owned session, after verifying its
+protected account.
 
 1. At the username-first screen, observe its unique username input and Next
    button. The observed input on 2 November 2026 was `#lgUserName`.
