@@ -51,10 +51,16 @@ identity, period, draft and screenshot-bound approval checks. This avoids a
 session transfer to personal Chrome. Other user-browser work retains its native
 harness route.
 
+FastTrack's username-first flow uses the same provider's `credential.fill`
+capability, one observed field at a time. The adapter keeps native batch input
+private and returns only status; the consuming workflow owns Next, Login and
+protected-account proof. Native complete-form auth remains the OnCore route.
+
 ## Consequences
 
-- Positive: supported native auth-login code owns form entry and submission;
-  the small provider reuses existing item validation and scoped custody.
+- Positive: supported native browser commands own credential input transport;
+  the provider reuses existing item validation and scoped custody. Staged
+  filling adds input checks and leaves login buttons with the consumer.
 - Negative: dedicated browser sessions require their own login and may expire.
   Keychain lock or desktop logout may block Mini SSH access.
 - Negative: same-user code, a voluntary whitelist and existing Mini admin rights
@@ -76,6 +82,12 @@ For timesheets, qualify each portal with a saved draft reopened from its
 canonical list and a complete private screenshot evidence set. Stop before
 submission until Nathan approves that exact set. A new login or resumed task
 must recheck the saved draft before using an approval.
+
+Qualify FastTrack's staged route independently on each Mac and harness with
+protected-account proof, session reuse, controlled logout recovery and native
+refusal of a wrong stage or nonempty field. Serialize these runs because
+FastTrack invalidates another browser or device's session. Keep approved runtime
+hosts separate from the exact origin eligible for credential delivery.
 
 ## References
 

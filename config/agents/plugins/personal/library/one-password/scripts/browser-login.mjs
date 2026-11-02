@@ -82,32 +82,53 @@ async function readItem(entry, timeout = 20_000) {
 	return JSON.parse(stdout);
 }
 
-/** @param {unknown} input */
-export async function resolveAgentBrowserCredential(input) {
-	const request = record(input);
+/** @param {unknown} login @param {string[]} [selectors] */
+export async function loadAgentBrowserBinding(login, selectors = ["usernameSelector", "passwordSelector", "submitSelector"]) {
 	const config = record(await loadWhitelist(join(homedir(), ".local/state/browser-automation/logins.json")));
 	requireValue(config.version === 1 && Array.isArray(config.logins), "invalid-whitelist");
-	const rows = config.logins.map(record).filter((row) => row.name === request.profileName);
-	requireValue(rows.length === 1 && request.itemRef === request.profileName, "login-not-allowlisted");
+	const rows = config.logins.map(record).filter((row) => row.name === login);
+	requireValue(rows.length === 1, "login-not-allowlisted");
 	const row = rows[0];
 	requireValue(typeof row.profile === "string", "invalid-whitelist");
-	const entry = selectLogin(config, String(request.profileName), row.profile);
-	requireValue(entry.vault === "Agent Browsing" && request.url === entry.origin, "origin-not-approved");
+	const entry = selectLogin(config, String(login), row.profile);
+	requireValue(entry.vault === "Agent Browsing", "origin-not-approved");
 	const settings = record(row.agentBrowser);
 	requireValue(settings.enabled === true, "agent-browser-disabled");
-	for (const key of ["username", "usernameSelector", "passwordSelector", "submitSelector"]) {
+	for (const key of ["username", ...selectors]) {
 		requireValue(typeof settings[key] === "string" && settings[key].trim().length > 0, "invalid-agent-binding");
 	}
 	requireValue(typeof row.vaultId === "string" && /^[a-z0-9]{26}$/.test(row.vaultId), "invalid-vault");
+	return { entry, settings, vaultId: row.vaultId };
+}
+
+/** @param {Awaited<ReturnType<typeof loadAgentBrowserBinding>>} binding */
+async function readBindingCredential({ entry, settings, vaultId }) {
 	const item = record(await readItem(entry, 12_000));
 	validateItem(item, entry);
-	requireValue(record(item.vault).id === row.vaultId, "item-mismatch");
+	requireValue(record(item.vault).id === vaultId, "item-mismatch");
 	const username = credential(item, "username", "STRING");
 	const password = credential(item, "password", "CONCEALED");
 	requireValue(username === settings.username, "account-mismatch");
+	return { username, password };
+}
+
+/** @param {unknown} input */
+export async function resolveAgentBrowserCredential(input) {
+	const request = record(input);
+	requireValue(request.itemRef === request.profileName, "login-not-allowlisted");
+	const { entry, settings, vaultId } = await loadAgentBrowserBinding(request.profileName);
+	requireValue(request.url === entry.origin, "origin-not-approved");
+	const { username, password } = await readBindingCredential({ entry, settings, vaultId });
 	return { username, password, url: entry.origin,
 		usernameSelector: settings.usernameSelector, passwordSelector: settings.passwordSelector,
 		submitSelector: settings.submitSelector };
+}
+
+/** Private staged consumer; returns only the requested field. @param {string} login @param {'username' | 'password'} field */
+export async function resolveAgentBrowserField(login, field) {
+	const binding = await loadAgentBrowserBinding(login, [`${field}Selector`]);
+	const values = await readBindingCredential(binding);
+	return { value: values[field], url: binding.entry.origin, selector: binding.settings[`${field}Selector`] };
 }
 
 /** @param {Record<string, unknown>} item @param {LoginEntry} entry */

@@ -1,4 +1,5 @@
 import { resolveAgentBrowserCredential } from "./browser-login.mjs";
+import { fillAgentBrowserCredential } from "./agent-browser-fill.mjs";
 
 const protocol = "agent-browser.plugin.v1";
 
@@ -15,15 +16,18 @@ async function input() {
 /** Keep credential responses on private stdout and collapse failures to a secret-free result. */
 async function response() {
 	if (process.argv[2] === "--help") {
-		return { protocol, success: true, manifest: { name: "one-password", capabilities: ["credential.read"],
-			description: "Agent Browser private credential provider. Send vendor protocol JSON on stdin; use auth login with an approved binding." } };
+		return { protocol, success: true, manifest: { name: "one-password", capabilities: ["credential.read", "credential.fill"],
+			description: "Agent Browser private credential provider. Use auth login for a complete form or credential.fill for one approved stage." } };
 	}
 	try {
 		if (process.argv.length > 2 || process.stdin.isTTY) throw new Error("invalid-invocation");
 		const message = await input();
 		if (message?.protocol !== protocol) throw new Error("invalid-protocol");
 		if (message.type === "plugin.manifest") {
-			return { protocol, success: true, manifest: { name: "one-password", capabilities: ["credential.read"] } };
+			return { protocol, success: true, manifest: { name: "one-password", capabilities: ["credential.read", "credential.fill"] } };
+		}
+		if (message.type === "credential.fill" && message.capability === "credential.fill") {
+			return { protocol, success: true, data: await fillAgentBrowserCredential(message.request) };
 		}
 		if (message.type !== "credential.resolve" || message.capability !== "credential.read") throw new Error("invalid-capability");
 		return { protocol, success: true, credential: await resolveAgentBrowserCredential(message.request) };

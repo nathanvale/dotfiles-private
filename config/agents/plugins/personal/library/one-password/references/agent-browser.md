@@ -9,8 +9,9 @@ Chrome. Native harness browsers still own ordinary user-browser work.
 The pinned Agent Browser CLI is on PATH. Its dedicated configuration is
 `~/.config/agent-browser/one-password.json`; its `one-password` plugin points
 to `~/.local/libexec/agent-browser-one-password`. The plugin is built and
-shipped with this personal skill. Its private stdout carries credentials to
-Agent Browser, so agents invoke it through `auth login` only.
+shipped with this personal skill. Use native `auth login` for a complete form,
+or the plugin's `credential.fill` request for one staged field. Agents do not
+invoke the private `credential.resolve` protocol directly.
 
 Use a unique safe session name for each task, and retain that name for session
 reuse. Include the dedicated config on every invocation:
@@ -41,13 +42,39 @@ agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session
 6. Close the owned browser with `close` when the task ends. Use the same config
    and session. Keep cookies and state exports out of logs, chat and source.
 
-Native `auth login` in 0.41.0 requires both credential controls together. It has
-no username-first or intermediate `Next` stage. A generic MCP stdin fill is not
-an approved credential-provider consumer. Treat a staged login as unsupported;
-use a verified existing session or the explicitly selected user-present fallback.
-Do not expose credentials to work around this limit.
+## Staged login
 
-The config allows only the approved website domains and disables state-save
+For a username-first form, observe the current origin and input, then fill its
+approved binding through the same dedicated session:
+
+```sh
+agent-browser --config "$HOME/.config/agent-browser/one-password.json" --session <task-session> plugin run one-password credential.fill --payload '{"login":"<approved binding>","field":"username","session":"<task-session>"}' --json
+```
+
+Require `data.status: filled`. Observe and click the site's Next control once.
+After the masked password field appears, repeat that request with
+`field: password`. Observe and click Login once, then verify the protected
+account. The plugin fills one field; it does not navigate or click a button.
+Keep the payload's session equal to the owned task session.
+
+The plugin verifies the exact binding, item, vault, expected account, live
+origin, unique visible input, field type, empty input and disabled streaming
+before custody. It rechecks the input before and after native batch stdin
+delivery. Keep recording and tracing off, as for native auth login. A blocked
+result with `effect: none` performed no fill. `partial-or-unknown` requires live
+inspection; do not repeat the fill automatically. Raw child output and errors
+stay private.
+
+Native `auth login` in 0.41.0 needs both fields together. Generic MCP fill
+converts its input to child-process arguments. The staged plugin uses native
+`batch --bail --omit-command` stdin and returns a redacted status. These are
+trusted same-user checks, not isolation from a compromised agent or a hostile
+page that changes between checks.
+
+- [Pinned MCP fill transport](https://github.com/vercel-labs/agent-browser/blob/v0.41.0/cli/src/mcp.rs#L2875).
+- [Pinned native batch transport](https://github.com/vercel-labs/agent-browser/blob/v0.41.0/cli/src/main.rs#L2275).
+
+The config allows only approved website and runtime domains and disables state-save
 intent. Use the fresh browser it launches; profile attachment and saved-state
 imports cannot provide the domain controls. Browser sessions carry account
 authority. This is trusted same-user automation, not compromised-agent
@@ -69,6 +96,11 @@ the binding owner. An enabled entry needs its exact `vaultId` and:
   }
 }
 ```
+
+For staged filling, require the expected `username` and the selector for the
+requested field. Add each selector only after observing that stage. A staged
+binding does not need `submitSelector`; native complete-form auth requires all
+three selectors. Keep account values and actual website bindings private.
 
 Keep the file mode `0600` and owned by Nathan. The provider validates the
 existing item ID/title/vault/origin, Agent Browsing vault ID, unique credential
@@ -110,7 +142,7 @@ global Agent Browser configuration:
   "plugins": [{
     "name": "one-password",
     "command": "<absolute home>/.local/libexec/agent-browser-one-password",
-    "capabilities": ["credential.read"]
+    "capabilities": ["credential.read", "credential.fill"]
   }]
 }
 ```

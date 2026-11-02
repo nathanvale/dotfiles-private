@@ -1,6 +1,6 @@
 ---
 name: timesheets
-description: "Prepare Nathan's weekly FastTrack360 and OnCore drafts, use approved automatic login where supported, show screenshots, and submit only after approval."
+description: "Log in automatically, prepare Nathan's weekly FastTrack360 and OnCore drafts, show screenshots, and submit only after approval."
 ---
 
 # Timesheets
@@ -27,9 +27,9 @@ unique task session per portal and include its dedicated configuration on every
 command. Keep login, draft preparation and review in that same session.
 
 Reuse a signed-in session only after verifying the intended account. At a login
-wall, first check the portal reference and enabled dedicated-browser binding.
-Invoke the credential provider for `timesheets.oncore` or `timesheets.fasttrack`
-only when that flow is supported, using the binding's exact HTTPS origin.
+wall, read the portal reference and check its enabled dedicated-browser binding.
+Use native auth login for `timesheets.oncore`, or the staged credential-fill
+route for `timesheets.fasttrack`, on the binding's exact HTTPS origin.
 The one-password reference owns credential delivery and login checks. Verify
 the protected account before opening a timesheet. Keep credentials outside
 model-visible commands and screenshots.
