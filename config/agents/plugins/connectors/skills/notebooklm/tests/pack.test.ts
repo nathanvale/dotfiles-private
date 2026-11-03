@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createBundle, PLUGIN_ROOT, runBundle } from "../../../tests/harness.ts";
 
@@ -206,10 +205,36 @@ test("a directory swapped between the path check and the open never yields outsi
 	} finally { m.dispose(); }
 });
 
+// The executable refuses its own runner's host name, read through
+// gethostname(). The real one varies by machine and can collide with the
+// fixture (a Mac's "<name>.local" also matches the generic host-name rule), so
+// this interposer (DYLD_INSERT_LIBRARIES) gives the executable RUNNER_HOSTNAME.
+const RUNNER_HOST = "SENTINEL-RUNNER";
+const HOSTNAME_INTERPOSER = `#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static int runner_hostname(char *name, size_t size) {
+	const char *host = getenv("RUNNER_HOSTNAME");
+	if (!host) return gethostname(name, size);
+	if (strlen(host) >= size) { errno = ENAMETOOLONG; return -1; }
+	strcpy(name, host);
+	return 0;
+}
+__attribute__((used, section("__DATA,__interpose"))) static const void *interpose[2] = { (const void *)runner_hostname, (const void *)gethostname };
+`;
+function runnerHost(m: ReturnType<typeof machine>): Record<string, string> {
+	const file = path.join(m.bundle.root, "runner-hostname.c");
+	const library = path.join(m.bundle.root, "runner-hostname.dylib");
+	writeFileSync(file, HOSTNAME_INTERPOSER);
+	expect(spawnSync("xcrun", ["clang", "-arch", "arm64", "-dynamiclib", "-O2", "-o", library, file]).status).toBe(0);
+	return { DYLD_INSERT_LIBRARIES: library, RUNNER_HOSTNAME: RUNNER_HOST };
+}
+
 test("the provenance check refuses private inventory and the five known-false trial claims without echoing them", async () => {
 	const m = machine(); try {
 		m.register();
-		const privateText = source(["- [verified] Owner SENTINEL_ACCOUNT@example.com", "- [verified] Path /Users/SENTINEL_HOME/code", "- [verified] session id 0e583649-baa6-4f97-bba6-90bf3333fe39", "- [verified] Host SENTINEL-HOST.local", `- [verified] Built on ${os.hostname()}`, "- [verified] Contact SENTINEL_REVIEWER@example.test: the reviewer.", "- [verified] Contact git@example.test for the review.", "- [verified] Fetch https://git@example.test:/srv/git/dotfiles.git over HTTPS.", "- [verified] See https://example.com/?git@example.test:/secret for details.", "- [verified] See https://example.com/#git@example.test:/secret for details.", "- [verified] See https://example.com/?ssh://git@example.test/secret for details."].join("\n"));
+		const privateText = source(["- [verified] Owner SENTINEL_ACCOUNT@example.com", "- [verified] Path /Users/SENTINEL_HOME/code", "- [verified] session id 0e583649-baa6-4f97-bba6-90bf3333fe39", "- [verified] Host SENTINEL-HOST.local", `- [verified] Built on ${RUNNER_HOST}`, "- [verified] Contact SENTINEL_REVIEWER@example.test: the reviewer.", "- [verified] Contact git@example.test for the review.", "- [verified] Fetch https://git@example.test:/srv/git/dotfiles.git over HTTPS.", "- [verified] See https://example.com/?git@example.test:/secret for details.", "- [verified] See https://example.com/#git@example.test:/secret for details.", "- [verified] See https://example.com/?ssh://git@example.test/secret for details.", "- [verified] Ask git@example.test: the reviewer."].join("\n"));
 		const falseClaims = [
 			"- [verified] The preview dispatches the mutating write with confirm false.",
 			"- [verified] Credential headers are shared across every provider.",
@@ -231,6 +256,8 @@ test("the provenance check refuses private inventory and the five known-false tr
 			"- [verified] A mirror lives at git@git.example.test:/srv/git/dotfiles.git for offline use.",
 			"- [verified] The SSH port form ssh://git@git.example.test:22/srv/git/dotfiles.git also works.",
 			"- [verified] A relative remote git@example.test:+repo.git also works.",
+			"- [verified] A relative remote git@example.test:équipe.git also works.",
+			"- [verified] A relative remote git@example.test:!repo.git also works.",
 			"- [verified] Local overrides live in .claude/settings.local.json.",
 			"- [verified] Unlock resolves nothing.",
 		].join("\n");
@@ -242,10 +269,10 @@ test("the provenance check refuses private inventory and the five known-false tr
 			"missing.md": "- [verified] No provenance header.\n",
 			"unlabelled.md": source("- [verified] Labelled.\n- Unlabelled claim."),
 		});
-		const run = await m.check();
+		const run = await m.run("pack_check", { manifest: m.manifestPath() }, runnerHost(m));
 		expect([run.code, run.data.ready]).toEqual([0, false]);
 		const byKey = Object.fromEntries(run.data.sources.map((row: { key: string }) => [row.key, row]));
-		expect(byKey.private.provenance).toEqual({ verdict: "refused", mismatched: [], reasons: [{ code: "account-email", line: 10 }, { code: "home-path", line: 11 }, { code: "session-id", line: 12 }, { code: "host-name", line: 13 }, { code: "host-name", line: 14 }, { code: "account-email", line: 15 }, { code: "account-email", line: 16 }, { code: "account-email", line: 17 }, { code: "account-email", line: 18 }, { code: "account-email", line: 19 }, { code: "account-email", line: 20 }] });
+		expect(byKey.private.provenance).toEqual({ verdict: "refused", mismatched: [], reasons: [{ code: "account-email", line: 10 }, { code: "home-path", line: 11 }, { code: "session-id", line: 12 }, { code: "host-name", line: 13 }, { code: "host-name", line: 14 }, { code: "account-email", line: 15 }, { code: "account-email", line: 16 }, { code: "account-email", line: 17 }, { code: "account-email", line: 18 }, { code: "account-email", line: 19 }, { code: "account-email", line: 20 }, { code: "account-email", line: 21 }] });
 		expect(byKey.claims.provenance.reasons).toEqual([
 			{ code: "false-claim:preview-dispatches-write", line: 10 }, { code: "false-claim:shared-credential-headers", line: 11 }, { code: "false-claim:failed-key-fallback", line: 12 },
 			{ code: "false-claim:generic-recovery", line: 13 }, { code: "false-claim:unlock-settles", line: 14 }, { code: "false-claim:preview-dispatches-write", line: 20 }, { code: "false-claim:preview-dispatches-write", line: 21 },
@@ -254,7 +281,7 @@ test("the provenance check refuses private inventory and the five known-false tr
 		expect(byKey.mismatch.provenance).toEqual({ verdict: "mismatch", mismatched: ["commit"], reasons: [] });
 		expect(byKey.missing.provenance.verdict).toBe("missing");
 		expect(byKey.unlabelled.labels).toEqual({ verdict: "unlabelled", claims: 2, unlabelled: [11] });
-		expect(run.stdout).not.toContain(os.hostname());
+		expect(run.stdout).not.toContain(RUNNER_HOST);
 		expect(run.stdout).not.toContain("example.com");
 	} finally { m.dispose(); }
 });

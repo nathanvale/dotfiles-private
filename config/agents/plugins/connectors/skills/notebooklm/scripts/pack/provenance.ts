@@ -33,9 +33,11 @@ const PRIVATE: readonly { readonly code: string; readonly pattern: RegExp }[] = 
 	// Only SSH-remote syntax is exempt, and only as its own token (after the
 	// line start or whitespace, optionally behind opening quotes or brackets):
 	// a bare SCP remote git@host:path, relative or absolute, and
-	// [git+]ssh://git@host[:port]/path. Every other address refuses, git@ in URI
-	// userinfo, query or fragment included.
-	{ code: "account-email", pattern: /(?<![\w.%+-])(?!(?<=(?:^|\s)["'`(<[]*)git@[A-Za-z0-9.-]+:[\w~./+-])(?!(?<=(?:^|\s)["'`(<[]*(?:git\+)?ssh:\/\/)git@[A-Za-z0-9.-]+(?::\d+)?\/)[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/ },
+	// [git+]ssh://git@host[:port]/path. Git takes any SCP path, so the path only
+	// has to start inside the token: "git@host: text" is prose and refuses.
+	// Every other address refuses, git@ in URI userinfo, query or fragment
+	// included.
+	{ code: "account-email", pattern: /(?<![\w.%+-])(?!(?<=(?:^|\s)["'`(<[]*)git@[A-Za-z0-9.-]+:\S)(?!(?<=(?:^|\s)["'`(<[]*(?:git\+)?ssh:\/\/)git@[A-Za-z0-9.-]+(?::\d+)?\/)[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/ },
 	{ code: "home-path", pattern: /(?:\/Users\/|\/home\/)[^/\s]+|\/(?:private\/)?var\/folders\/|\b[A-Z]:\\Users\\/ },
 	// A host name ends its token; client.internal( and settings.local.json do not.
 	{ code: "host-name", pattern: /\b[A-Za-z0-9-]+\.(?:local|lan|home\.arpa|ts\.net|internal)\b(?![\w(/-]|\.\w)/i },
