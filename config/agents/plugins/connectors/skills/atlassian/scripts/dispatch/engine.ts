@@ -6,6 +6,7 @@ import { type CauseCode, OPERATION_SPECS, type OperationId, type OperationSpec, 
 import type { StageResult } from "../outbox.ts";
 import type { Journal } from "./journal.ts";
 import type { ProviderFailure } from "./translate.ts";
+import { discoveryTool } from "./discovery.ts";
 
 export interface SchemaTool {
 	name: string;
@@ -36,26 +37,37 @@ export interface Dependencies {
 export type Input = Record<string, string | number | string[]>;
 export type Validation = { ok: true; input: Input } | { ok: false; reason: string };
 
-type Field = { kind: "text"; required: boolean } | { kind: "count"; required: boolean } | { kind: "names"; required: boolean };
+type Field = { kind: "text"; required: boolean } | { kind: "count"; required: boolean } | { kind: "names"; required: boolean } | { kind: "offset"; required: boolean };
 
 // Neutral input per read operation; unknown keys are refused so a caller
 // cannot smuggle provider-specific arguments through the semantic seam.
 const READ_INPUTS: Partial<Record<OperationId, Record<string, Field>>> = {
 	"issue.get": { issueKey: { kind: "text", required: true }, fields: { kind: "names", required: false } },
-	"issue.search": { jql: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, fields: { kind: "names", required: false } },
+	"issue.search": { startAt: { kind: "offset", required: false }, pageToken: { kind: "text", required: false }, jql: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, fields: { kind: "names", required: false } },
 	// The statuses an issue.transition may name: the transitions the site
 	// currently allows this principal on the issue.
 	"issue.transitions": { issueKey: { kind: "text", required: true } },
+	"issue.scan": { jql: { kind: "text", required: true }, fields: { kind: "names", required: false }, maxResults: { kind: "count", required: false }, continuation: { kind: "text", required: false } },
+	"issue.comments.scan": { issueKey: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, continuation: { kind: "text", required: false } },
+	"issue.changelog.scan": { issueKey: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, continuation: { kind: "text", required: false } },
+
 	"page.get": { pageId: { kind: "text", required: true } },
 	"page.search": { cql: { kind: "text", required: true }, maxResults: { kind: "count", required: false } },
+	"page.scan": { cql: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, continuation: { kind: "text", required: false } },
+	"page.comments.scan": { pageId: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, continuation: { kind: "text", required: false } },
+	"page.attachments.scan": { pageId: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, continuation: { kind: "text", required: false } },
+	"page.children.scan": { pageId: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, continuation: { kind: "text", required: false } },
+
 };
 
 function validField(field: Field, value: unknown): boolean {
 	switch (field.kind) {
 		case "text":
-			return typeof value === "string" && value.trim().length > 0 && !value.includes("\n");
+			return typeof value === "string" && value.trim().length > 0 && value.length <= 32_768 && !/[\r\n]/.test(value);
 		case "count":
 			return Number.isInteger(value) && (value as number) > 0 && (value as number) <= 100;
+		case "offset":
+			return Number.isSafeInteger(value) && (value as number) >= 0;
 		case "names":
 			return Array.isArray(value) && value.every((entry) => typeof entry === "string" && /^[A-Za-z0-9_.-]+$/.test(entry));
 	}
@@ -83,7 +95,13 @@ export function readInput(operation: OperationId, raw: unknown): Validation {
 	const fields = READ_INPUTS[operation];
 	if (!fields) return { ok: false, reason: `${operation} is a write; use the write input contract` };
 	const collected = collectInput(raw, fields, validField);
-	return collected.ok ? { ok: true, input: collected.input as Input } : collected;
+	if (!collected.ok) return collected;
+	if (!discoveryTool(OPERATION_SPECS[operation].tool)) return { ok: true, input: collected.input as Input };
+	const input = collected.input;
+	if (input.issueKey !== undefined && (typeof input.issueKey !== "string" || !/^[A-Z][A-Z0-9_]+-[0-9]+$/.test(input.issueKey))) return { ok: false, reason: "issueKey must be a stable issue key" };
+	if (input.pageId !== undefined && (typeof input.pageId !== "string" || !/^[1-9][0-9]{0,19}$/.test(input.pageId))) return { ok: false, reason: "pageId must be a numeric source identity" };
+	if (typeof input.continuation === "string" && input.continuation.length > 16_384) return { ok: false, reason: "continuation exceeds the read contract" };
+	return { ok: true, input: input as Input };
 }
 
 function assign(target: Record<string, unknown>, key: string, value: unknown): void {
@@ -102,6 +120,8 @@ export function providerArguments(spec: OperationSpec, input: Input): Record<str
 			break;
 		case "issue.search":
 			assign(args, "jql", input.jql);
+			assign(args, "start_at", input.startAt);
+			assign(args, "page_token", input.pageToken);
 			assign(args, "limit", input.maxResults);
 			assign(args, "fields", names?.join(","));
 			break;
@@ -115,6 +135,15 @@ export function providerArguments(spec: OperationSpec, input: Input): Record<str
 			assign(args, "query", input.cql);
 			assign(args, "limit", input.maxResults);
 			break;
+	}
+	if (discoveryTool(spec.tool)) {
+		if (spec.id === "page.scan") args.cql = input.cql;
+		else if (spec.id === "issue.scan") { args.jql = input.jql; args.fields = names?.join(",") ?? "summary,updated,description,issuelinks,attachment"; }
+		else if (spec.product === "jira") args.issue_key = input.issueKey;
+		else args.page_id = input.pageId;
+		args.limit = input.maxResults ?? 25;
+		args.start = 0;
+		args.cursor = "";
 	}
 	return args;
 }

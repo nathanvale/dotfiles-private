@@ -390,6 +390,56 @@ The Connectors plugin was selected for a credential-safe repair on
 
 ## Options and Tradeoffs
 
+### Amendment proposal: paginated read-only Atlassian discovery, 3 November 2026
+
+Nathan requested fixing connector pagination and coverage for an end-to-end
+SMST mining trial, excluding scheduling. The pinned mcp-atlassian 0.23.1
+`confluence_search` accepts query/limit/filter but no continuation and returns
+a simplified list without source pagination. A neutral `start` flag cannot
+repair that provider contract. Existing `page.search` remains unchanged.
+
+Admit four explicit read operations on `atlassian-rest-confluence` through the
+existing owned REST Provider process: `page.scan`, `page.comments.scan`,
+`page.attachments.scan` and `page.children.scan`. Their closed tools make only
+GET requests to `/wiki/rest/api/content/search` or the selected numeric content
+ID's `child/comment`, `child/attachment` or `child/page` collection. No arbitrary
+URL, request method, authorization header or new credential route is accepted.
+The Provider refuses a tool belonging to the other bound product. Existing
+Jira write guards and Community routes are preserved; no fallback is added.
+
+Three further reads on `atlassian-rest-jira` preserve evidence the simplified
+Community model drops: `issue.scan` uses GET `/rest/api/3/search/jql` with native
+`isLast` and `nextPageToken`; `issue.comments.scan` uses the selected issue's
+`/comment` collection and `issue.changelog.scan` its `/changelog` collection.
+They retain source fields, offsets and totals. Query/issue identity, named
+fields and bounded limits are validated before requests. No additional write
+method is admitted. Missing or contradictory terminal evidence stays unknown.
+
+Each command reads one bounded page. The dispatcher interprets native
+`_links.next` into a versioned scope-bound continuation, forwarding only its
+validated offset or cursor. Foreign origins, different collection paths,
+changed CQL, invalid/nonadvancing positions and missing pagination evidence
+cannot certify completion. A terminal response proves the collection boundary
+at that read, not a snapshot or the caller's entire preceding traversal.
+
+Successful reads retain their raw result and add a nonsecret credential-binding
+and coverage record. Unexposed comments, attachment bytes, nested replies,
+effective permission changes and business approval remain outside its proof.
+The caller owns durable item/receipt/checkpoint ordering and deduplication.
+Jira search gains its documented `start_at`/`page_token` arguments, subject to
+the existing live schema gate; it does not gain a different Provider.
+
+This expands the owned REST maintenance surface by seven fixed read endpoints,
+with no added dependency. Revisit when the pinned Community Provider exposes
+equivalent pagination and coverage. The proposal and its exact candidate must
+pass packaged-process regressions and authenticated live traversal before
+being described as qualified. This amendment does not accept the wider ADR,
+install a plugin release, choose an ingestion database or authorize scheduling.
+
+Primary contracts: [pinned Confluence tool source](https://github.com/sooperset/mcp-atlassian/blob/v0.23.1/src/mcp_atlassian/servers/confluence.py),
+[Confluence content search](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-content/#api-wiki-rest-api-content-search-get),
+[children collections](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-content---children-and-descendants/).
+
 | Driver | Separate Harness routes | Repository-wide registry | Plugin, Official plus Community | Plugin, Community only |
 | --- | --- | --- | --- | --- |
 | MCPorter transport | Duplicated in each Harness | Shared | Shared | Shared |
