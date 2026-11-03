@@ -11,9 +11,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Adapter, AdapterRefusal, AdapterRequest, Executed, LocalEffect, LoginOption, Prepared, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
-import { planDispatcherRoute, RouteError } from "../../bin/provider-route.ts";
+import { planDispatcherResourceRead, planDispatcherRoute, RouteError } from "../../bin/provider-route.ts";
 import { safeEnvironment } from "../../bin/safe-environment.ts";
-import { acceptedKeys, OPERATION_CATALOGUE, OPERATION_NAMES, operationKind, SERVER, writeInput } from "./scripts/catalogue.ts";
+import { acceptedKeys, OPERATION_CATALOGUE, OPERATION_NAMES, operationKind, PROVIDER_TOOLS, readInputRepair, SERVER, writeInput } from "./scripts/catalogue.ts";
 import { FIGMA_ENDPOINT } from "./scripts/endpoint.ts";
 import { type Journal, openJournal, PREVIEW_ID, type Receipt, RUN_ID } from "./scripts/journal.ts";
 import { figmaCaller, INTERNAL_CONTEXT } from "./scripts/transport.ts";
@@ -52,7 +52,7 @@ function registryValid(skillsRoot: string): boolean {
 		const entry = servers[SERVER];
 		if (!Array.isArray(registry.imports) || registry.imports.length !== 0 || Object.keys(servers).join(",") !== SERVER || entry === undefined) return false;
 		const tools = Array.isArray(entry.allowedTools) ? [...(entry.allowedTools as string[])].sort() : [];
-		return Object.keys(entry).sort().join(",") === ENTRY_KEYS && entry.baseUrl === FIGMA_ENDPOINT && entry.auth === "oauth" && entry.clientName === "Claude Code" && JSON.stringify(tools) === JSON.stringify([...OPERATION_NAMES].sort());
+		return Object.keys(entry).sort().join(",") === ENTRY_KEYS && entry.baseUrl === FIGMA_ENDPOINT && entry.auth === "oauth" && entry.clientName === "Claude Code" && JSON.stringify(tools) === JSON.stringify([...PROVIDER_TOOLS].sort());
 	} catch {
 		return false;
 	}
@@ -60,12 +60,12 @@ function registryValid(skillsRoot: string): boolean {
 
 // The route stays the only MCPorter argv composer; its refusal names a fixed
 // code, never the caller's input.
-function transport(request: SchemaRequest, mcporterArgs: readonly string[], effect: "read" | "attended-login", data: Record<string, unknown>): Prepared {
+function transport(request: SchemaRequest, mcporterArgs: readonly string[], effect: "read" | "attended-login", data: Record<string, unknown>, resourceUri?: string): Prepared {
 	if (!registryValid(request.skillsRoot)) return refused("schema", "registry-invalid");
 	let argv: readonly string[];
 	let env: Readonly<Record<string, string>>;
 	try {
-		({ argv, env } = planDispatcherRoute(["figma", "--", ...mcporterArgs], request.skillsRoot, safeEnvironment(request.env), INTERNAL_CONTEXT));
+		({ argv, env } = resourceUri === undefined ? planDispatcherRoute(["figma", "--", ...mcporterArgs], request.skillsRoot, safeEnvironment(request.env), INTERNAL_CONTEXT) : planDispatcherResourceRead("figma", resourceUri, request.skillsRoot, safeEnvironment(request.env), INTERNAL_CONTEXT));
 	} catch (error) {
 		if (error instanceof RouteError) return refused(error.exitCode === 2 ? "usage" : "schema", `route-${error.code}`);
 		throw error;
@@ -104,13 +104,16 @@ function prepareRun(request: AdapterRequest, operation: string, input: Readonly<
 	const kind = operationKind(operation);
 	if (kind === null) return refused("operation-unknown", "operation-not-allowed");
 	if (kind === "write") return refused("usage", "write-phase-required", WRITE_PHASE_REPAIR);
+	const repair = readInputRepair(operation, input);
+	if (repair !== null) return refused("schema", "input-invalid", repair);
+	if (operation === "get_figma_skill") return transport(request, [], "read", { operation, resourceMethod: "resources/read" }, input?.uri as string);
 	const flags = input === null ? [] : ["--args", JSON.stringify(input)];
 	return transport(request, ["call", operation, ...flags, "--output", "json"], "read", { operation });
 }
 
-function journaled(request: SchemaRequest, step: (journal: Journal | null, caller: ReturnType<typeof figmaCaller>) => Promise<Executed>): Prepared {
+function journaled(request: SchemaRequest, step: (journal: Journal | null, caller: ReturnType<typeof figmaCaller>) => Promise<Executed>, taskSessionId?: string): Prepared {
 	if (!registryValid(request.skillsRoot)) return refused("schema", "registry-invalid");
-	return { kind: "execute", execute: (capabilities) => step(openJournal(request.env), figmaCaller(request.env, request.skillsRoot, capabilities)) };
+	return { kind: "execute", execute: (capabilities) => step(openJournal(request.env), figmaCaller(request.env, request.skillsRoot, capabilities, taskSessionId)) };
 }
 
 function prepareWrite(request: WriteRequest): Prepared {
@@ -120,8 +123,8 @@ function prepareWrite(request: WriteRequest): Prepared {
 	const write = writeInput(request.operation, request.input);
 	if (write === null) return refused("schema", "input-invalid", acceptedKeys(request.operation) ?? REPAIR.schema);
 	const { phase } = request;
-	if (write.spec.evidence === "upload") return journaled(request, (journal, caller) => (phase.kind === "preview" ? previewUpload(write, request.env, caller, journal) : applyUpload(write, phase.previewId, request.env, caller, journal)));
-	return journaled(request, (journal, caller) => (phase.kind === "preview" ? previewWrite(write, caller, journal) : applyWrite(write, phase.previewId, caller, journal)));
+	if (write.spec.evidence === "upload") return journaled(request, (journal, caller) => (phase.kind === "preview" ? previewUpload(write, request.env, caller, journal) : applyUpload(write, phase.previewId, request.env, caller, journal)), write.input.sessionId as string | undefined);
+	return journaled(request, (journal, caller) => (phase.kind === "preview" ? previewWrite(write, caller, journal) : applyWrite(write, phase.previewId, caller, journal)), write.input.sessionId as string | undefined);
 }
 
 // Inspection and unlock touch the journal alone; only adjudication reads
@@ -153,13 +156,13 @@ function prepareRecover(request: RecoverRequest): Prepared {
 		const write = writeInput(receipt.operation, input);
 		if (write?.spec.evidence === "upload") return adjudicateUpload(receipt, write, request.env, caller, journal);
 		return adjudicate(receipt, write, caller, journal);
-	});
+	}, input?.sessionId as string | undefined);
 }
 
 // The live schema is a cached-grant read; the whole read and write catalogue
 // rides beside it, declared rather than live-listed.
 function prepareSchema(request: SchemaRequest): Prepared {
-	return transport(request, ["list", "--schema", "--json"], "read", { allowedTools: OPERATION_NAMES, operations: OPERATION_CATALOGUE });
+	return transport(request, ["list", "--schema", "--json"], "read", { allowedTools: PROVIDER_TOOLS, operations: OPERATION_CATALOGUE, resourceOperations: [{ name: "get_figma_skill", method: "resources/read", inputSchema: { type: "object", properties: { uri: { type: "string", description: "skill://index.json or skill://figma/<skill>/SKILL.md or references/<path>.md" } }, required: ["uri"], additionalProperties: false } }] });
 }
 
 export const figmaAdapter: Adapter = {

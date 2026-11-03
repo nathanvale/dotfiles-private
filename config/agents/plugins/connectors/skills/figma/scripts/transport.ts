@@ -7,7 +7,7 @@ import type { ExecutionCapabilities } from "../../../bin/adapters/contract.ts";
 import { MCPORTER_REPAIR_ACTION } from "../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute } from "../../../bin/provider-route.ts";
 import { type EnvironmentSource, safeEnvironment } from "../../../bin/safe-environment.ts";
-import type { Call } from "./catalogue.ts";
+import { type Call, FILE_SESSION_TOOLS } from "./catalogue.ts";
 import { figmaVault, prepareVault } from "./vault.ts";
 
 export const INTERNAL_CONTEXT = "figma-adapter";
@@ -41,8 +41,9 @@ export interface Caller {
 	call(call: Call): Promise<CallResult>;
 }
 
-export function figmaCaller(env: EnvironmentSource, skillsRoot: string, capabilities: ExecutionCapabilities): Caller {
-	const prepare: Caller["prepare"] = async ({ tool, args }) => {
+export function figmaCaller(env: EnvironmentSource, skillsRoot: string, capabilities: ExecutionCapabilities, taskSessionId?: string): Caller {
+	const prepare: Caller["prepare"] = async ({ tool, args: originalArgs }) => {
+		const args = taskSessionId !== undefined && FILE_SESSION_TOOLS.has(tool) ? { ...originalArgs, sessionId: taskSessionId } : originalArgs;
 		let plan: ReturnType<typeof planDispatcherRoute>;
 		try {
 			plan = planDispatcherRoute(["figma", "--", "call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS], skillsRoot, safeEnvironment(env), INTERNAL_CONTEXT);

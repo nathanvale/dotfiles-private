@@ -395,6 +395,16 @@ export function planDispatcherRoute(argv: string[], skillsRoot: string, env: Rec
 	return plan(argv, skillsRoot, env, true, internalContext, privateInput);
 }
 
+// Internal resource read after the adapter has admitted an exact URI. Reuse
+// registry, selection, environment, and dispatcher checks; never expose a raw
+// resource verb from the public launcher or permit listing every resource.
+export function planDispatcherResourceRead(skill: string, uri: string, skillsRoot: string, env: EnvironmentSource, internalContext: string): RoutePlan {
+	const planned = planDispatcherRoute([skill, "--", "list", "--json"], skillsRoot, env, internalContext);
+	const declaration = readDeclaration(path.join(skillsRoot, skill, "config", "route.json"));
+	if (!declaration.dispatcherOwned || !uri.startsWith("skill://") || /[\r\n]/.test(uri)) throw new RouteError("argument-invalid", "resource read requires an admitted dispatcher skill URI");
+	return { ...planned, argv: ["--config", planned.configPath, "resource", planned.server, uri, "--output", "json", "--no-oauth"] };
+}
+
 function refuse(code: string, message: string, exitCode: number): never {
 	process.stderr.write(`${PROGRAM}:error:${code}:${message}\n`);
 	process.exit(exitCode);

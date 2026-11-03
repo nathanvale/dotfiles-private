@@ -8,6 +8,7 @@
 			"auth": "oauth",
 			"clientName": "Claude Code",
 			"allowedTools": [
+				"create_session",
 				"whoami",
 				"get_metadata",
 				"get_design_context",
