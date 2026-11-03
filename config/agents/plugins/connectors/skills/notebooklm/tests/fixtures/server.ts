@@ -9,7 +9,11 @@ const state = path.join(home, "fixture.json");
 const log = path.join(home, "calls.jsonl");
 const id = "11111111-1111-1111-1111-111111111111";
 const sourceId = "22222222-2222-2222-2222-222222222222";
-interface State { title: string; sourceTitle: string; mode: string; auth: string; version: string }
+interface Artifact { artifact_id: string; title: string; type: string; status: string; custom_instructions?: string | null; source_ids?: string[]; duration_seconds?: number | null }
+// A learning-pack notebook: when present, notebook_get serves it only for its
+// own id, studio_status pages its artifacts, and notebook_list reports count.
+interface Pack { notebookId: string; notebookTitle: string; sources: { id: string; title: string }[]; artifacts: Artifact[]; notebooks?: { id: string; title: string }[]; total?: number; studio?: "error" | "no-pagination" | "overlap"; notebookUrl?: string }
+interface State { title: string; sourceTitle: string; mode: string; auth: string; version: string; pack?: Pack }
 const load = (): State => existsSync(state) ? JSON.parse(readFileSync(state, "utf8")) : { title: "Synthetic notebook", sourceTitle: "Synthetic source", mode: "normal", auth: "configured", version: "0.15.8" };
 const text = { type: "string" };
 const boolean = { type: "boolean" };
@@ -27,12 +31,31 @@ const tools = [
 	{ name: "source_rename", inputSchema: schema({ notebook_id: text, source_id: text, new_title: text }, ["notebook_id", "source_id", "new_title"]) },
 	{ name: "studio_status", inputSchema: schema({ notebook_id: text, action: text, artifact_id: optionalText, new_title: optionalText, include_details: boolean, limit: { type: "integer" }, offset: { type: "integer" } }, ["notebook_id"]) },
 ];
+function packCall(pack: Pack, name: string, args: Record<string, unknown>): unknown {
+	if (name === "notebook_get") return args.notebook_id === pack.notebookId ? { status: "success", notebook: { id: pack.notebookId, title: pack.notebookTitle, source_count: pack.sources.length, url: "https://fixture.invalid/?token=SENTINEL_REPLY_CREDENTIAL" }, sources: pack.sources } : { status: "error", error: "Notebook not found SENTINEL_REPLY_CREDENTIAL" };
+	if (name === "notebook_list") {
+		const notebooks = pack.notebooks ?? [];
+		return { status: "success", notebooks: notebooks.slice(0, Number(args.max_results)).map((row) => ({ ...row, url: "https://fixture.invalid/?token=SENTINEL_REPLY_CREDENTIAL" })), count: pack.total ?? notebooks.length };
+	}
+	return name === "studio_status" ? studioPage(pack, args) : undefined;
+}
+function studioPage(pack: Pack, args: Record<string, unknown>): unknown {
+	if (pack.studio === "error" || args.notebook_id !== pack.notebookId) return { status: "error", error: "SENTINEL_REPLY_CREDENTIAL" };
+	// overlap: every later page repeats the previous page's last row.
+	const offset = Math.max(0, Number(args.offset ?? 0) - (pack.studio === "overlap" && Number(args.offset ?? 0) > 0 ? 1 : 0));
+	const limit = Number(args.limit ?? 100);
+	const page = pack.artifacts.slice(offset, offset + limit).map((row) => args.include_details === true ? { ...row, audio_url: "https://fixture.invalid/?token=SENTINEL_REPLY_CREDENTIAL" } : { artifact_id: row.artifact_id, title: row.title, type: row.type, status: row.status });
+	const pagination = pack.studio === "no-pagination" ? {} : { pagination: { returned: page.length, offset, limit, has_more: offset + page.length < pack.artifacts.length } };
+	return { status: "success", notebook_id: pack.notebookId, artifacts: page, summary: { total: pack.artifacts.length }, ...pagination, notebook_url: pack.notebookUrl ?? `https://notebooklm.google.com/notebook/${pack.notebookId}` };
+}
 function call(name: string, args: Record<string, unknown>): unknown {
 	const value = load();
 	appendFileSync(log, `${JSON.stringify({ name, args, profile: process.env.NLM_PROFILE, debug: process.env.NOTEBOOKLM_MCP_DEBUG, ambient: process.env.PRIVATE_SENTINEL !== undefined })}\n`);
 	if (name === "server_info") return { status: "success", auth_status: value.auth, version: value.version, update_available: false, cookies: "SENTINEL_REPLY_CREDENTIAL" };
 	if (value.mode === "expired") return { status: "error", error: "Authentication expired. Run 'nlm login' SENTINEL_REPLY_CREDENTIAL" };
 	if (value.mode === "malformed") return { status: "success", error: "SENTINEL_REPLY_CREDENTIAL" };
+	const packed = value.pack ? packCall(value.pack, name, args) : undefined;
+	if (packed !== undefined) return packed;
 	if (name === "notebook_get") return { status: "success", notebook: { id: value.mode === "wrong-target" ? sourceId : id, title: value.title, source_count: 1, cookies: "SENTINEL_REPLY_CREDENTIAL" }, sources: [{ id: sourceId, title: value.sourceTitle, token: "SENTINEL_REPLY_CREDENTIAL" }], extra: "SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "notebook_list") return { status: "success", notebooks: [{ id, title: value.title, cookie: "SENTINEL_REPLY_CREDENTIAL" }], count: 500, secret: "SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "notebook_describe") return { status: "success", summary: "Synthetic summary", suggested_topics: [{ question: "Synthetic question", prompt: "Synthetic prompt", extra: "SENTINEL_REPLY_CREDENTIAL" }], extra: "SENTINEL_REPLY_CREDENTIAL" };

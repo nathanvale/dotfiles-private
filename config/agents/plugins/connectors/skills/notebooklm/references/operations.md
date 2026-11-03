@@ -14,6 +14,23 @@ and `studio_status`. Use their schemas for required targets and limits.
 Readiness does not enumerate notebooks. Describe suggestions contain
 `question` and `prompt` fields; output projections discard extra vendor fields.
 
+## Learning-pack reads
+
+`pack_check` and `pack_status` are Connector reads, not vendor tools, and sit
+outside the 53-tool catalogue; `capabilities` lists them as
+`packOperations`. `pack_check` reads only registered, contained pack files.
+`pack_status` reuses `notebook_get`, and two internal marker reads with fixed
+policies: `studio_status` with details in pages of 20 (at most two pages) and
+`notebook_list` with 20 results for the advisory scan. Their projections keep
+only ids, titles, types, statuses, custom instructions, source ids, duration,
+pagination, the vendor notebook URL and the list total. The public
+`studio_status` still refuses details, and the internal reads have no public
+name. See [learning packs](learning-pack.md).
+
+The internal reply shapes were modelled from vendor source older than 0.15.8.
+Live 0.15.8 detail fields, pagination, notebook URL and list total remain a
+qualification gap until a live read records them.
+
 ## Withheld renames
 
 `notebook_rename` and `source_rename` are blocked. Vendor 0.15.8 automatically

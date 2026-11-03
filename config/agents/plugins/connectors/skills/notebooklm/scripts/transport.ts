@@ -2,11 +2,13 @@ import type { ExecutionCapabilities, SchemaRequest } from "../../../bin/adapters
 import { planDispatcherRoute } from "../../../bin/provider-route.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../bin/safe-environment.ts";
 import { profileContext } from "./provider.ts";
-import { project, providerFault } from "./projection.ts";
+import { type InternalRead, internalInputFor, internalTool } from "./policy.ts";
+import { project, projectInternal, providerFault } from "./projection.ts";
 
 export type Reply = { ok: true; data: Record<string, unknown> } | { ok: false; cause: string };
 export interface Caller {
 	call(name: string, args: Record<string, unknown>): Promise<Reply>;
+	internal(read: InternalRead, args: Record<string, unknown>): Promise<Reply>;
 	schema(): Promise<Reply>;
 }
 export function caller(request: SchemaRequest, capabilities: ExecutionCapabilities): Caller {
@@ -33,6 +35,11 @@ export function caller(request: SchemaRequest, capabilities: ExecutionCapabiliti
 	}
 	return {
 		call: (name, args) => run(["call", name, "--args", JSON.stringify(args), "--output", "json", "--timeout", "60000"], (raw) => project(name, raw)),
+		internal: async (read, args) => {
+			const checked = internalInputFor(read, args);
+			if (checked === null) return { ok: false, cause: "input-invalid" };
+			return run(["call", internalTool(read), "--args", JSON.stringify(checked), "--output", "json", "--timeout", "60000"], (raw) => projectInternal(read, raw));
+		},
 		schema: () => run(["list", "--schema", "--json", "--timeout", "60000"], (raw) => typeof raw === "object" && raw !== null && "tools" in raw && Array.isArray(raw.tools) ? { tools: raw.tools } : null),
 	};
 }

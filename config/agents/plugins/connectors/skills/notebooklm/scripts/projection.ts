@@ -39,14 +39,20 @@ function notebook(value: Record<string, unknown>): Record<string, unknown> | nul
 	const sources = summaries(value.sources);
 	return sources === null ? null : { notebook: { id: value.notebook.id, title: value.notebook.title, source_count: value.notebook.source_count }, sources };
 }
-function studio(value: Record<string, unknown>): Record<string, unknown> | null {
-	if (!Array.isArray(value.artifacts) || value.artifacts.length > 20) return null;
+function artifactRows(value: unknown, extra: (row: Record<string, unknown>) => Record<string, unknown> | null = () => ({})): Record<string, unknown>[] | null {
+	if (!Array.isArray(value) || value.length > 20) return null;
 	const artifacts: Record<string, unknown>[] = [];
-	for (const row of value.artifacts) {
+	for (const row of value) {
 		if (!record(row) || !string(row.artifact_id) || !string(row.title) || !string(row.type) || !string(row.status)) return null;
-		artifacts.push({ artifact_id: row.artifact_id, title: row.title, type: row.type, status: row.status });
+		const fields = extra(row);
+		if (fields === null) return null;
+		artifacts.push({ artifact_id: row.artifact_id, title: row.title, type: row.type, status: row.status, ...fields });
 	}
-	return { artifacts };
+	return artifacts;
+}
+function studio(value: Record<string, unknown>): Record<string, unknown> | null {
+	const artifacts = artifactRows(value.artifacts);
+	return artifacts === null ? null : { artifacts };
 }
 function listing(value: Record<string, unknown>): Record<string, unknown> | null {
 	const notebooks = summaries(value.notebooks);
@@ -76,4 +82,36 @@ const PROJECTIONS: Record<string, (value: Record<string, unknown>) => Record<str
 export function project(name: string, raw: unknown): Record<string, unknown> | null {
 	const value = decode(raw);
 	return record(value) && value.status === "success" ? PROJECTIONS[name]?.(value) ?? null : null;
+}
+
+// Internal marker-read projections. They keep only the fields pack status
+// reconciles against; media URLs and every other vendor field are discarded.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const optional = <T>(value: unknown, valid: (item: unknown) => item is T): T | null | undefined => value === undefined || value === null ? null : valid(value) ? value : undefined;
+function notebookUrl(value: unknown, notebookId: unknown): string | null {
+	if (typeof value !== "string" || typeof notebookId !== "string") return null;
+	// Only NotebookLM's own host may become a Start Here link.
+	const match = /^https:\/\/notebooklm\.google\.com\/notebook\/([0-9a-f-]{36})$/.exec(value);
+	return match?.[1] === notebookId && UUID.test(notebookId) ? value : null;
+}
+function markerFields(row: Record<string, unknown>): Record<string, unknown> | null {
+	const instructions = optional(row.custom_instructions, string);
+	const sources = optional(row.source_ids, strings);
+	const duration = optional(row.duration_seconds, count);
+	return instructions === undefined || sources === undefined || duration === undefined ? null : { custom_instructions: instructions, source_ids: sources, duration_seconds: duration };
+}
+function studioMarker(value: Record<string, unknown>): Record<string, unknown> | null {
+	const artifacts = artifactRows(value.artifacts, markerFields);
+	if (artifacts === null) return null;
+	const hasMore = record(value.pagination) && typeof value.pagination.has_more === "boolean" ? value.pagination.has_more : null;
+	return { artifacts, has_more: hasMore, notebook_url: notebookUrl(value.notebook_url, value.notebook_id) };
+}
+function notebookScan(value: Record<string, unknown>): Record<string, unknown> | null {
+	const notebooks = summaries(value.notebooks);
+	return notebooks === null ? null : { notebooks, returned: notebooks.length, total: count(value.count) ? value.count : null };
+}
+const INTERNAL_PROJECTIONS: Record<string, (value: Record<string, unknown>) => Record<string, unknown> | null> = { studio_marker: studioMarker, notebook_scan: notebookScan };
+export function projectInternal(read: string, raw: unknown): Record<string, unknown> | null {
+	const value = decode(raw);
+	return record(value) && value.status === "success" ? INTERNAL_PROJECTIONS[read]?.(value) ?? null : null;
 }

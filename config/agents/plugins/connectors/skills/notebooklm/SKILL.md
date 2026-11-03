@@ -1,6 +1,6 @@
 ---
 name: notebooklm
-description: "Inspect NotebookLM readiness, list requested notebooks, read notebook sources and Studio status through Connectors."
+description: "Inspect NotebookLM readiness, list requested notebooks, read notebook sources and Studio status, and check or read the status of a learning pack through Connectors."
 ---
 
 # NotebookLM
@@ -42,10 +42,19 @@ Example from this skill directory:
 ../../bin/connectors run notebooklm --select profile=default notebook_list --input '{"max_results":5}'
 ```
 
+## Learning packs
+
+For a learning pack, read [learning packs](references/learning-pack.md) before
+the first command. Run `pack_check`, then `pack_status`, each with
+`--input '{"manifest":"ABSOLUTE-PATH"}'`. Report one outcome line, the Start
+Here primary action and the next action. Both are reads; creation, upload and
+generation refuse in this release.
+
 ## Capability boundaries
 
 Read [operations](references/operations.md) for the admission ledger and
-qualification gaps. This release admits seven status and read operations.
+qualification gaps. This release admits seven status and read operations
+and the two learning-pack reads.
 Renames and all other effectful workflows refuse before dispatch. Notebook
 queries can persist chat history, so they are not admitted as reads.
 

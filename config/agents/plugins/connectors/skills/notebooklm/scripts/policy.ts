@@ -52,3 +52,19 @@ export function inputFor(name: string, input: Readonly<Record<string, unknown>> 
 	if (INPUT_POLICY[name]?.(args) === false) return null;
 	return { ...args };
 }
+
+// Internal marker reads used only by learning-pack status. They reuse an
+// admitted read tool with a narrower, fixed policy and are never reachable as
+// a public operation, so the seven public policies above stay unchanged.
+export type InternalRead = "studio_marker" | "notebook_scan";
+const exactKeys = (args: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => Object.keys(args).length === keys.length && keys.every((key) => Object.hasOwn(args, key));
+const INTERNAL_READS: Record<InternalRead, { tool: string; policy: (args: Readonly<Record<string, unknown>>) => boolean }> = {
+	studio_marker: { tool: "studio_status", policy: (args) => exactKeys(args, ["notebook_id", "include_details", "limit", "offset"]) && args.include_details === true && args.limit === 20 && bounded(args.offset, 0, 100000) },
+	notebook_scan: { tool: "notebook_list", policy: (args) => exactKeys(args, ["max_results"]) && args.max_results === 20 },
+};
+export const internalTool = (read: InternalRead): string => INTERNAL_READS[read].tool;
+export function internalInputFor(read: InternalRead, args: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+	const spec = operation(INTERNAL_READS[read].tool);
+	if (!spec || spec.admission !== "admitted" || !matches(args, spec.inputSchema) || !stableTargets(args) || !INTERNAL_READS[read].policy(args)) return null;
+	return { ...args };
+}
