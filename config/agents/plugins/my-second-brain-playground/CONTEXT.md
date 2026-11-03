@@ -156,6 +156,13 @@ A Cast Member's structured return of outcome, evidence, remaining gaps, and the
 next safe action.
 _Avoid_: Handoff, summary, completion message
 
+**Closeout Packet**:
+The task-owned record that assembles one candidate's identity, outcome,
+evidence, downstream effects, unresolved work and requested decision before
+anyone is asked for a disposition. It is checked against a separately sourced
+expected context; completeness never establishes evidence truth or authority.
+_Avoid_: Closeout summary, completion report, approval request
+
 **Repair**:
 Bounded follow-up work requested after a Handback fails its acceptance gate.
 _Avoid_: Retry, redo, fix loop
