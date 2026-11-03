@@ -64,6 +64,7 @@
     "maxCrap": 0
   },
   "entry": [
+    "bin/test/test_people_pilot_extraction.py",
     "bin/system/people-pilot-extraction.py",
     "bin/system/people-pilot-cleanup.py",
     "bin/dotfiles/herdr-defaults.py",

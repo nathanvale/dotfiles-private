@@ -70,8 +70,13 @@ response. It makes no network calls and has no expected-answer input. Use
 `validate --input <prepared-unit.json> --response <response.json> --output <candidates.json>`.
 Use `prepare-team` and `validate-team` with the same arguments for the separate
 team-name request. Every unit uses both source-only calls, including units with
-no team evidence. Concatenate their validated candidate and missing arrays.
-Neither request receives the other response or an existing profile.
+no team evidence. Use `validate-pair --input <prepared-unit.json>
+--response <primary-response.json> --team-response <team-response.json>
+--output <candidates.json>` for the final combined result. It validates both
+original responses and requires matching subject-attribution states before
+concatenating their candidate and missing arrays. Separate `validate` and
+`validate-team` outputs are diagnostics, not permission to bypass that agreement
+check. Neither request receives the other response or an existing profile.
 Each output must be a new file; existing evidence is never overwritten.
 
 A prepared unit contains only `unit_id`, `speaker`, `addressee`, `source_date`
@@ -79,7 +84,14 @@ and `text`. The helper supplies field definitions, lexical offsets and every
 contiguous lexical span as unlabeled schema alternatives. Qwen selects values
 and fields; the schema couples each quote to its source offsets. It does not
 encode reference answers. Each field has either candidates or an explicit
-missing reason. The validator checks the original response's normal content,
+missing reason. Each response also assesses `subject_attribution` as
+`unambiguous` or `ambiguous`. These are source-attribution states, not canonical
+identity resolution or Jev's support, contradiction and claim-status judgments.
+An ambiguous state must quote literal uncertainty evidence and cannot contain
+any target candidate. Its stated but unassignable fields use `ambiguous`;
+unstated fields use `not_stated`. The request schema makes the ambiguous branch
+candidate-free, and the validator independently rejects conflicting candidates.
+The validator checks the original response's normal content,
 subject, speaker, date, literal spans and consistent field state before making
 a mechanical projection to flat candidates. It never recovers data from the
 reasoning channel, corrects offsets or adds omitted facts.
@@ -103,9 +115,13 @@ alone does not establish API compatibility.
 The request-local `<|think_off|>` marker is supported by the existing custom
 Qwen template. It closes thinking before schema-constrained generation without
 changing the shared template. Pin and reverify that template when the runtime
-or model changes. Source instructions and same-name identity handling remain
-separate qualification gaps; development results cannot establish held-out
-performance.
+or model changes. The attribution repair changes the request/output contract.
+Old outputs without the attribution state are rejected, not silently upgraded.
+The paired validator rejects disagreement between calls rather than salvaging a
+partial result. Quoted uncertainty is checked for literal boundaries; its meaning
+and whether Qwen selects the right branch still require independent evaluation.
+Local CLI regressions do not establish model behavior or grammar compatibility
+with a live runtime. No new model request is authorized by the repair.
 
 This revision accepts at most 96 lexical tokens per prepared passage. The
 source-span grammar grows quadratically, so longer inputs require a different
