@@ -9,6 +9,23 @@ import { attachmentOnIssue, authorGuardVerdict, deleteGuardRequests, editGuardRe
 const RENDERED = "expand=renderedBody";
 
 describe("REST requests", () => {
+	test("Jira discovery uses only the three declared GET endpoints and encodes field and token values", () => {
+		expect(restRequest("jira_rest_search", { jql: "project=EX", fields: "summary,updated", limit: 1, start: 0, cursor: "next&x=y" })).toEqual({ method: "GET", path: "/rest/api/3/search/jql?maxResults=1&jql=project%3DEX&fields=summary%2Cupdated&nextPageToken=next%26x%3Dy" });
+		expect(restRequest("jira_rest_comments", { issue_key: "EX-1", limit: 1, start: 2, cursor: "" })).toEqual({ method: "GET", path: "/rest/api/3/issue/EX-1/comment?maxResults=1&startAt=2" });
+		expect(restRequest("jira_rest_changelog", { issue_key: "EX-1", limit: 1, start: 2, cursor: "" })).toEqual({ method: "GET", path: "/rest/api/3/issue/EX-1/changelog?maxResults=1&startAt=2" });
+		expect(restRequest("jira_rest_comments", { issue_key: "EX-1/../../other", limit: 1, start: 0, cursor: "" })).toBeNull();
+	});
+	test("Confluence discovery has a fixed GET vocabulary and percent-encodes query values", () => {
+		expect(restRequest("confluence_rest_search", { cql: "space=ENG", limit: 1, start: 0, cursor: "" })).toEqual({ method: "GET", path: "/wiki/rest/api/content/search?limit=1&expand=version%2Chistory%2Cspace&cql=space%3DENG&start=0" });
+		for (const [tool, resource] of [["confluence_rest_comments", "comment"], ["confluence_rest_attachments", "attachment"], ["confluence_rest_children", "page"]]) {
+			expect(restRequest(tool as string, { page_id: "101", limit: 2, start: 2, cursor: "" })).toEqual({ method: "GET", path: `/wiki/rest/api/content/101/child/${resource}?limit=2&expand=version%2Chistory%2Cbody.storage&start=2` });
+		}
+		expect(restRequest("confluence_rest_search", { cql: "x", limit: 1, start: 0, cursor: "abc&cql=other" })?.path).toBe("/wiki/rest/api/content/search?limit=1&expand=version%2Chistory%2Cspace&cql=x&cursor=abc%26cql%3Dother");
+		expect(restRequest("confluence_rest_comments", { page_id: "101/../other", limit: 1, start: 0, cursor: "" })).toBeNull();
+		expect(restRequest("confluence_rest_search", { cql: "x", limit: 101, start: 0, cursor: "" })).toBeNull();
+		expect(restRequest("confluence_rest_search", { cql: "x", limit: 1, start: -1, cursor: "" })).toBeNull();
+		expect(restRequest("confluence_rest_search", { cql: "x", limit: 1, start: 0, cursor: "", url: "https://outside.invalid" })).toBeNull();
+	});
 	test("each tool maps to one method and path under the origin; comment writes carry the wiki body and ask for the rendered HTML", () => {
 		expect(restRequest("jira_rest_myself", {})).toEqual({ method: "GET", path: "/rest/api/2/myself" });
 		expect(restRequest("jira_rest_issue_attachments", { issue_key: "PROJ-1" })).toEqual({ method: "GET", path: "/rest/api/2/issue/PROJ-1?fields=attachment,updated" });
@@ -44,6 +61,15 @@ describe("REST requests", () => {
 
 	test("the owned schema names every REST tool with exactly its required arguments", () => {
 		expect(restSchema().map((tool) => [tool.name, tool.inputSchema?.required, Object.keys(tool.inputSchema?.properties ?? {})])).toEqual([
+			["jira_rest_search", ["jql", "fields", "limit", "start", "cursor"], ["jql", "fields", "limit", "start", "cursor"]],
+			["jira_rest_comments", ["issue_key", "limit", "start", "cursor"], ["issue_key", "limit", "start", "cursor"]],
+			["jira_rest_changelog", ["issue_key", "limit", "start", "cursor"], ["issue_key", "limit", "start", "cursor"]],
+
+			["confluence_rest_search", ["cql", "limit", "start", "cursor"], ["cql", "limit", "start", "cursor"]],
+			["confluence_rest_comments", ["page_id", "limit", "start", "cursor"], ["page_id", "limit", "start", "cursor"]],
+			["confluence_rest_attachments", ["page_id", "limit", "start", "cursor"], ["page_id", "limit", "start", "cursor"]],
+			["confluence_rest_children", ["page_id", "limit", "start", "cursor"], ["page_id", "limit", "start", "cursor"]],
+
 			["jira_rest_myself", [], []],
 			["jira_rest_issue_attachments", ["issue_key"], ["issue_key"]],
 			["jira_rest_comments_list", ["issue_key"], ["issue_key"]],

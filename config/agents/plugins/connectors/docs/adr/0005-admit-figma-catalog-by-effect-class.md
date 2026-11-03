@@ -56,6 +56,26 @@ Nathan's requirement is all 35 tools; these two remain required and unadmitted. 
 
 No operator-attested adjudication is assumed; settling by read-back evidence stays the contract.
 
+## Hosted file-session compatibility, 3 November 2026
+
+The hosted schema now advertises `create_session(fileKey, description)` and
+optional UUID `sessionId` on eligible file tools. The repair admits this exact
+setup tool alongside the existing 33 provider tools. Callers create one session
+before file reads and retain its exact UUID across task calls. Guarded writes
+accept that UUID on eligible operations and carry it into observations and
+adjudication; the preview input digest still binds it. No design-write
+capability is added and the OAuth grant owner is unchanged.
+
+The server instructions require design-to-code guidance before
+`get_design_context`, but `get_figma_skill` is absent from the hosted tool
+schema. The front door exposes that name as a bounded `resources/read` alias
+through MCPorter, the fixed registry and the existing Figma vault. Only the
+skill index and skill Markdown paths are admitted. The provider allow-list
+contains 34 exact tool names; discovery separately declares the resource alias.
+The 35-tool historical catalog and its two unadmitted writes above remain
+unchanged. This is the requested file-session compatibility repair, not an
+extension of the open write capabilities.
+
 ## Consequences
 
 - Positive: 33 of 35 catalog tools reach Codex and Claude Code through one route once installed, each write under preview, journal, and evidence-only settlement.
