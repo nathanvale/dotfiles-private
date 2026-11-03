@@ -159,7 +159,10 @@ class fake_codex_writer:
     def __enter__(self):
         self.binary.parent.mkdir(exist_ok=True)
         if not self.binary.is_symlink():
-            self.binary.symlink_to(sys.executable)  # ps reports the codex path that was executed
+            # Framework launchers re-exec as Python, losing the codex identity in ps.
+            framework_python = Path(sys.base_prefix) / "Resources/Python.app/Contents/MacOS/Python"
+            python = framework_python if framework_python.is_file() else Path(sys.executable)
+            self.binary.symlink_to(python)
         environment = {**os.environ, "CODEX_HOME": str(self.home)}
         self.process = subprocess.Popen([str(self.binary), "-c", "import time; time.sleep(120)"], env=environment)
         time.sleep(0.3)
