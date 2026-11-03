@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { causeRuleFor, type CauseCode, validateTargetEnvelope } from "../../cli-design-check/src/successor/contract.ts";
 import { REPAIR_FINDINGS, RESOLVE_HOLDS, REVIEW_ORIGINALS } from "./fixtures/expected-guidance.ts";
-import type { Fault } from "./fixtures/faults.ts";
+import { corruptHandoff, type Fault, type HandoffCorruption } from "./fixtures/faults.ts";
 import { validExpected, validPacket, writeInputs } from "./fixtures/packets.ts";
 import { BIN, binEnv, runBin } from "./fixtures/public-bin.ts";
 
@@ -32,7 +32,7 @@ function declaredCommands(): string[] {
 }
 
 /** One machine run whose single stdout envelope must satisfy the owned contract validator. */
-function contractEnvelope(args: string[], fault?: Fault, discovery = false) {
+function contractEnvelope(args: string[], fault?: Fault | readonly Fault[], discovery = false) {
   const result = runBin(args, fault);
   expect(result.stderr).toBe("");
   expect(result.stdout.endsWith("\n")).toBe(true);
@@ -121,6 +121,29 @@ test("machine check emits the strict internal fallback after serialization fails
     "repairAction", "retryable", "runId", "transactionState",
   ]);
   expect(envelope.result.runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+});
+
+// T01-02: final validation must close the handoff and resource shape exactly as the owned contract does. Each case
+// first asks the owned contract about the corrupted fallback, then requires the shipped bin to agree with it.
+const REJECTED_HANDOFFS: HandoffCorruption[] = ["extra-key", "resource-missing-kind", "resource-blank-id", "resource-extra-key"];
+
+for (const variant of REJECTED_HANDOFFS) {
+  test(`an internal fallback whose handoff has ${variant} is refused by final validation and emits nothing`, () => {
+    const valid = contractEnvelope([...CHECK, "--json"], SERIALIZER).envelope;
+    expect(validateTargetEnvelope(corruptHandoff(valid, variant), 1).findings).not.toEqual([]);
+    const result = runBin([...CHECK, "--json"], [SERIALIZER, { kind: "handoff-corrupt", variant }]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+}
+
+test("an internal fallback whose handoff carries a well-formed resource stays a valid envelope", () => {
+  const valid = contractEnvelope([...CHECK, "--json"], SERIALIZER).envelope;
+  expect(validateTargetEnvelope(corruptHandoff(valid, "resource-valid"), 1).findings).toEqual([]);
+  const { envelope, exitCode } = contractEnvelope([...CHECK, "--json"], [SERIALIZER, { kind: "handoff-corrupt", variant: "resource-valid" }]);
+  expect(exitCode).toBe(1);
+  expect(envelope.result.handoff.resource).toEqual({ id: "closeout-packet", kind: "file" });
 });
 
 test("a machine stdout transport failure emits no replacement envelope and keeps stderr empty", () => {

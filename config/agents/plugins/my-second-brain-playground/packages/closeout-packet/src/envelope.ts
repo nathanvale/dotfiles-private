@@ -65,10 +65,20 @@ function effectsValid(effects: unknown): boolean {
   );
 }
 
+const HANDOFF_KEYS = ["inspect", "owner", "reason", "resource"];
+
+/** An optional handoff resource is exactly a nonblank id and kind. */
+function resourceValid(resource: unknown): boolean {
+  return isObject(resource) && Object.keys(resource).sort().join() === "id,kind" && isNonblank(resource.id) && isNonblank(resource.kind);
+}
+
+/** The handoff is closed: owner, reason, a nonempty inspect list and an optional resource, and nothing else. */
 function handoffValid(handoff: unknown): boolean {
-  if (!isObject(handoff) || (handoff.owner !== "human" && handoff.owner !== "operator") || !isNonblank(handoff.reason)) return false;
+  if (!isObject(handoff) || !Object.keys(handoff).every((key) => HANDOFF_KEYS.includes(key))) return false;
+  if ((handoff.owner !== "human" && handoff.owner !== "operator") || !isNonblank(handoff.reason)) return false;
   const inspect = handoff.inspect;
-  return isStrings(inspect) && inspect.length > 0 && inspect.every(isNonblank);
+  if (!isStrings(inspect) || inspect.length === 0 || !inspect.every(isNonblank)) return false;
+  return !("resource" in handoff) || resourceValid(handoff.resource);
 }
 
 function guidanceValid(result: Json, row: CauseRow): boolean {

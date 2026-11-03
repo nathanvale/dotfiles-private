@@ -45,11 +45,19 @@ function keysValid(result) {
 function effectsValid(effects) {
   return isObject(effects) && Object.keys(effects).sort().join() === "completed,inventoryComplete,remaining,uncertain" && effects.inventoryComplete === true && [effects.completed, effects.remaining, effects.uncertain].every((list) => Array.isArray(list) && list.length === 0);
 }
+var HANDOFF_KEYS = ["inspect", "owner", "reason", "resource"];
+function resourceValid(resource) {
+  return isObject(resource) && Object.keys(resource).sort().join() === "id,kind" && isNonblank(resource.id) && isNonblank(resource.kind);
+}
 function handoffValid(handoff) {
-  if (!isObject(handoff) || handoff.owner !== "human" && handoff.owner !== "operator" || !isNonblank(handoff.reason))
+  if (!isObject(handoff) || !Object.keys(handoff).every((key) => HANDOFF_KEYS.includes(key)))
+    return false;
+  if (handoff.owner !== "human" && handoff.owner !== "operator" || !isNonblank(handoff.reason))
     return false;
   const inspect = handoff.inspect;
-  return isStrings(inspect) && inspect.length > 0 && inspect.every(isNonblank);
+  if (!isStrings(inspect) || inspect.length === 0 || !inspect.every(isNonblank))
+    return false;
+  return !("resource" in handoff) || resourceValid(handoff.resource);
 }
 function guidanceValid(result, row) {
   const hasNext = "nextAction" in result;

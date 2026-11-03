@@ -3,20 +3,58 @@
 // BUN_OPTIONS) and checker-adapter.ts (strict checker, through argv markers).
 import fs from "node:fs";
 
+export type HandoffCorruption = "extra-key" | "resource-missing-kind" | "resource-blank-id" | "resource-extra-key" | "resource-valid";
+
 export type Fault =
   | { kind: "serializer" }
   | { kind: "stdout-throw" }
   | { kind: "read-errno"; code: string }
-  | { kind: "closed-stdout"; ready: string; release: string };
+  | { kind: "closed-stdout"; ready: string; release: string }
+  | { kind: "handoff-corrupt"; variant: HandoffCorruption };
 
-/** The success-envelope serialization throws once, as an unserializable result would. */
+export type Envelope = { result: { handoff: Record<string, unknown> } & Record<string, unknown> } & Record<string, unknown>;
+
+const HANDOFF_CHANGES: Readonly<Record<HandoffCorruption, Record<string, unknown>>> = {
+  "extra-key": { escalate: true },
+  "resource-missing-kind": { resource: { id: "closeout-packet" } },
+  "resource-blank-id": { resource: { id: " ", kind: "file" } },
+  "resource-extra-key": { resource: { id: "closeout-packet", kind: "file", path: "/tmp" } },
+  "resource-valid": { resource: { id: "closeout-packet", kind: "file" } },
+};
+
+/** One handoff corruption applied to an envelope copy; also used by tests to ask the owned contract about it. */
+export function corruptHandoff(envelope: Envelope, variant: HandoffCorruption): Envelope {
+  return { ...envelope, result: { ...envelope.result, handoff: { ...envelope.result.handoff, ...HANDOFF_CHANGES[variant] } } };
+}
+
+function hasHandoff(value: unknown): value is Envelope {
+  const result = (value as { result?: { handoff?: unknown } } | null)?.result;
+  return typeof result?.handoff === "object" && result.handoff !== null;
+}
+
+/** The success-envelope serialization throws once, as an unserializable result would. Stacks with later faults. */
 function installSerializerFault(): void {
   const stringify = JSON.stringify;
+  let fired = false;
   JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
     const [value] = args;
-    if (typeof value === "object" && value !== null && (value as { result?: { outcome?: unknown } }).result?.outcome === "success") {
-      JSON.stringify = stringify;
+    if (!fired && typeof value === "object" && value !== null && (value as { result?: { outcome?: unknown } }).result?.outcome === "success") {
+      fired = true;
       throw new Error("fixture serializer failure");
+    }
+    return stringify(...args);
+  }) as typeof JSON.stringify;
+}
+
+/** The first handoff-bearing envelope serializes with one corrupted handoff, so final validation sees the bad bytes. */
+function installHandoffCorruptFault(variant: HandoffCorruption): void {
+  const stringify = JSON.stringify;
+  let fired = false;
+  JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+    const [value, ...rest] = args;
+    if (!fired && hasHandoff(value)) {
+      fired = true;
+      return stringify(corruptHandoff(value, variant), ...rest);
     }
     return stringify(...args);
   }) as typeof JSON.stringify;
@@ -54,5 +92,11 @@ export async function installFault(fault: Fault): Promise<void> {
   if (fault.kind === "serializer") installSerializerFault();
   else if (fault.kind === "stdout-throw") installStdoutThrowFault();
   else if (fault.kind === "read-errno") installReadErrnoFault(fault.code);
+  else if (fault.kind === "handoff-corrupt") installHandoffCorruptFault(fault.variant);
   else await installClosedStdoutFault(fault.ready, fault.release);
+}
+
+/** Installs faults in order; a later fault wraps the earlier ones. */
+export async function installFaults(faults: readonly Fault[]): Promise<void> {
+  for (const fault of faults) await installFault(fault);
 }
