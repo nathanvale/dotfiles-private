@@ -3,6 +3,99 @@
 import { randomUUID } from "crypto";
 import fs from "fs";
 
+// packages/closeout-packet/src/envelope.ts
+var CAUSES = {
+  SUCCESS_UNCHANGED: { exitCode: 0, failureClass: null, guidance: "nextAction", outcome: "success", retryable: false },
+  USAGE_INVALID_INVOCATION: { exitCode: 2, failureClass: "usage", guidance: "nextAction", outcome: "refused", retryable: false },
+  DOMAIN_PRECONDITION_UNMET: { exitCode: 3, failureClass: "domain", guidance: "nextAction", outcome: "refused", retryable: false },
+  SCHEMA_INVALID_INPUT: { exitCode: 4, failureClass: "schema", guidance: "nextAction", outcome: "refused", retryable: false },
+  TRANSIENT_NOT_STARTED: { exitCode: 75, failureClass: "transient", guidance: "nextAction", outcome: "refused", retryable: true },
+  INTERNAL_RESULT_UNCHANGED: { exitCode: 1, failureClass: "internal", guidance: "handoff", outcome: "failed", retryable: false }
+};
+var TOP_KEYS = ["availablePaths", "contractVersion", "envelopeVersion", "message", "result"];
+var RESULT_KEYS = [
+  "causeCode",
+  "commandIdentity",
+  "data",
+  "effectClass",
+  "effects",
+  "exitCode",
+  "failureClass",
+  "outcome",
+  "repairAction",
+  "retryable",
+  "runId",
+  "transactionState"
+];
+var OPTIONAL_RESULT_KEYS = ["handoff", "nextAction", "retryDelayMilliseconds"];
+var isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isNonblank = (value) => typeof value === "string" && value.trim() !== "";
+var isStrings = (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string");
+function sortedUnique(values) {
+  return values.every((value, index) => index === 0 || values[index - 1] < value);
+}
+function topValid(value, commands) {
+  const paths = value.availablePaths;
+  return Object.keys(value).sort().join() === TOP_KEYS.join() && value.contractVersion === "2.0.0" && value.envelopeVersion === 2 && isNonblank(value.message) && isStrings(paths) && sortedUnique(paths) && paths.every((path) => commands.has(path));
+}
+function keysValid(result) {
+  const keys = Object.keys(result);
+  return RESULT_KEYS.every((key) => keys.includes(key)) && keys.every((key) => RESULT_KEYS.includes(key) || OPTIONAL_RESULT_KEYS.includes(key));
+}
+function effectsValid(effects) {
+  return isObject(effects) && Object.keys(effects).sort().join() === "completed,inventoryComplete,remaining,uncertain" && effects.inventoryComplete === true && [effects.completed, effects.remaining, effects.uncertain].every((list) => Array.isArray(list) && list.length === 0);
+}
+function handoffValid(handoff) {
+  if (!isObject(handoff) || handoff.owner !== "human" && handoff.owner !== "operator" || !isNonblank(handoff.reason))
+    return false;
+  const inspect = handoff.inspect;
+  return isStrings(inspect) && inspect.length > 0 && inspect.every(isNonblank);
+}
+function guidanceValid(result, row) {
+  const hasNext = "nextAction" in result;
+  if (hasNext === "handoff" in result)
+    return false;
+  if (row.guidance === "nextAction")
+    return hasNext && isNonblank(result.nextAction);
+  return !hasNext && handoffValid(result.handoff);
+}
+function retryValid(result, row) {
+  if (result.retryable !== row.retryable)
+    return false;
+  if (!row.retryable)
+    return !("retryDelayMilliseconds" in result);
+  const delay = result.retryDelayMilliseconds;
+  return typeof delay === "number" && Number.isSafeInteger(delay) && delay > 0;
+}
+function outcomeValid(result, row) {
+  if (row.outcome === "success")
+    return result.repairAction === null;
+  return result.data === null && isNonblank(result.repairAction);
+}
+function resultValid(result, commands) {
+  if (!isObject(result) || !keysValid(result))
+    return false;
+  const row = typeof result.causeCode === "string" ? CAUSES[result.causeCode] : undefined;
+  if (row === undefined)
+    return false;
+  return typeof result.commandIdentity === "string" && commands.has(result.commandIdentity) && isNonblank(result.runId) && result.effectClass === "inspect" && result.transactionState === "unchanged" && result.outcome === row.outcome && result.failureClass === row.failureClass && result.exitCode === row.exitCode && effectsValid(result.effects) && guidanceValid(result, row) && retryValid(result, row) && outcomeValid(result, row);
+}
+function encodeEnvelope(candidate, commands) {
+  let encoded;
+  try {
+    encoded = JSON.stringify(candidate);
+  } catch {
+    return null;
+  }
+  if (typeof encoded !== "string")
+    return null;
+  const emitted = JSON.parse(encoded);
+  if (!isObject(emitted) || !topValid(emitted, commands) || !resultValid(emitted.result, commands))
+    return null;
+  return `${encoded}
+`;
+}
+
 // packages/closeout-packet/src/packet.ts
 var IDENTITY_FIELDS = ["host", "project", "task", "candidate"];
 var PACKET_FIELDS = [
@@ -253,12 +346,24 @@ var COMMANDS = [
     summary: "Show usage and options."
   }
 ];
+var DECLARED_COMMANDS = new Set(COMMANDS.map((command) => command.commandIdentity));
 var AVAILABLE_PATHS = [
   "closeout-packet.check",
   "closeout-packet.command-discovery",
   "closeout-packet.discovery",
   "closeout-packet.help"
 ];
+var NO_FOLLOW_UP = "No follow-up is required.";
+var CHECK_GUIDANCE = {
+  repair: "Repair each listed finding in the packet or expected context, then rerun closeout-packet check.",
+  resolve: "Resolve each hold, failed or missing proof and unknown with its named owner before requesting the action; this check approves nothing.",
+  review: "Complete original-record review of the inventory, evidence and grants before relying on this structural result."
+};
+function checkGuidance(data) {
+  if (data.reporting !== "complete")
+    return CHECK_GUIDANCE.repair;
+  return data.actionability === "blocked" ? CHECK_GUIDANCE.resolve : CHECK_GUIDANCE.review;
+}
 function effects() {
   return {
     completed: [],
@@ -267,7 +372,7 @@ function effects() {
     uncertain: []
   };
 }
-function success(commandIdentity, data, message) {
+function success(commandIdentity, data, message, nextAction = NO_FOLLOW_UP) {
   return {
     availablePaths: AVAILABLE_PATHS,
     contractVersion: CONTRACT_VERSION,
@@ -281,7 +386,7 @@ function success(commandIdentity, data, message) {
       effects: effects(),
       exitCode: 0,
       failureClass: null,
-      nextAction: "No follow-up is required.",
+      nextAction,
       outcome: "success",
       repairAction: null,
       retryable: false,
@@ -321,11 +426,11 @@ function retryArm(causeCode) {
   } : { retryable: false };
 }
 var SERIALIZATION_FAILURE_STATION = {
+  causeCode: "INTERNAL_RESULT_UNCHANGED",
   commandIdentity: "closeout-packet.check",
   effectClass: "inspect",
   exitCode: 1,
   failureClass: "internal",
-  causeCode: "INTERNAL_RESULT_UNCHANGED",
   handoff: {
     inspect: [
       "The packet and expected-context files named on the command line.",
@@ -339,26 +444,10 @@ var SERIALIZATION_FAILURE_STATION = {
   repairAction: "Hand the serialization failure to an operator; nothing was changed.",
   retryable: false,
   transactionState: "unchanged",
-  trigger: "The machine check result cannot be serialized."
+  trigger: "The machine check result cannot be serialized or fails final envelope validation."
 };
-var OUTPUT_EMISSION_FAILURE_STATION = {
-  commandIdentity: "closeout-packet.check",
-  effectClass: "inspect",
-  exitCode: 1,
-  failureClass: "internal",
-  causeCode: "INTERNAL_RESULT_EMISSION",
-  message: "The check output could not be emitted.",
-  nextAction: "Inspect the check output and retry closeout-packet check.",
-  outcome: "failed",
-  repairAction: "Inspect the check output stream before retrying.",
-  retryable: false,
-  transactionState: "unchanged",
-  trigger: "The check output cannot be emitted."
-};
-function guidanceArm(station) {
-  return "handoff" in station ? { handoff: station.handoff } : { nextAction: station.nextAction };
-}
-function internalFailure(station) {
+function internalFailure() {
+  const station = SERIALIZATION_FAILURE_STATION;
   return {
     availablePaths: AVAILABLE_PATHS,
     contractVersion: CONTRACT_VERSION,
@@ -372,7 +461,7 @@ function internalFailure(station) {
       effects: effects(),
       exitCode: station.exitCode,
       failureClass: station.failureClass,
-      ...guidanceArm(station),
+      handoff: station.handoff,
       outcome: station.outcome,
       repairAction: station.repairAction,
       retryable: station.retryable,
@@ -401,32 +490,36 @@ function discoveryData() {
     signalExits: { "130": "SIGINT", "143": "SIGTERM" }
   };
 }
+function successDiscoveryStation(nextAction, trigger) {
+  return {
+    causeCode: "SUCCESS_UNCHANGED",
+    commandIdentity: "closeout-packet.check",
+    effectClass: "inspect",
+    exitCode: 0,
+    failureClass: null,
+    guidance: { nextAction },
+    outcome: "success",
+    reachability: "required",
+    repairAction: null,
+    retryable: false,
+    retryDelayPolicy: { kind: "none" },
+    transactionState: "unchanged",
+    trigger,
+    unreachableRationale: null
+  };
+}
 function commandDiscovery() {
   return {
     command: COMMANDS[0],
     semantics: "possible-outcomes",
     stations: [
-      {
-        causeCode: "SUCCESS_UNCHANGED",
-        commandIdentity: "closeout-packet.check",
-        effectClass: "inspect",
-        exitCode: 0,
-        failureClass: null,
-        guidance: { nextAction: "No follow-up is required." },
-        outcome: "success",
-        reachability: "required",
-        repairAction: null,
-        retryable: false,
-        retryDelayPolicy: { kind: "none" },
-        transactionState: "unchanged",
-        trigger: "The closeout packet check completes.",
-        unreachableRationale: null
-      },
+      successDiscoveryStation(CHECK_GUIDANCE.repair, "The check completes and reports findings or an identity inconsistency."),
+      successDiscoveryStation(CHECK_GUIDANCE.resolve, "The check completes with complete reporting, but a hold, failed or missing proof, or incomplete coverage blocks the action."),
+      successDiscoveryStation(CHECK_GUIDANCE.review, "The check completes with complete reporting that structurally supports the requested action."),
       refusalDiscoveryStation("DOMAIN_PRECONDITION_UNMET", "A named packet or expected-context file cannot be read."),
       refusalDiscoveryStation("SCHEMA_INVALID_INPUT", "A named input file is not one JSON object."),
       refusalDiscoveryStation("TRANSIENT_NOT_STARTED", "A named input file read fails with EAGAIN, EBUSY, EMFILE or ENFILE before any check."),
-      failureDiscoveryStation(SERIALIZATION_FAILURE_STATION),
-      failureDiscoveryStation(OUTPUT_EMISSION_FAILURE_STATION)
+      failureDiscoveryStation()
     ]
   };
 }
@@ -451,14 +544,15 @@ function refusalDiscoveryStation(causeCode, trigger) {
   };
 }
 var REFUSAL_NEXT_ACTION = "Run closeout-packet --help and choose a listed command.";
-function failureDiscoveryStation(station) {
+function failureDiscoveryStation() {
+  const station = SERIALIZATION_FAILURE_STATION;
   return {
     causeCode: station.causeCode,
     commandIdentity: station.commandIdentity,
     effectClass: station.effectClass,
     exitCode: station.exitCode,
     failureClass: station.failureClass,
-    guidance: guidanceArm(station),
+    guidance: { handoff: station.handoff },
     outcome: station.outcome,
     reachability: "required",
     repairAction: station.repairAction,
@@ -474,81 +568,80 @@ function hasJson(argv) {
   const options = separator === -1 ? argv : argv.slice(0, separator);
   return options.includes("--json");
 }
-function serialize(value) {
-  return `${JSON.stringify(value)}
-`;
-}
-function emit(value) {
-  process.stdout.write(value);
-}
-function render(value, json, human) {
-  emit(json ? serialize(value) : `${human}
-`);
-}
-var internalFailureReported = false;
-function reportInternalFailureToStderr(failure) {
-  if (internalFailureReported)
-    return;
-  internalFailureReported = true;
-  process.stderr.write(`${failure.message}
-Repair: ${failure.result.repairAction}
-`);
-}
-function reportInternalFailure(station, json) {
-  const failure = internalFailure(station);
-  if (json) {
-    try {
-      render(failure, true, failure.message);
-    } catch {
-      reportInternalFailureToStderr(failure);
-    }
-  } else {
-    reportInternalFailureToStderr(failure);
+function writeStdout(text2) {
+  try {
+    process.stdout.write(text2);
+    return true;
+  } catch {
+    return false;
   }
+}
+function emitMachine(candidate) {
+  const primary = encodeEnvelope(candidate, DECLARED_COMMANDS);
+  const encoded = primary ?? encodeEnvelope(internalFailure(), DECLARED_COMMANDS);
+  if (encoded === null || !writeStdout(encoded))
+    return 1;
+  return primary === null ? 1 : candidate.result.exitCode;
+}
+var HUMAN_EMISSION_REPAIR = `The check output could not be emitted.
+Repair: Inspect the check output stream before retrying.
+`;
+var humanEmissionReported = false;
+function reportHumanEmissionFailure() {
+  if (humanEmissionReported)
+    return;
+  humanEmissionReported = true;
+  process.stderr.write(HUMAN_EMISSION_REPAIR);
+}
+function emitHuman(text2) {
+  if (writeStdout(text2))
+    return 0;
+  reportHumanEmissionFailure();
   return 1;
 }
+function emitSuccess(json, envelope, human) {
+  return json ? emitMachine(envelope) : emitHuman(`${human}
+`);
+}
 var asynchronousStdoutFailure = false;
-function reportAsynchronousStdoutFailure() {
+function onAsynchronousStdoutFailure(json) {
   asynchronousStdoutFailure = true;
   process.exitCode = 1;
-  reportInternalFailureToStderr(internalFailure(OUTPUT_EMISSION_FAILURE_STATION));
+  if (!json)
+    reportHumanEmissionFailure();
 }
+var HELP_DATA = {
+  commands: COMMANDS,
+  options: [
+    {
+      name: "--packet",
+      summary: "The closeout packet JSON file to check.",
+      valueName: "PATH"
+    },
+    {
+      name: "--expected",
+      summary: "The separately sourced expected context and obligation inventory JSON file.",
+      valueName: "PATH"
+    },
+    {
+      name: "--json",
+      summary: "Emit one Contract Core envelope.",
+      valueName: null
+    }
+  ],
+  summary: "Read-only closeout packet completeness check.",
+  usage: "closeout-packet check --packet PATH --expected PATH [--json]"
+};
 async function main(argv) {
   const json = hasJson(argv);
+  process.stdout.on("error", () => onAsynchronousStdoutFailure(json));
   const args = argv.filter((value) => value !== "--json");
-  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
-    render(success("closeout-packet.help", {
-      commands: COMMANDS,
-      options: [
-        {
-          name: "--packet",
-          summary: "The closeout packet JSON file to check.",
-          valueName: "PATH"
-        },
-        {
-          name: "--expected",
-          summary: "The separately sourced expected context and obligation inventory JSON file.",
-          valueName: "PATH"
-        },
-        {
-          name: "--json",
-          summary: "Emit one Contract Core envelope.",
-          valueName: null
-        }
-      ],
-      summary: "Read-only closeout packet completeness check.",
-      usage: "closeout-packet check --packet PATH --expected PATH [--json]"
-    }, "Show help."), json, "Usage: closeout-packet check --packet PATH --expected PATH [--json]");
-    return 0;
-  }
-  if (args.length === 1 && args[0] === "--discover") {
-    render(success("closeout-packet.discovery", discoveryData(), "Describe commands."), json, "Commands: check (inspect)");
-    return 0;
-  }
-  if (args[0] === "--discover-command" && args[1] === "closeout-packet.check" && args.length === 2) {
-    render(success("closeout-packet.command-discovery", commandDiscovery(), "Describe closeout-packet.check."), json, "closeout-packet.check: success/unchanged");
-    return 0;
-  }
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h"))
+    return emitSuccess(json, success("closeout-packet.help", HELP_DATA, "Show help."), "Usage: closeout-packet check --packet PATH --expected PATH [--json]");
+  if (args.length === 1 && args[0] === "--discover")
+    return emitSuccess(json, success("closeout-packet.discovery", discoveryData(), "Describe commands."), "Commands: check (inspect)");
+  if (args[0] === "--discover-command" && args[1] === "closeout-packet.check" && args.length === 2)
+    return emitSuccess(json, success("closeout-packet.command-discovery", commandDiscovery(), "Describe closeout-packet.check."), "closeout-packet.check: success/unchanged");
   if (args[0] === "check")
     return checkCommand(args.slice(1), json);
   return emitRefusal(json, "USAGE_INVALID_INVOCATION", "Choose a supported command.");
@@ -558,23 +651,11 @@ function checkCommand(rest, json) {
   if (typeof parsed === "string")
     return emitRefusal(json, "USAGE_INVALID_INVOCATION", parsed);
   const loaded = loadInputs(parsed);
-  if ("refusal" in loaded)
+  if (!loaded.ok)
     return emitRefusal(json, loaded.refusal, loaded.message);
-  process.stdout.on("error", reportAsynchronousStdoutFailure);
   const data = checkPacket(loaded.packet, loaded.expected);
-  const result = success("closeout-packet.check", data, `Closeout packet reporting is ${data.reporting} with ${data.findings.length} findings.`);
-  let output;
-  try {
-    output = json ? serialize(result) : renderHuman(data);
-  } catch {
-    return reportInternalFailure(SERIALIZATION_FAILURE_STATION, json);
-  }
-  try {
-    emit(output);
-  } catch {
-    return reportInternalFailure(OUTPUT_EMISSION_FAILURE_STATION, json);
-  }
-  return 0;
+  const result = success("closeout-packet.check", data, `Closeout packet reporting is ${data.reporting} with ${data.findings.length} findings.`, checkGuidance(data));
+  return json ? emitMachine(result) : emitHuman(renderHuman(data));
 }
 var TRANSIENT_READ_CODES = new Set(["EAGAIN", "EBUSY", "EMFILE", "ENFILE"]);
 var TRANSIENT_RETRY_DELAY_MILLISECONDS = 1000;
@@ -603,10 +684,8 @@ var REFUSALS = {
 function emitRefusal(json, causeCode, message) {
   const failure = refusal(message, causeCode);
   if (json)
-    process.stdout.write(`${JSON.stringify(failure)}
-`);
-  else
-    process.stderr.write(`${message} Repair: ${failure.result.repairAction}
+    return emitMachine(failure);
+  process.stderr.write(`${message} Repair: ${failure.result.repairAction}
 `);
   return failure.result.exitCode;
 }
@@ -633,10 +712,12 @@ function readObject(path, label) {
     const code = error.code;
     if (typeof code === "string" && TRANSIENT_READ_CODES.has(code))
       return {
+        ok: false,
         refusal: "TRANSIENT_NOT_STARTED",
         message: `The ${label} file could not be opened yet (${code}); nothing was checked.`
       };
     return {
+      ok: false,
       refusal: "DOMAIN_PRECONDITION_UNMET",
       message: `The ${label} file cannot be read.`
     };
@@ -649,25 +730,27 @@ function readObject(path, label) {
   }
   if (!isPacketRecord(value))
     return {
+      ok: false,
       refusal: "SCHEMA_INVALID_INPUT",
       message: `The ${label} file is not one JSON object.`
     };
-  return value;
+  return { ok: true, value };
 }
 function loadInputs(paths) {
   const packet = readObject(paths.packet, "packet");
-  if ("refusal" in packet && typeof packet.refusal === "string")
+  if (!packet.ok)
     return packet;
   const expected = readObject(paths.expected, "expected-context");
-  if ("refusal" in expected && typeof expected.refusal === "string")
+  if (!expected.ok)
     return expected;
-  return { packet, expected };
+  return { ok: true, packet: packet.value, expected: expected.value };
 }
 function renderHuman(data) {
   const lines = [
     `Reporting: ${data.reporting}. Actionability: ${data.actionability}.`,
     ...data.findings.map((finding) => `${finding.code} ${finding.path}: ${finding.repair}`),
     ...data.unknowns.map((unknown) => `Unknown ${unknown.path}: owner ${unknown.owner ?? "unnamed"}, next ${unknown.nextSafeStep ?? "unnamed"}.`),
+    `Next: ${checkGuidance(data)}`,
     "Structure only: this establishes no evidence truth, authority or native PASS."
   ];
   return `${lines.join(`

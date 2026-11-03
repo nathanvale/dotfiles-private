@@ -63,6 +63,17 @@ A check that completes is `SUCCESS_UNCHANGED` even when it finds gaps. Read `dat
 - `establishes` is `recorded-structure-only`. `doesNotEstablish` lists authority,
   dependency completeness, evidence truth, freshness and native PASS.
 
+`result.nextAction` follows the verdict:
+
+- reporting not complete: repair each listed finding and rerun;
+- `blocked`: resolve each hold, failed or missing proof and unknown with its
+  named owner;
+- `supports-requested-action`: complete original-record review before relying
+  on the structural result.
+
+Input JSON is data. A property such as `refusal` or `message` inside an input
+object is checked like any other field and never changes the outcome.
+
 Evidence from another candidate is reported as `REUSE_UNQUALIFIED`. Qualified
 reuse belongs to a later slice.
 
@@ -73,6 +84,15 @@ records, and judges them.
 Unreadable input refuses with `DOMAIN_PRECONDITION_UNMET` (exit 3). Input that is
 not a JSON object refuses with `SCHEMA_INVALID_INPUT` (exit 4).
 
+Every machine envelope is validated immediately before output. A result that
+cannot be serialized or validated becomes `INTERNAL_RESULT_UNCHANGED` (exit 1)
+with an operator handoff. A stdout transport failure in machine mode emits no
+replacement envelope and nothing on stderr, and exits 1; human mode reports the
+repair on stderr.
+
 ## Tests
 
-`bun test packages/closeout-packet/tests` from the plugin root.
+From the plugin root, `bun run build`, then
+`bun test packages/closeout-packet/tests`. The controls run the shipped
+`bin/closeout-packet` and its built runtime; faults reach it through the
+test-owned preload in `tests/fixtures/faults.ts`.

@@ -1,6 +1,7 @@
 // Closeout packet public entry point: strict argv, the read-only check, and the Contract Core 2.0 output path.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { encodeEnvelope } from "./envelope.ts";
 import { checkPacket, isPacketRecord, type JsonObject } from "./packet.ts";
 
 const CONTRACT_VERSION = "2.0.0";
@@ -38,12 +39,35 @@ const COMMANDS = [
   },
 ] as const;
 
+const DECLARED_COMMANDS: ReadonlySet<string> = new Set(
+  COMMANDS.map((command) => command.commandIdentity),
+);
+
 const AVAILABLE_PATHS = [
   "closeout-packet.check",
   "closeout-packet.command-discovery",
   "closeout-packet.discovery",
   "closeout-packet.help",
 ];
+
+const NO_FOLLOW_UP = "No follow-up is required.";
+
+// A completed check's guidance follows its verdict; it never implies the proposal may proceed.
+const CHECK_GUIDANCE = {
+  repair:
+    "Repair each listed finding in the packet or expected context, then rerun closeout-packet check.",
+  resolve:
+    "Resolve each hold, failed or missing proof and unknown with its named owner before requesting the action; this check approves nothing.",
+  review:
+    "Complete original-record review of the inventory, evidence and grants before relying on this structural result.",
+} as const;
+
+function checkGuidance(data: ReturnType<typeof checkPacket>): string {
+  if (data.reporting !== "complete") return CHECK_GUIDANCE.repair;
+  return data.actionability === "blocked"
+    ? CHECK_GUIDANCE.resolve
+    : CHECK_GUIDANCE.review;
+}
 
 function effects() {
   return {
@@ -54,7 +78,12 @@ function effects() {
   };
 }
 
-function success(commandIdentity: string, data: unknown, message: string) {
+function success(
+  commandIdentity: string,
+  data: unknown,
+  message: string,
+  nextAction: string = NO_FOLLOW_UP,
+) {
   return {
     availablePaths: AVAILABLE_PATHS,
     contractVersion: CONTRACT_VERSION,
@@ -68,7 +97,7 @@ function success(commandIdentity: string, data: unknown, message: string) {
       effects: effects(),
       exitCode: 0,
       failureClass: null,
-      nextAction: "No follow-up is required.",
+      nextAction,
       outcome: "success",
       repairAction: null,
       retryable: false,
@@ -117,45 +146,17 @@ function retryArm(
     : { retryable: false };
 }
 
-type InternalFailureStationBase = {
-  commandIdentity: "closeout-packet.check";
-  effectClass: "inspect";
-  exitCode: 1;
-  failureClass: "internal";
-  outcome: "failed";
-  retryable: false;
-  transactionState: "unchanged";
-};
-
 type Handoff = { inspect: string[]; owner: "operator"; reason: string };
 
-// The check ran but its result could not be serialized: attempted, nothing changed, hand off rather than retry.
-type SerializationFailureStation = InternalFailureStationBase & {
-  causeCode: "INTERNAL_RESULT_UNCHANGED";
-  handoff: Handoff;
-  message: "The machine result could not be serialized.";
-  repairAction: "Hand the serialization failure to an operator; nothing was changed.";
-  trigger: "The machine check result cannot be serialized.";
-};
-
-type OutputEmissionFailureStation = InternalFailureStationBase & {
-  causeCode: "INTERNAL_RESULT_EMISSION";
-  message: "The check output could not be emitted.";
-  nextAction: "Inspect the check output and retry closeout-packet check.";
-  repairAction: "Inspect the check output stream before retrying.";
-  trigger: "The check output cannot be emitted.";
-};
-
-type InternalFailureStation =
-  | SerializationFailureStation
-  | OutputEmissionFailureStation;
-
-const SERIALIZATION_FAILURE_STATION: SerializationFailureStation = {
+// The one application-controlled internal station: the check ran, but its machine result could not be serialized or
+// failed final envelope validation. Attempted, nothing changed, so it hands off rather than retries. A stdout transport
+// failure is not this station: it is the no-envelope exception and emits nothing further.
+const SERIALIZATION_FAILURE_STATION = {
+  causeCode: "INTERNAL_RESULT_UNCHANGED",
   commandIdentity: "closeout-packet.check",
   effectClass: "inspect",
   exitCode: 1,
   failureClass: "internal",
-  causeCode: "INTERNAL_RESULT_UNCHANGED",
   handoff: {
     inspect: [
       "The packet and expected-context files named on the command line.",
@@ -164,40 +165,19 @@ const SERIALIZATION_FAILURE_STATION: SerializationFailureStation = {
     owner: "operator",
     reason:
       "The check ran but its machine result could not be serialized; no input or state was changed.",
-  },
+  } satisfies Handoff,
   message: "The machine result could not be serialized.",
   outcome: "failed",
   repairAction:
     "Hand the serialization failure to an operator; nothing was changed.",
   retryable: false,
   transactionState: "unchanged",
-  trigger: "The machine check result cannot be serialized.",
-};
+  trigger:
+    "The machine check result cannot be serialized or fails final envelope validation.",
+} as const;
 
-const OUTPUT_EMISSION_FAILURE_STATION: OutputEmissionFailureStation = {
-  commandIdentity: "closeout-packet.check",
-  effectClass: "inspect",
-  exitCode: 1,
-  failureClass: "internal",
-  causeCode: "INTERNAL_RESULT_EMISSION",
-  message: "The check output could not be emitted.",
-  nextAction: "Inspect the check output and retry closeout-packet check.",
-  outcome: "failed",
-  repairAction: "Inspect the check output stream before retrying.",
-  retryable: false,
-  transactionState: "unchanged",
-  trigger: "The check output cannot be emitted.",
-};
-
-function guidanceArm(
-  station: InternalFailureStation,
-): { handoff: Handoff } | { nextAction: string } {
-  return "handoff" in station
-    ? { handoff: station.handoff }
-    : { nextAction: station.nextAction };
-}
-
-function internalFailure(station: InternalFailureStation) {
+function internalFailure() {
+  const station = SERIALIZATION_FAILURE_STATION;
   return {
     availablePaths: AVAILABLE_PATHS,
     contractVersion: CONTRACT_VERSION,
@@ -211,7 +191,7 @@ function internalFailure(station: InternalFailureStation) {
       effects: effects(),
       exitCode: station.exitCode,
       failureClass: station.failureClass,
-      ...guidanceArm(station),
+      handoff: station.handoff,
       outcome: station.outcome,
       repairAction: station.repairAction,
       retryable: station.retryable,
@@ -242,27 +222,42 @@ function discoveryData() {
   };
 }
 
+function successDiscoveryStation(nextAction: string, trigger: string) {
+  return {
+    causeCode: "SUCCESS_UNCHANGED",
+    commandIdentity: "closeout-packet.check",
+    effectClass: "inspect",
+    exitCode: 0,
+    failureClass: null,
+    guidance: { nextAction },
+    outcome: "success",
+    reachability: "required",
+    repairAction: null,
+    retryable: false,
+    retryDelayPolicy: { kind: "none" },
+    transactionState: "unchanged",
+    trigger,
+    unreachableRationale: null,
+  };
+}
+
 function commandDiscovery() {
   return {
     command: COMMANDS[0],
     semantics: "possible-outcomes",
     stations: [
-      {
-        causeCode: "SUCCESS_UNCHANGED",
-        commandIdentity: "closeout-packet.check",
-        effectClass: "inspect",
-        exitCode: 0,
-        failureClass: null,
-        guidance: { nextAction: "No follow-up is required." },
-        outcome: "success",
-        reachability: "required",
-        repairAction: null,
-        retryable: false,
-        retryDelayPolicy: { kind: "none" },
-        transactionState: "unchanged",
-        trigger: "The closeout packet check completes.",
-        unreachableRationale: null,
-      },
+      successDiscoveryStation(
+        CHECK_GUIDANCE.repair,
+        "The check completes and reports findings or an identity inconsistency.",
+      ),
+      successDiscoveryStation(
+        CHECK_GUIDANCE.resolve,
+        "The check completes with complete reporting, but a hold, failed or missing proof, or incomplete coverage blocks the action.",
+      ),
+      successDiscoveryStation(
+        CHECK_GUIDANCE.review,
+        "The check completes with complete reporting that structurally supports the requested action.",
+      ),
       refusalDiscoveryStation(
         "DOMAIN_PRECONDITION_UNMET",
         "A named packet or expected-context file cannot be read.",
@@ -275,8 +270,7 @@ function commandDiscovery() {
         "TRANSIENT_NOT_STARTED",
         "A named input file read fails with EAGAIN, EBUSY, EMFILE or ENFILE before any check.",
       ),
-      failureDiscoveryStation(SERIALIZATION_FAILURE_STATION),
-      failureDiscoveryStation(OUTPUT_EMISSION_FAILURE_STATION),
+      failureDiscoveryStation(),
     ],
   };
 }
@@ -313,14 +307,15 @@ function refusalDiscoveryStation(
 const REFUSAL_NEXT_ACTION =
   "Run closeout-packet --help and choose a listed command.";
 
-function failureDiscoveryStation(station: InternalFailureStation) {
+function failureDiscoveryStation() {
+  const station = SERIALIZATION_FAILURE_STATION;
   return {
     causeCode: station.causeCode,
     commandIdentity: station.commandIdentity,
     effectClass: station.effectClass,
     exitCode: station.exitCode,
     failureClass: station.failureClass,
-    guidance: guidanceArm(station),
+    guidance: { handoff: station.handoff },
     outcome: station.outcome,
     reachability: "required",
     repairAction: station.repairAction,
@@ -338,118 +333,117 @@ function hasJson(argv: string[]): boolean {
   return options.includes("--json");
 }
 
-function serialize(value: unknown): string {
-  return `${JSON.stringify(value)}\n`;
-}
-
-function emit(value: string): void {
-  process.stdout.write(value);
-}
-
-function render(value: unknown, json: boolean, human: string): void {
-  emit(json ? serialize(value) : `${human}\n`);
-}
-
-let internalFailureReported = false;
-
-function reportInternalFailureToStderr(
-  failure: ReturnType<typeof internalFailure>,
-): void {
-  if (internalFailureReported) return;
-  internalFailureReported = true;
-  process.stderr.write(
-    `${failure.message}\nRepair: ${failure.result.repairAction}\n`,
-  );
-}
-
-function reportInternalFailure(
-  station: InternalFailureStation,
-  json: boolean,
-): number {
-  const failure = internalFailure(station);
-  if (json) {
-    try {
-      render(failure, true, failure.message);
-    } catch {
-      reportInternalFailureToStderr(failure);
-    }
-  } else {
-    reportInternalFailureToStderr(failure);
+/** Writes once to stdout; false means the transport failed synchronously. */
+function writeStdout(text: string): boolean {
+  try {
+    process.stdout.write(text);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+/**
+ * Machine output: exactly one validated envelope. An unserializable or invalid candidate is replaced by the bounded
+ * internal fallback before anything is written. A stdout transport failure is the no-envelope exception: nothing goes
+ * to stderr and no replacement envelope follows.
+ */
+function emitMachine(candidate: { result: { exitCode: number } }): number {
+  const primary = encodeEnvelope(candidate, DECLARED_COMMANDS);
+  const encoded = primary ?? encodeEnvelope(internalFailure(), DECLARED_COMMANDS);
+  if (encoded === null || !writeStdout(encoded)) return 1;
+  return primary === null ? 1 : candidate.result.exitCode;
+}
+
+const HUMAN_EMISSION_REPAIR =
+  "The check output could not be emitted.\nRepair: Inspect the check output stream before retrying.\n";
+
+let humanEmissionReported = false;
+
+function reportHumanEmissionFailure(): void {
+  if (humanEmissionReported) return;
+  humanEmissionReported = true;
+  process.stderr.write(HUMAN_EMISSION_REPAIR);
+}
+
+/** Human output: the text on stdout, or the repair on stderr when stdout cannot take it. */
+function emitHuman(text: string): number {
+  if (writeStdout(text)) return 0;
+  reportHumanEmissionFailure();
   return 1;
+}
+
+function emitSuccess(
+  json: boolean,
+  envelope: ReturnType<typeof success>,
+  human: string,
+): number {
+  return json ? emitMachine(envelope) : emitHuman(`${human}\n`);
 }
 
 let asynchronousStdoutFailure = false;
 
-function reportAsynchronousStdoutFailure(): void {
+/** A late stdout error (for example EPIPE after the reader closed). Machine mode stays silent on stderr. */
+function onAsynchronousStdoutFailure(json: boolean): void {
   asynchronousStdoutFailure = true;
   process.exitCode = 1;
-  reportInternalFailureToStderr(
-    internalFailure(OUTPUT_EMISSION_FAILURE_STATION),
-  );
+  if (!json) reportHumanEmissionFailure();
 }
+
+const HELP_DATA = {
+  commands: COMMANDS,
+  options: [
+    {
+      name: "--packet",
+      summary: "The closeout packet JSON file to check.",
+      valueName: "PATH",
+    },
+    {
+      name: "--expected",
+      summary:
+        "The separately sourced expected context and obligation inventory JSON file.",
+      valueName: "PATH",
+    },
+    {
+      name: "--json",
+      summary: "Emit one Contract Core envelope.",
+      valueName: null,
+    },
+  ],
+  summary: "Read-only closeout packet completeness check.",
+  usage: "closeout-packet check --packet PATH --expected PATH [--json]",
+};
 
 async function main(argv: string[]): Promise<number> {
   const json = hasJson(argv);
+  process.stdout.on("error", () => onAsynchronousStdoutFailure(json));
   const args = argv.filter((value) => value !== "--json");
-  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
-    render(
-      success(
-        "closeout-packet.help",
-        {
-          commands: COMMANDS,
-          options: [
-            {
-              name: "--packet",
-              summary: "The closeout packet JSON file to check.",
-              valueName: "PATH",
-            },
-            {
-              name: "--expected",
-              summary:
-                "The separately sourced expected context and obligation inventory JSON file.",
-              valueName: "PATH",
-            },
-            {
-              name: "--json",
-              summary: "Emit one Contract Core envelope.",
-              valueName: null,
-            },
-          ],
-          summary: "Read-only closeout packet completeness check.",
-          usage: "closeout-packet check --packet PATH --expected PATH [--json]",
-        },
-        "Show help.",
-      ),
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h"))
+    return emitSuccess(
       json,
+      success("closeout-packet.help", HELP_DATA, "Show help."),
       "Usage: closeout-packet check --packet PATH --expected PATH [--json]",
     );
-    return 0;
-  }
-  if (args.length === 1 && args[0] === "--discover") {
-    render(
-      success("closeout-packet.discovery", discoveryData(), "Describe commands."),
+  if (args.length === 1 && args[0] === "--discover")
+    return emitSuccess(
       json,
+      success("closeout-packet.discovery", discoveryData(), "Describe commands."),
       "Commands: check (inspect)",
     );
-    return 0;
-  }
   if (
     args[0] === "--discover-command" &&
     args[1] === "closeout-packet.check" &&
     args.length === 2
-  ) {
-    render(
+  )
+    return emitSuccess(
+      json,
       success(
         "closeout-packet.command-discovery",
         commandDiscovery(),
         "Describe closeout-packet.check.",
       ),
-      json,
       "closeout-packet.check: success/unchanged",
     );
-    return 0;
-  }
   if (args[0] === "check") return checkCommand(args.slice(1), json);
   return emitRefusal(
     json,
@@ -458,33 +452,21 @@ async function main(argv: string[]): Promise<number> {
   );
 }
 
-/** The `check` route: parse, load, check, then serialize and emit through the declared stations. */
+/** The `check` route: parse, load, check, then emit through the validated output path. */
 function checkCommand(rest: string[], json: boolean): number {
   const parsed = checkArgs(rest);
   if (typeof parsed === "string")
     return emitRefusal(json, "USAGE_INVALID_INVOCATION", parsed);
   const loaded = loadInputs(parsed);
-  if ("refusal" in loaded)
-    return emitRefusal(json, loaded.refusal, loaded.message);
-  process.stdout.on("error", reportAsynchronousStdoutFailure);
+  if (!loaded.ok) return emitRefusal(json, loaded.refusal, loaded.message);
   const data = checkPacket(loaded.packet, loaded.expected);
   const result = success(
     "closeout-packet.check",
     data,
     `Closeout packet reporting is ${data.reporting} with ${data.findings.length} findings.`,
+    checkGuidance(data),
   );
-  let output: string;
-  try {
-    output = json ? serialize(result) : renderHuman(data);
-  } catch {
-    return reportInternalFailure(SERIALIZATION_FAILURE_STATION, json);
-  }
-  try {
-    emit(output);
-  } catch {
-    return reportInternalFailure(OUTPUT_EMISSION_FAILURE_STATION, json);
-  }
-  return 0;
+  return json ? emitMachine(result) : emitHuman(renderHuman(data));
 }
 
 type RefusalCause = keyof typeof REFUSALS;
@@ -524,11 +506,8 @@ function emitRefusal(
   message: string,
 ): number {
   const failure = refusal(message, causeCode);
-  if (json) process.stdout.write(`${JSON.stringify(failure)}\n`);
-  else
-    process.stderr.write(
-      `${message} Repair: ${failure.result.repairAction}\n`,
-    );
+  if (json) return emitMachine(failure);
+  process.stderr.write(`${message} Repair: ${failure.result.repairAction}\n`);
   return failure.result.exitCode;
 }
 
@@ -557,14 +536,14 @@ function checkArgs(rest: string[]): CheckPaths | string {
   return { packet, expected };
 }
 
+// Loading results are tagged by the loader itself; nothing is inferred from properties of the external JSON.
+type LoadRefusal = { ok: false; refusal: RefusalCause; message: string };
+type ReadResult = { ok: true; value: JsonObject } | LoadRefusal;
 type Loaded =
-  | { packet: JsonObject; expected: JsonObject }
-  | { refusal: RefusalCause; message: string };
+  | { ok: true; packet: JsonObject; expected: JsonObject }
+  | LoadRefusal;
 
-function readObject(
-  path: string,
-  label: string,
-): JsonObject | { refusal: RefusalCause; message: string } {
+function readObject(path: string, label: string): ReadResult {
   let raw: string;
   try {
     raw = fs.readFileSync(path, "utf8");
@@ -572,10 +551,12 @@ function readObject(
     const code = (error as { code?: unknown }).code;
     if (typeof code === "string" && TRANSIENT_READ_CODES.has(code))
       return {
+        ok: false,
         refusal: "TRANSIENT_NOT_STARTED",
         message: `The ${label} file could not be opened yet (${code}); nothing was checked.`,
       };
     return {
+      ok: false,
       refusal: "DOMAIN_PRECONDITION_UNMET",
       message: `The ${label} file cannot be read.`,
     };
@@ -588,20 +569,19 @@ function readObject(
   }
   if (!isPacketRecord(value))
     return {
+      ok: false,
       refusal: "SCHEMA_INVALID_INPUT",
       message: `The ${label} file is not one JSON object.`,
     };
-  return value;
+  return { ok: true, value };
 }
 
 function loadInputs(paths: CheckPaths): Loaded {
   const packet = readObject(paths.packet, "packet");
-  if ("refusal" in packet && typeof packet.refusal === "string")
-    return packet as Loaded;
+  if (!packet.ok) return packet;
   const expected = readObject(paths.expected, "expected-context");
-  if ("refusal" in expected && typeof expected.refusal === "string")
-    return expected as Loaded;
-  return { packet, expected };
+  if (!expected.ok) return expected;
+  return { ok: true, packet: packet.value, expected: expected.value };
 }
 
 function renderHuman(data: ReturnType<typeof checkPacket>): string {
@@ -614,6 +594,7 @@ function renderHuman(data: ReturnType<typeof checkPacket>): string {
       (unknown) =>
         `Unknown ${unknown.path}: owner ${unknown.owner ?? "unnamed"}, next ${unknown.nextSafeStep ?? "unnamed"}.`,
     ),
+    `Next: ${checkGuidance(data)}`,
     "Structure only: this establishes no evidence truth, authority or native PASS.",
   ];
   return `${lines.join("\n")}\n`;
