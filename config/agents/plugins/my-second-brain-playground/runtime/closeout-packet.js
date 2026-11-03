@@ -207,14 +207,22 @@ function checkEvidenceItem(item, path, candidate, findings) {
 }
 function checkEvidence(packet, obligations, candidate, findings) {
   const items = records(packet.evidence);
-  if (items === null || items.length === 0) {
+  if (items === null || items.length === 0 && obligations.length > 0) {
     findings.add("FIELD_MISSING", "evidence", "Account for every obligation.");
     return [];
   }
   for (const [index, item] of items.entries()) {
     checkEvidenceItem(item, `evidence[${index}]`, candidate, findings);
   }
-  const accounted = new Set(items.map((item) => text(item.obligation)));
+  const accounted = new Set;
+  for (const [index, item] of items.entries()) {
+    const obligation = text(item.obligation);
+    if (obligation === null)
+      continue;
+    if (accounted.has(obligation))
+      findings.add("EVIDENCE_BINDING_MISSING", `evidence[${index}].obligation`, "Record exactly one evidence outcome per obligation; reconcile duplicate entries.");
+    accounted.add(obligation);
+  }
   for (const obligation of obligations) {
     if (!accounted.has(obligation))
       findings.add("OBLIGATION_UNACCOUNTED", `evidence:${obligation}`, "Record its evidence outcome, explicit missing proof or justified non-applicability.");
@@ -296,7 +304,7 @@ function checkPacket(packet, expected) {
     const covered = checkDownstream(packet, findings, unknowns);
     const holds = checkUnresolved(packet, findings);
     checkDecision(packet, findings);
-    const failedProof = items.some((item) => BLOCKING_STATUSES.has(String(item.status)));
+    const failedProof = items.some((item) => typeof item.status === "string" && BLOCKING_STATUSES.has(item.status));
     blocked = !covered || holds > 0 || failedProof;
   }
   const sorted = [...findings.list].sort((a, b) => `${a.code}|${a.path}`.localeCompare(`${b.code}|${b.path}`));
@@ -418,7 +426,7 @@ function refusal(message, causeCode) {
       effects: effects(),
       exitCode: row.exitCode,
       failureClass: row.failureClass,
-      nextAction: REFUSAL_NEXT_ACTION,
+      nextAction: row.nextAction,
       outcome: "refused",
       repairAction: row.repairAction,
       ...retryArm(causeCode),
@@ -540,7 +548,7 @@ function refusalDiscoveryStation(causeCode, trigger) {
     effectClass: "inspect",
     exitCode: row.exitCode,
     failureClass: row.failureClass,
-    guidance: { nextAction: REFUSAL_NEXT_ACTION },
+    guidance: { nextAction: row.nextAction },
     outcome: "refused",
     reachability: "required",
     repairAction: row.repairAction,
@@ -551,7 +559,6 @@ function refusalDiscoveryStation(causeCode, trigger) {
     unreachableRationale: null
   };
 }
-var REFUSAL_NEXT_ACTION = "Run closeout-packet --help and choose a listed command.";
 function failureDiscoveryStation() {
   const station = SERIALIZATION_FAILURE_STATION;
   return {
@@ -671,21 +678,25 @@ var REFUSALS = {
   TRANSIENT_NOT_STARTED: {
     exitCode: 75,
     failureClass: "transient",
+    nextAction: "Retry the same command after retryDelayMilliseconds.",
     repairAction: "Retry after the stated delay; the input file could not be opened yet."
   },
   DOMAIN_PRECONDITION_UNMET: {
     exitCode: 3,
     failureClass: "domain",
+    nextAction: "Name readable packet and expected-context files, then rerun closeout-packet check.",
     repairAction: "Name readable packet and expected-context files."
   },
   SCHEMA_INVALID_INPUT: {
     exitCode: 4,
     failureClass: "schema",
+    nextAction: "Supply each input as one JSON object, then rerun closeout-packet check.",
     repairAction: "Supply each input as one JSON object."
   },
   USAGE_INVALID_INVOCATION: {
     exitCode: 2,
     failureClass: "usage",
+    nextAction: "Run closeout-packet --help and choose a listed command.",
     repairAction: "Choose one supported command and retry."
   }
 };

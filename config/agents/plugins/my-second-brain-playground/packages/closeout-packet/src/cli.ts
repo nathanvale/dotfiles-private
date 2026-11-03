@@ -125,7 +125,7 @@ function refusal(message: string, causeCode: RefusalCause) {
       effects: effects(),
       exitCode: row.exitCode,
       failureClass: row.failureClass,
-      nextAction: REFUSAL_NEXT_ACTION,
+      nextAction: row.nextAction,
       outcome: "refused",
       repairAction: row.repairAction,
       ...retryArm(causeCode),
@@ -290,7 +290,7 @@ function refusalDiscoveryStation(
     effectClass: "inspect",
     exitCode: row.exitCode,
     failureClass: row.failureClass,
-    guidance: { nextAction: REFUSAL_NEXT_ACTION },
+    guidance: { nextAction: row.nextAction },
     outcome: "refused",
     reachability: "required",
     repairAction: row.repairAction,
@@ -303,9 +303,6 @@ function refusalDiscoveryStation(
     unreachableRationale: null,
   };
 }
-
-const REFUSAL_NEXT_ACTION =
-  "Run closeout-packet --help and choose a listed command.";
 
 function failureDiscoveryStation() {
   const station = SERIALIZATION_FAILURE_STATION;
@@ -480,22 +477,26 @@ const REFUSALS = {
   TRANSIENT_NOT_STARTED: {
     exitCode: 75,
     failureClass: "transient",
+    nextAction: "Retry the same command after retryDelayMilliseconds.",
     repairAction:
       "Retry after the stated delay; the input file could not be opened yet.",
   },
   DOMAIN_PRECONDITION_UNMET: {
     exitCode: 3,
     failureClass: "domain",
+    nextAction: "Name readable packet and expected-context files, then rerun closeout-packet check.",
     repairAction: "Name readable packet and expected-context files.",
   },
   SCHEMA_INVALID_INPUT: {
     exitCode: 4,
     failureClass: "schema",
+    nextAction: "Supply each input as one JSON object, then rerun closeout-packet check.",
     repairAction: "Supply each input as one JSON object.",
   },
   USAGE_INVALID_INVOCATION: {
     exitCode: 2,
     failureClass: "usage",
+    nextAction: "Run closeout-packet --help and choose a listed command.",
     repairAction: "Choose one supported command and retry.",
   },
 } as const;

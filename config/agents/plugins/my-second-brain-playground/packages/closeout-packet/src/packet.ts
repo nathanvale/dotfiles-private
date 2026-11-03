@@ -205,14 +205,25 @@ function checkEvidence(
   findings: Findings,
 ): JsonObject[] {
   const items = records(packet.evidence);
-  if (items === null || items.length === 0) {
+  if (items === null || (items.length === 0 && obligations.length > 0)) {
     findings.add("FIELD_MISSING", "evidence", "Account for every obligation.");
     return [];
   }
   for (const [index, item] of items.entries()) {
     checkEvidenceItem(item, `evidence[${index}]`, candidate, findings);
   }
-  const accounted = new Set(items.map((item) => text(item.obligation)));
+  const accounted = new Set<string>();
+  for (const [index, item] of items.entries()) {
+    const obligation = text(item.obligation);
+    if (obligation === null) continue;
+    if (accounted.has(obligation))
+      findings.add(
+        "EVIDENCE_BINDING_MISSING",
+        `evidence[${index}].obligation`,
+        "Record exactly one evidence outcome per obligation; reconcile duplicate entries.",
+      );
+    accounted.add(obligation);
+  }
   for (const obligation of obligations) {
     if (!accounted.has(obligation))
       findings.add(
@@ -328,7 +339,7 @@ export function checkPacket(packet: JsonObject, expected: JsonObject): CheckResu
     const covered = checkDownstream(packet, findings, unknowns);
     const holds = checkUnresolved(packet, findings);
     checkDecision(packet, findings);
-    const failedProof = items.some((item) => BLOCKING_STATUSES.has(String(item.status)));
+    const failedProof = items.some((item) => typeof item.status === "string" && BLOCKING_STATUSES.has(item.status));
     blocked = !covered || holds > 0 || failedProof;
   }
   const sorted = [...findings.list].sort((a, b) =>

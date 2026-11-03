@@ -268,3 +268,21 @@ for (const code of ["EACCES", "ENOENT"]) {
     expect("retryDelayMilliseconds" in envelope.result).toBe(false);
   });
 }
+
+
+// Independent oracle: user recovery actions, not values imported from the production refusal table.
+test("each input refusal and its discovery station name the cause-specific recovery action", () => {
+  const discovery = contractEnvelope(["--discover-command", "closeout-packet.check", "--json"]).envelope;
+  const cases: [Fault, string, string][] = [
+    [{ kind: "read-errno", code: "ENOENT" }, "DOMAIN_PRECONDITION_UNMET", "Name readable packet and expected-context files, then rerun closeout-packet check."],
+    [{ kind: "read-errno", code: "EMFILE" }, "TRANSIENT_NOT_STARTED", "Retry the same command after retryDelayMilliseconds."],
+  ];
+  for (const [fault, cause, nextAction] of cases) {
+    const { envelope } = contractEnvelope([...CHECK, "--json"], fault);
+    expect(envelope.result.causeCode).toBe(cause);
+    expect(envelope.result.nextAction).toBe(nextAction);
+    expect(discovery.result.data.stations.find((station: { causeCode: string }) => station.causeCode === cause).guidance.nextAction).toBe(nextAction);
+  }
+  expect(discovery.result.data.stations.find((station: { causeCode: string }) => station.causeCode === "SCHEMA_INVALID_INPUT").guidance.nextAction).toBe("Supply each input as one JSON object, then rerun closeout-packet check.");
+  expect(contractEnvelope(["--json"]).envelope.result.nextAction).toBe("Run closeout-packet --help and choose a listed command.");
+});

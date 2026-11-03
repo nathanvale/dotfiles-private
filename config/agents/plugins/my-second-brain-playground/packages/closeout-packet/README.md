@@ -81,8 +81,10 @@ A structural `complete` never replaces original-record review. That review
 opens the inventory sources, the evidence pointers and the original grant
 records, and judges them.
 
-Unreadable input refuses with `DOMAIN_PRECONDITION_UNMET` (exit 3). Input that is
-not a JSON object refuses with `SCHEMA_INVALID_INPUT` (exit 4).
+Unreadable input refuses with `DOMAIN_PRECONDITION_UNMET` (exit 3). A read that
+fails with `EAGAIN`, `EBUSY`, `EMFILE` or `ENFILE` refuses with
+`TRANSIENT_NOT_STARTED` (exit 75). Retry after `retryDelayMilliseconds`.
+Input that is not a JSON object refuses with `SCHEMA_INVALID_INPUT` (exit 4).
 
 Every machine envelope is validated immediately before output. A result that
 cannot be serialized or validated becomes `INTERNAL_RESULT_UNCHANGED` (exit 1)

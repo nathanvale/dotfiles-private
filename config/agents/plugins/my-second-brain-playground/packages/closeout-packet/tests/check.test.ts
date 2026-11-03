@@ -214,5 +214,61 @@ test("S1 a packet that is not JSON is a schema refusal with no data", () => {
   const result = runBin(checkArgs(written));
   expect(result.exitCode).toBe(4);
   expect(result.stderr).toBe("");
-  expect(JSON.parse(result.stdout).result).toMatchObject({ causeCode: "SCHEMA_INVALID_INPUT", data: null, outcome: "refused", failureClass: "schema" });
+  expect(JSON.parse(result.stdout).result).toMatchObject({ causeCode: "SCHEMA_INVALID_INPUT", data: null, outcome: "refused", failureClass: "schema", nextAction: "Supply each input as one JSON object, then rerun closeout-packet check." });
 });
+
+
+test("duplicate evidence for one obligation is incomplete even when each row is valid", () => {
+  const packet = validPacket();
+  (packet.evidence as Json[]).push({ obligation: "O1", status: "not-applicable", justification: "claimed exception" });
+  const envelope = checkResult(packet, validExpected());
+  expect(codes(envelope.result.data)).toEqual(["EVIDENCE_BINDING_MISSING@evidence[3].obligation"]);
+  expect(envelope.result.data.reporting).toBe("incomplete");
+  expect(envelope.result.data.actionability).toBe("not-assessed");
+  expect(envelope.result.nextAction).toBe(REPAIR_FINDINGS);
+});
+
+test("a bound empty obligation inventory permits empty evidence", () => {
+  const packet = validPacket();
+  packet.evidence = [];
+  const expected = validExpected();
+  (expected.inventory as Json).obligations = [];
+  const envelope = checkResult(packet, expected);
+  expect(codes(envelope.result.data)).toEqual([]);
+  expect(envelope.result.data.reporting).toBe("complete");
+  expect(envelope.result.data.actionability).toBe("supports-requested-action");
+  expect(envelope.result.nextAction).toBe(REVIEW_ORIGINALS);
+});
+
+test("empty evidence cannot account for a nonempty obligation inventory", () => {
+  const packet = validPacket();
+  packet.evidence = [];
+  const data = check(packet, validExpected());
+  expect(codes(data)).toEqual(["FIELD_MISSING@evidence"]);
+  expect(data.reporting).toBe("incomplete");
+  expect(data.actionability).toBe("not-assessed");
+});
+
+for (const status of [{ toString: null }, null, 7, ["failed"]]) {
+  test(`a malformed evidence status ${JSON.stringify(status)} returns findings without a crash`, () => {
+    const packet = validPacket();
+    ((packet.evidence as Json[])[0] as Json).status = status;
+    const envelope = checkResult(packet, validExpected());
+    expect(codes(envelope.result.data)).toEqual(["EVIDENCE_BINDING_MISSING@evidence[0]"]);
+    expect(envelope.result.data.reporting).toBe("incomplete");
+    expect(envelope.result.data.actionability).toBe("not-assessed");
+    expect(envelope.result.nextAction).toBe(REPAIR_FINDINGS);
+  });
+}
+
+for (const status of ["failed", "missing"]) {
+  test(`a ${status} proof item is complete reporting but blocked`, () => {
+    const packet = validPacket();
+    ((packet.evidence as Json[])[0] as Json).status = status;
+    const envelope = checkResult(packet, validExpected());
+    expect(codes(envelope.result.data)).toEqual([]);
+    expect(envelope.result.data.reporting).toBe("complete");
+    expect(envelope.result.data.actionability).toBe("blocked");
+    expect(envelope.result.nextAction).toBe(RESOLVE_HOLDS);
+  });
+}
