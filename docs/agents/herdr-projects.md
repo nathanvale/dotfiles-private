@@ -86,6 +86,11 @@ selected coordinator and qualify source, installation and activation separately.
   existing history. Keep superseded text outside the current contract.
 - Choose proportionate existing checks before implementation. Prove any missing
   check rejects corrupted real input through its actual validator.
+- Google Cloud: use only existing authorised non-interactive routes, such as
+  CI service accounts or retained artifacts; a route is unproven until an
+  actual read succeeds. Nathan has no interactive Google Cloud access, so
+  sign-in, reauthentication, console or consent requests are a dead end:
+  record the missing mechanism with its owner instead.
 - Keep models, review, attempts, limits and merge choices in supported settings.
   Read back effective values and provenance before dispatch.
 - Verify the workflow enforces the Stop boundary. Review PASS grants no
