@@ -272,3 +272,26 @@ for (const status of ["failed", "missing"]) {
     expect(envelope.result.nextAction).toBe(RESOLVE_HOLDS);
   });
 }
+
+
+for (const populated of [false, true]) {
+  for (const status of ["fresh", "not-applicable"]) {
+    test(`a ${status} evidence obligation outside ${populated ? "a populated" : "an empty"} bound inventory is incomplete`, () => {
+      const packet = validPacket();
+      const items = packet.evidence as Json[];
+      packet.evidence = populated ? items.slice(0, 2) : items.slice(0, 1);
+      const unexpected = (packet.evidence as Json[])[populated ? 1 : 0] as Json;
+      unexpected.status = status;
+      if (status === "not-applicable") unexpected.justification = "declared exception";
+      const expected = validExpected();
+      (expected.inventory as Json).obligations = populated ? ["O1"] : [];
+      const envelope = checkResult(packet, expected);
+      expect(codes(envelope.result.data)).toEqual([
+        `EVIDENCE_BINDING_MISSING@evidence[${populated ? 1 : 0}].obligation`,
+      ]);
+      expect(envelope.result.data.reporting).toBe("incomplete");
+      expect(envelope.result.data.actionability).toBe("not-assessed");
+      expect(envelope.result.nextAction).toBe(REPAIR_FINDINGS);
+    });
+  }
+}

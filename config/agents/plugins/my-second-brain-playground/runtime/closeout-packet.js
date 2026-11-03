@@ -191,9 +191,10 @@ function checkOutcome(packet, findings) {
 function inventoryOf(expected, findings) {
   const inventory = isRecord(expected.inventory) ? expected.inventory : {};
   const obligations = texts(inventory.obligations);
-  if (text(inventory.source) === null || text(inventory.revision) === null || inventory.complete !== true || obligations === null)
+  const bound = text(inventory.source) !== null && text(inventory.revision) !== null && inventory.complete === true && obligations !== null;
+  if (!bound)
     findings.add("INVENTORY_UNBOUND", "expected.inventory", "Bind a complete obligation inventory to its source and revision; a partial inventory remains a coverage gap.");
-  return obligations ?? [];
+  return { obligations: obligations ?? [], bound };
 }
 function checkEvidenceItem(item, path, candidate, findings) {
   const status = text(item.status);
@@ -205,7 +206,8 @@ function checkEvidenceItem(item, path, candidate, findings) {
   if (status !== "not-applicable" && source !== null && candidate !== null && source !== candidate)
     findings.add("REUSE_UNQUALIFIED", path, "Cross-candidate reuse stays incomplete until its applicability assessment is qualified (T02).");
 }
-function checkEvidence(packet, obligations, candidate, findings) {
+function checkEvidence(packet, inventory, candidate, findings) {
+  const { obligations, bound } = inventory;
   const items = records(packet.evidence);
   if (items === null || items.length === 0 && obligations.length > 0) {
     findings.add("FIELD_MISSING", "evidence", "Account for every obligation.");
@@ -219,6 +221,8 @@ function checkEvidence(packet, obligations, candidate, findings) {
     const obligation = text(item.obligation);
     if (obligation === null)
       continue;
+    if (bound && !obligations.includes(obligation))
+      findings.add("EVIDENCE_BINDING_MISSING", `evidence[${index}].obligation`, "Reconcile this evidence obligation with the independently bound inventory.");
     if (accounted.has(obligation))
       findings.add("EVIDENCE_BINDING_MISSING", `evidence[${index}].obligation`, "Record exactly one evidence outcome per obligation; reconcile duplicate entries.");
     accounted.add(obligation);
@@ -294,13 +298,13 @@ function checkPacket(packet, expected) {
   const findings = new Findings;
   const unknowns = [];
   const expectedIdentity = checkExpectedIdentity(expected, findings);
-  const obligations = inventoryOf(expected, findings);
+  const inventory = inventoryOf(expected, findings);
   let blocked = true;
   if (presentFields(packet, findings)) {
     checkIdentity(packet, expectedIdentity, findings);
     checkOutcome(packet, findings);
     const candidate = text(packet.identity.candidate);
-    const items = checkEvidence(packet, obligations, candidate, findings);
+    const items = checkEvidence(packet, inventory, candidate, findings);
     const covered = checkDownstream(packet, findings, unknowns);
     const holds = checkUnresolved(packet, findings);
     checkDecision(packet, findings);
