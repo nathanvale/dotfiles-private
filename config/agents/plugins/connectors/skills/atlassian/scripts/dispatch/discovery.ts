@@ -136,19 +136,30 @@ function jiraCoverage(value: unknown, request: RestRequest, unknown: ReadCoverag
 	if (typeof value.isLast === "boolean" && value.isLast !== terminal) return result;
 	if (!terminal && list.length === 0) return result;
 	const nextContinuation = terminal ? null : encodePosition(scope, { start: start + list.length, cursor: "" });
+	if (!terminal && nextContinuation === null) return result;
 	return { ...result, terminal, nextContinuation, basis: "source-total" };
 }
 
-function encodePosition(scope: string, position: Position): string {
-	return Buffer.from(JSON.stringify({ version: 1, scope, ...position })).toString("base64url");
+function encodePosition(scope: string, position: Position): string | null {
+	const continuation = Buffer.from(JSON.stringify({ version: 1, scope, ...position })).toString("base64url");
+	return token(continuation) ? continuation : null;
 }
 
 function jiraSearchCoverage(value: Record<string, unknown>, result: ReadCoverage, scope: string, request: RestRequest): ReadCoverage {
 	const cursor = value.nextPageToken;
-	if (cursor && cursor === new URL(request.path, "https://source.invalid").searchParams.get("nextPageToken")) return result;
-	if (value.isLast === true && !cursor) return { ...result, terminal: true, basis: "source-terminal-flag" };
-	if (value.isLast !== true && token(cursor) && cursor.length > 0 && (result.returned ?? 0) > 0) return { ...result, terminal: false, nextContinuation: encodePosition(scope, { start: 0, cursor }), basis: "source-page-token" };
-	return result;
+	if (cursor === undefined || cursor === null || cursor === "") return value.isLast === true ? { ...result, terminal: true, basis: "source-terminal-flag" } : result;
+	if (cursor === new URL(request.path, "https://source.invalid").searchParams.get("nextPageToken")) return result;
+	if (value.isLast === true || !token(cursor) || (result.returned ?? 0) === 0) return result;
+	const nextContinuation = encodePosition(scope, { start: 0, cursor });
+	return nextContinuation === null ? result : { ...result, terminal: false, nextContinuation, basis: "source-page-token" };
+}
+
+function validCollectionPosition(value: Record<string, unknown>, count: number, request: RestRequest): boolean {
+	if ("size" in value && (!offset(value.size) || value.size !== count)) return false;
+	if (!("start" in value)) return true;
+	if (!offset(value.start)) return false;
+	const requestedStart = new URL(request.path, "https://source.invalid").searchParams.get("start");
+	return requestedStart === null || value.start === Number(requestedStart);
 }
 
 function collectionCoverage(data: unknown, request: RestRequest, origin: string, scope: string): ReadCoverage {
@@ -157,13 +168,14 @@ function collectionCoverage(data: unknown, request: RestRequest, origin: string,
 	const unknown: ReadCoverage = { returned: rows?.length ?? null, terminal: null, nextContinuation: null, basis: "unusable-source-pagination", excluded: ["snapshot-consistency", "item-bodies", "nested-replies", "attachment-bytes", "business-acceptance"] };
 	if (request.path.startsWith("/rest/api/3/")) return jiraCoverage(value, request, unknown, scope);
 	if (!rows || !object(value) || !object(value._links)) return unknown;
-	if (typeof value.size === "number" && value.size !== rows.length) return unknown;
+	if (!validCollectionPosition(value, rows.length, request)) return unknown;
 	const next = value._links.next;
 	if (next === undefined || next === "") return { ...unknown, terminal: true, basis: "source-terminal-link-set" };
 	if (typeof next !== "string" || rows.length === 0) return unknown;
 	const position = nextPosition(next, origin, request);
 	if (!position) return unknown;
 	const nextContinuation = encodePosition(scope, position);
+	if (nextContinuation === null) return unknown;
 	return { ...unknown, terminal: false, nextContinuation, basis: "source-next-link" };
 }
 

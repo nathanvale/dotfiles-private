@@ -122,6 +122,26 @@ describe("packaged Atlassian REST write routing with a substituted REST Provider
 });
 
 describe("packaged Confluence discovery", () => {
+	test("supplied Confluence page metadata must match the requested page and returned rows", async () => {
+		const machine = prepare({});
+		const input = { pageId: "101", maxResults: 1 };
+		writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ confluence_rest_comments: { before: ok({ results: [{ id: "201" }], start: 0, size: 1, _links: { next: "/wiki/rest/api/content/101/child/comment?start=1" } }) } }));
+		const firstRun = await run("page.comments.scan", input, []);
+		expect([firstRun.code, firstRun.stderr]).toEqual([0, ""]);
+		const continuation = envelope(firstRun).result.data?.read?.coverage.nextContinuation;
+		expect(typeof continuation).toBe("string");
+		for (const metadata of [{ start: 0, size: 1 }, { start: "1", size: 1 }, { start: 1, size: "1" }, { start: 1, size: null }, { start: 1, size: 0 }, { start: 1, size: 1.5 }]) {
+			writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ confluence_rest_comments: { before: ok({ results: [{ id: "202" }], ...metadata, _links: {} }) } }));
+			const result = await run("page.comments.scan", { ...input, continuation }, []);
+			expect([result.code, result.stderr]).toEqual([0, ""]);
+			expect(envelope(result).result.data?.read?.coverage).toMatchObject({ returned: 1, terminal: null, nextContinuation: null });
+		}
+		writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ confluence_rest_comments: { before: ok({ results: [{ id: "202" }], start: 1, size: 1, _links: {} }) } }));
+		const lastRun = await run("page.comments.scan", { ...input, continuation }, []);
+		expect([lastRun.code, lastRun.stderr]).toEqual([0, ""]);
+		expect(envelope(lastRun).result.data?.read?.coverage).toMatchObject({ returned: 1, terminal: true, nextContinuation: null });
+	});
+
 	test("a bounded scan resumes across processes and proves the terminal page without losing the source reply", async () => {
 		const machine = prepare({ confluence_rest_search: { before: ok({ results: [{ id: "101" }], size: 1, _links: { next: "/wiki/rest/api/content/search?cursor=page2" } }) } });
 		const input = { cql: "type=page AND space=ENG", maxResults: 1 };
@@ -133,7 +153,7 @@ describe("packaged Confluence discovery", () => {
 		expect(first?.read?.coverage).toMatchObject({ returned: 1, terminal: false, basis: "source-next-link" });
 		const continuation = first?.read?.coverage.nextContinuation;
 		expect(typeof continuation).toBe("string");
-		writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ confluence_rest_search: { before: ok({ results: [{ id: "102" }], size: 1, _links: {} }) } }));
+		writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ confluence_rest_search: { before: ok({ results: [{ id: "102" }], start: 1, size: 1, _links: {} }) } }));
 		const secondRun = await run("page.scan", { ...input, continuation }, []);
 		expect([secondRun.code, secondRun.stderr]).toEqual([0, ""]);
 		const second = envelope(secondRun).result.data;
@@ -164,7 +184,46 @@ describe("packaged Confluence discovery", () => {
 	});
 });
 
+describe("packaged discovery continuation bounds", () => {
+	for (const row of [
+		{ operation: "issue.scan", tool: "jira_rest_search", input: { jql: "project=EX", maxResults: 1 }, page: (cursor: string) => ({ issues: [{ id: "101" }], isLast: false, nextPageToken: cursor }), last: { issues: [{ id: "102" }], isLast: true } },
+		{ operation: "page.scan", tool: "confluence_rest_search", input: { cql: "type=page", maxResults: 1 }, page: (cursor: string) => ({ results: [{ id: "101" }], size: 1, _links: { next: `/wiki/rest/api/content/search?cursor=${encodeURIComponent(cursor)}` } }), last: { results: [{ id: "102" }], size: 1, _links: {} } },
+	]) {
+		test(`${row.operation} resumes an encoded continuation at the accepted boundary and leaves larger positions unknown`, async () => {
+			const cursor = "x".repeat(12_178);
+			const machine = prepare({ [row.tool]: { before: ok(row.page(cursor)) } });
+			const firstRun = await run(row.operation, row.input, []);
+			expect([firstRun.code, firstRun.stderr]).toEqual([0, ""]);
+			const first = envelope(firstRun).result.data?.read?.coverage;
+			expect(first).toMatchObject({ returned: 1, terminal: false });
+			expect(first?.nextContinuation?.length).toBe(16_384);
+			writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ [row.tool]: { before: ok(row.last) } }));
+			const secondRun = await run(row.operation, { ...row.input, continuation: first?.nextContinuation }, []);
+			expect([secondRun.code, secondRun.stderr]).toEqual([0, ""]);
+			expect(envelope(secondRun).result.data?.read?.coverage).toMatchObject({ returned: 1, terminal: true, nextContinuation: null });
+			expect(calls(machine)).toHaveLength(2);
+			expect(calls(machine)[1]?.args).toMatchObject({ cursor });
+			for (const sourceCursor of ["x".repeat(12_179), "x".repeat(12_288), "x".repeat(16_384), "é".repeat(8_192), '"'.repeat(8_192)]) {
+				writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ [row.tool]: { before: ok(row.page(sourceCursor)) } }));
+				const result = await run(row.operation, row.input, []);
+				expect([result.code, result.stderr]).toEqual([0, ""]);
+				expect(envelope(result).result.data?.read?.coverage).toMatchObject({ returned: 1, terminal: null, nextContinuation: null });
+			}
+		});
+	}
+});
+
 describe("packaged Jira discovery", () => {
+	test("malformed falsy Jira tokens cannot certify a terminal page", async () => {
+		const machine = prepare({});
+		for (const nextPageToken of [0, false]) {
+			writeFileSync(path.join(machine.root, "rest-responses.json"), JSON.stringify({ jira_rest_search: { before: ok({ issues: [{ id: "101" }], isLast: true, nextPageToken }) } }));
+			const result = await run("issue.scan", { jql: "project=EX", maxResults: 1 }, []);
+			expect([result.code, result.stderr]).toEqual([0, ""]);
+			expect(envelope(result).result.data?.read?.coverage).toMatchObject({ returned: 1, terminal: null, nextContinuation: null });
+		}
+	});
+
 	for (const row of [
 		{ operation: "issue.scan", tool: "jira_rest_search", input: { jql: "project=EX ORDER BY key", fields: ["summary", "updated"], maxResults: 1 }, first: { issues: [{ id: "101" }], isLast: false, nextPageToken: "page2" }, last: { issues: [{ id: "102" }], isLast: true }, position: { start: 0, cursor: "page2" } },
 		{ operation: "issue.comments.scan", tool: "jira_rest_comments", input: { issueKey: "EX-1", maxResults: 1 }, first: { comments: [{ id: "201" }], startAt: 0, total: 2 }, last: { comments: [{ id: "202" }], startAt: 1, total: 2 }, position: { start: 1, cursor: "" } },
