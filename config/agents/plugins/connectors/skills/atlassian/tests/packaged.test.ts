@@ -48,7 +48,7 @@ const READ_PHASE_REPAIR = "An Atlassian read takes neither --preview nor --apply
 const RECOVER_REPAIR = "Receipts, adjudication, and unlock are recover commands: run connectors recover atlassian --select tenant=<value> [--run <runId>]";
 const USAGE_REPAIR = "Check the connectors run or recover arguments against connectors --help";
 const UNKNOWN_OPERATION_REPAIR =
-	"Use one Atlassian operation: issue.get, issue.search, issue.transitions, issue.create, issue.update, issue.comment, issue.comment.update, issue.comment.media, issue.comment.media.update, issue.attach, issue.attachment.delete, issue.transition, issue.assign, issue.delete, page.get, page.search, page.create, page.update, page.comment, page.attach, page.attachment.delete, page.delete";
+	"Use one Atlassian operation: issue.get, issue.search, issue.scan, issue.comments.scan, issue.changelog.scan, issue.transitions, issue.create, issue.update, issue.comment, issue.comment.update, issue.comment.media, issue.comment.media.update, issue.attach, issue.attachment.delete, issue.transition, issue.assign, issue.delete, page.get, page.search, page.scan, page.comments.scan, page.attachments.scan, page.children.scan, page.create, page.update, page.comment, page.attach, page.attachment.delete, page.delete";
 // A failed first use has nothing selected to repair, so it names first use
 // again (Q13c), never the explicit repair preview.
 const MCPORTER_REPAIR = "Check that the official MCPorter release is reachable, then retry the same command; first use installs MCPorter";
@@ -85,6 +85,16 @@ const PAGE_SEARCH_REPLY = [{ id: "456", title: "canned packaged page hit" }];
 // and then the Provider, and each of those reads the item once.
 const READ_OP_CALLS = 1 + 2 * 2;
 const READ_PROVIDER_STARTS = 2;
+// Independent public read-evidence contract; timestamps and fingerprints are
+// intentionally variable, while identity and unproved coverage are literals.
+const expectedRead = (product: string) => ({
+	schemaVersion: 1,
+	observedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/),
+	binding: { tenant: "example", product, origin: ORIGIN, principal: PRINCIPAL, credentialRevision: "onepassword-item-version:1" },
+	scopeFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+	coverage: { returned: null, terminal: null, nextContinuation: null, basis: "provider-omits-pagination", excluded: ["enumeration-completeness", "comments-completeness", "attachment-bytes", "business-acceptance"] },
+});
+
 
 interface Envelope {
 	result: { commandIdentity: string; outcome: string; causeCode: string; exitCode: number; repairAction: string | null; nextAction: string; effectClass: string; transactionState: string; data: Record<string, unknown> | null; effects: { completed: string[]; uncertain: string[] } };
@@ -807,7 +817,7 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		expect([firstUse?.code, firstUse?.stderr]).toEqual([0, ""]);
 		const envelope = parse(firstUse?.stdout ?? "").result;
 		expect([envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.transactionState, envelope.effects.completed, envelope.effects.uncertain]).toEqual(["connectors.run", "success", "SUCCESS_BOOTSTRAPPED", "completed", ["mcporter-bootstrap"], []]);
-		expect(envelope.data).toEqual({ connector: "atlassian", operation: "issue.get", result: JIRA_REPLY, provenance: [{ provider: "atlassian-community-jira", tool: "jira_get_issue", status: "success" }] });
+		expect(envelope.data).toEqual({ connector: "atlassian", operation: "issue.get", result: JIRA_REPLY, read: expectedRead("jira"), provenance: [{ provider: "atlassian-community-jira", tool: "jira_get_issue", status: "success" }] });
 	});
 
 	test("a Jira read reaches the declared operation through the plugin-owned MCPorter and confines both tokens", async () => {
@@ -816,7 +826,7 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		expect([result.code, result.stderr]).toEqual([0, ""]);
 		const envelope = parse(result.stdout).result;
 		expect([envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.effects.completed]).toEqual(["connectors.run", "success", "SUCCESS_UNCHANGED", []]);
-		expect(envelope.data).toEqual({ connector: "atlassian", operation: "issue.get", result: JIRA_REPLY, provenance: [{ provider: "atlassian-community-jira", tool: "jira_get_issue", status: "success" }] });
+		expect(envelope.data).toEqual({ connector: "atlassian", operation: "issue.get", result: JIRA_REPLY, read: expectedRead("jira"), provenance: [{ provider: "atlassian-community-jira", tool: "jira_get_issue", status: "success" }] });
 		expect(fixture.lines("effects.jsonl")).toEqual([{ product: "jira", tool: "jira_get_issue", args: { issue_key: "EX-1" } }]);
 		const starts = expectConfinedRead(fixture, JIRA_ITEM, JIRA_PROVIDER_KEYS);
 		expect(starts.map((start) => start.jiraUrl)).toEqual([ORIGIN, ORIGIN]);
@@ -831,7 +841,7 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		expect([result.code, result.stderr]).toEqual([0, ""]);
 		const envelope = parse(result.stdout).result;
 		expect([envelope.commandIdentity, envelope.causeCode]).toEqual(["connectors.run", "SUCCESS_UNCHANGED"]);
-		expect(envelope.data).toEqual({ connector: "atlassian", operation: "page.get", result: CONFLUENCE_REPLY, provenance: [{ provider: "atlassian-community-confluence", tool: "confluence_get_page", status: "success" }] });
+		expect(envelope.data).toEqual({ connector: "atlassian", operation: "page.get", result: CONFLUENCE_REPLY, read: expectedRead("confluence"), provenance: [{ provider: "atlassian-community-confluence", tool: "confluence_get_page", status: "success" }] });
 		expect(fixture.lines("effects.jsonl")).toEqual([{ product: "confluence", tool: "confluence_get_page", args: { page_id: "123" } }]);
 		const starts = expectConfinedRead(fixture, CONFLUENCE_ITEM, CONFLUENCE_PROVIDER_KEYS);
 		expect(starts.map((start) => start.confluenceUrl)).toEqual([`${ORIGIN}/wiki`, `${ORIGIN}/wiki`]);
@@ -848,7 +858,7 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		expect([result.code, result.stderr]).toEqual([0, ""]);
 		const envelope = parse(result.stdout).result;
 		expect([envelope.commandIdentity, envelope.causeCode, envelope.effects.completed]).toEqual(["connectors.run", "SUCCESS_UNCHANGED", []]);
-		expect(envelope.data).toEqual({ connector: "atlassian", operation, result: reply, provenance: [{ provider, tool: providerTool, status: "success" }] });
+		expect(envelope.data).toEqual({ connector: "atlassian", operation, result: reply, read: expectedRead(product), provenance: [{ provider, tool: providerTool, status: "success" }] });
 		expect(fixture.lines("effects.jsonl")).toEqual([{ product, tool: providerTool, args }]);
 		expectConfinedRead(fixture, product === "jira" ? JIRA_ITEM : CONFLUENCE_ITEM, product === "jira" ? JIRA_PROVIDER_KEYS : CONFLUENCE_PROVIDER_KEYS);
 		expectNoSecret(fixture, [result.stdout, result.stderr]);
