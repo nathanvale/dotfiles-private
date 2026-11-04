@@ -7,9 +7,10 @@ import type { ExecutionCapabilities } from "../../../../bin/adapters/contract.ts
 import { recordProviderFailure } from "../../../../bin/diagnostic-record.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
-import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, type RegisteredItems, TENANT_PATTERN } from "../custody/index.ts";
+import { bindCredential, bindingChannel, type CredentialBinding, type Product, invocationEnvironment, type RegisteredItems, TENANT_PATTERN } from "../custody/index.ts";
 import { stageFile } from "../outbox.ts";
-import { productFor, REST_SERVER } from "./contract.ts";
+import { discoveryProduct } from "./discovery.ts";
+import { productFor, REST_CONFLUENCE_SERVER, REST_SERVER } from "./contract.ts";
 import type { Dependencies, Transport, TransportFailure, TransportResult } from "./engine.ts";
 import { openJournal } from "./journal.ts";
 import { restReply, restSchema } from "./rest.ts";
@@ -94,9 +95,9 @@ function providerReadiness(env: Environment, tenant: string, binding: Credential
 // Provider, the request on stdin, and nothing on argv. Its one stdout line is
 // an HTTP status and body; a non-success status is translated like a tool
 // error and its Jira message text never leaves this adapter.
-function restCall(command: readonly string[], env: Environment, tenant: string, binding: CredentialBinding, tool: string, args: Record<string, unknown>): TransportResult {
+function restCall(command: readonly string[], env: Environment, tenant: string, binding: CredentialBinding, product: Product, tool: string, args: Record<string, unknown>): TransportResult {
 	const run = Bun.spawnSync([...command], {
-		env: { ...safeEnvironment(env), ...invocationEnvironment({ tenant, product: "jira", binding }) },
+		env: { ...safeEnvironment(env), ...invocationEnvironment({ tenant, product, binding }) },
 		stdin: Buffer.from(JSON.stringify({ tool, args })),
 		stdout: "pipe",
 		stderr: "pipe",
@@ -199,11 +200,11 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 		async listTools(binding, server) {
 			// The REST route's schema is owned, not live; the REST Provider refuses
 			// the same vocabulary itself.
-			if (server === REST_SERVER) return { ok: true, data: restSchema() };
+			if (server === REST_SERVER || server === REST_CONFLUENCE_SERVER) return { ok: true, data: restSchema().filter((tool) => (discoveryProduct(tool.name) ?? "jira") === (server === REST_CONFLUENCE_SERVER ? "confluence" : "jira")) };
 			return request(binding, server, "list", ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 		async call(binding, server, tool, args) {
-			if (server === REST_SERVER) return restCall(restProviderCommand, env, tenant, binding, tool, args);
+			if (server === REST_SERVER || server === REST_CONFLUENCE_SERVER) return restCall(restProviderCommand, env, tenant, binding, server === REST_SERVER ? "jira" : "confluence", tool, args);
 			return request(binding, server, tool, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 	};

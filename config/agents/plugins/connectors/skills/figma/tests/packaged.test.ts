@@ -31,7 +31,7 @@ if (process.env.CI && !OFFICIAL_MCPORTER) throw new Error("CONNECTORS_OFFICIAL_R
 
 // Independent oracles, restated from ADR 0005 and Figma's catalog.
 const HOSTED_ENDPOINT = "https://mcp.figma.com/mcp";
-const ADMITTED_READS = ["whoami", "get_metadata", "get_design_context", "get_screenshot", "get_variable_defs", "download_assets", "get_motion_context", "get_figjam", "get_libraries", "search_design_system", "get_code_connect_map", "get_code_connect_suggestions", "get_context_for_code_connect", "list_generative_plugins", "get_generative_plugin", "list_shaders", "get_shader", "list_file_shaders", "weave_list_tools", "weave_get_tool_inputs", "weave_get_tool_run_output"];
+const ADMITTED_READS = ["create_session", "whoami", "get_metadata", "get_design_context", "get_screenshot", "get_variable_defs", "download_assets", "get_motion_context", "get_figjam", "get_libraries", "search_design_system", "get_code_connect_map", "get_code_connect_suggestions", "get_context_for_code_connect", "list_generative_plugins", "get_generative_plugin", "list_shaders", "get_shader", "list_file_shaders", "weave_list_tools", "weave_get_tool_inputs", "weave_get_tool_run_output"];
 const ADMITTED_WRITES = ["add_code_connect_map", "send_code_connect_mappings", "create_generative_plugin", "create_shader", "update_generative_plugin", "update_shader", "create_new_file", "generate_diagram", "use_figma", "upload_assets", "weave_cancel_tool_run", "weave_run_tool"];
 const NOT_ADMITTED = ["generate_figma_design", "weave_upload_asset"];
 const AMBIENT_SENTINEL = "SENTINEL_AMBIENT_FIGMA_TOKEN";
@@ -92,10 +92,11 @@ test.skipIf(!OFFICIAL_MCPORTER)("schema and reads reach exactly the admitted too
 		const schema = await run(["schema", "figma"]);
 		expect(station(schema)).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
 		// The live listing went through MCPorter's allow-list from a stub that
-		// advertises all 35 catalog tools.
+		// advertises the historical catalog plus the hosted session setup tool.
 		const live = ((schema.result.data?.schema?.tools ?? []) as { name: string }[]).map((tool) => tool.name).sort();
 		expect(live).toEqual([...ADMITTED_READS, ...ADMITTED_WRITES].sort());
-		expect(live).toHaveLength(33);
+		expect(live).toHaveLength(34);
+		expect(schema.result.data?.resourceOperations).toEqual([{ name: "get_figma_skill", method: "resources/read", inputSchema: { type: "object", properties: { uri: { type: "string", description: "skill://index.json or skill://figma/<skill>/SKILL.md or references/<path>.md" } }, required: ["uri"], additionalProperties: false } }]);
 		expect([...(schema.result.data?.allowedTools as string[])].sort()).toEqual(live);
 
 		const whoami = await run(["run", "figma", "whoami"]);
@@ -106,7 +107,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("schema and reads reach exactly the admitted too
 		expect(callsOf(stub, "get_metadata")).toEqual([{ tool: "get_metadata", args: { fileKey: "FileKeyExisting01", nodeId: "1:1" } }]);
 
 		const before = stub.calls.length;
-		for (const tool of [...NOT_ADMITTED, "create_design_system_rules", "get_figma_skill"]) {
+		for (const tool of [...NOT_ADMITTED, "create_design_system_rules"]) {
 			expect([tool, station(await run(["run", "figma", tool]))]).toEqual([tool, { code: 2, cause: "USAGE_OPERATION_UNKNOWN", connectorCause: "operation-not-allowed" }]);
 		}
 		expect(station(await run(["run", "figma", "use_figma", ...input({ fileKey: "FileKeyExisting01" })]))).toEqual({ code: 2, cause: "USAGE_ADAPTER_REFUSED", connectorCause: "write-phase-required" });
@@ -389,3 +390,86 @@ test.skipIf(!OFFICIAL_MCPORTER)("upload_assets refuses changed bytes, unreadable
 		expect([callsOf(stub, "upload_assets").length, stub.posts.length]).toEqual([1, 0]);
 	});
 }, 180_000);
+
+// The strict fixture models the server's mandatory session instruction; it
+// does not claim the hosted server rejects every sessionless read today.
+// Fails against the original allow-list and if the caller changes the UUID,
+// bypasses the packaged route for guidance, or fails to carry it across files.
+test.skipIf(!OFFICIAL_MCPORTER)("file-session workflow reads guidance, creates one session, and carries its exact UUID across file reads", async () => {
+	await withFigma(async ({ run, stub }) => {
+		stub.requireSession = true;
+		const fileKey = "FileKeyExisting00000001";
+		const missing = await run(["run", "figma", "get_metadata", ...input({ fileKey, nodeId: "1:1" })]);
+		expect(missing.code).toBe(3);
+		expect(missing.result.causeCode).toBe("DOMAIN_PROVIDER_CALL_FAILED");
+		expect(missing.result.data).toBeNull();
+		const index = await run(["run", "figma", "get_figma_skill", ...input({ uri: "skill://index.json" })]);
+		expect(station(index)).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
+		const guidance = await run(["run", "figma", "get_figma_skill", ...input({ uri: "skill://figma/figma-design-to-code/SKILL.md" })]);
+		expect(station(guidance)).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
+		expect(JSON.stringify(guidance.result.data?.result)).toContain("Fixture design-to-code guidance");
+		const created = await run(["run", "figma", "create_session", ...input({ fileKey, description: "Read the fixture frame" })]);
+		expect(station(created)).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
+		const sessionId = created.result.data?.result?.sessionId;
+		expect(sessionId).toBe("9b7513a6-fc1a-4b25-945c-46f3b900b4de");
+		for (const [tool, key] of [["get_metadata", fileKey], ["get_design_context", "FileKeyOther00000000001"]]) {
+			const read = await run(["run", "figma", tool as string, ...input({ fileKey: key, nodeId: "1:1", sessionId })]);
+			expect(station(read)).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
+			expect(JSON.stringify(read.result.data?.result)).toContain(tool === "get_metadata" ? "Root" : "data-node-id");
+		}
+		expect(stub.calls.map(({ tool }) => tool)).toEqual(["get_metadata", "resources/read", "resources/read", "create_session", "get_metadata", "get_design_context"]);
+		expect(stub.calls.slice(4).map(({ args }) => args)).toEqual([{ fileKey, nodeId: "1:1", sessionId: "9b7513a6-fc1a-4b25-945c-46f3b900b4de" }, { fileKey: "FileKeyOther00000000001", nodeId: "1:1", sessionId: "9b7513a6-fc1a-4b25-945c-46f3b900b4de" }]);
+	});
+}, 120_000);
+
+// Setup is not a design write. Bad local inputs start no provider, a failed
+// setup produces no dependent call, and no journal authorizes a canvas change.
+test.skipIf(!OFFICIAL_MCPORTER)("file-session setup and guidance refuse malformed or unbounded inputs without provider calls", async () => {
+	await withFigma(async ({ run, stub, machine }) => {
+		const before = stub.calls.length;
+		for (const [tool, value] of [
+			["create_session", { fileKey: "short", description: "x" }],
+			["create_session", { fileKey: "FileKeyExisting00000001", description: "x", extra: "SENTINEL_PRIVATE" }],
+			["get_figma_skill", { uri: "file:///SENTINEL_PRIVATE" }],
+			["get_figma_skill", { uri: "skill://figma/figma-use/references/../../SENTINEL_PRIVATE.md" }],
+			["get_metadata", { fileKey: "FileKeyExisting00000001", sessionId: "SENTINEL_PRIVATE" }],
+		] as const) {
+			const refused = await run(["run", "figma", tool, ...input(value)]);
+			expect(station(refused)).toEqual({ code: 4, cause: "SCHEMA_ADAPTER_REFUSED", connectorCause: "input-invalid" });
+			expect(JSON.stringify(refused)).not.toContain("SENTINEL_PRIVATE");
+		}
+		expect(stub.calls).toHaveLength(before);
+		stub.rejectNext = { tool: "create_session", message: "Invalid arguments SENTINEL_PRIVATE" };
+		const failed = await run(["run", "figma", "create_session", ...input({ fileKey: "FileKeyExisting00000001", description: "read" })]);
+		expect(failed.code).toBe(3);
+		expect(failed.result.causeCode).toBe("DOMAIN_PROVIDER_CALL_FAILED");
+		expect(failed.result.data).toBeNull();
+		expect(JSON.stringify(failed)).not.toContain("SENTINEL_PRIVATE");
+		expect(stub.calls.map(({ tool }) => tool)).toEqual(["create_session"]);
+		expect(existsSync(machine.journalDirectory())).toBe(false);
+	});
+}, 120_000);
+
+// A session must survive preview, apply, read-back and adjudication without
+// relaxing the one-use preview or the unknown-outcome lock.
+test.skipIf(!OFFICIAL_MCPORTER)("file-session writes preserve the UUID on observation and sending and retain unknown-outcome recovery", async () => {
+	await withFigma(async ({ run, stub }) => {
+		stub.requireSession = true;
+		const fileKey = "FileKeyExisting00000001";
+		const created = await run(["run", "figma", "create_session", ...input({ fileKey, description: "Map fixture component" })]);
+		const sessionId = created.result.data?.result?.sessionId;
+		expect(sessionId).toBe("9b7513a6-fc1a-4b25-945c-46f3b900b4de");
+		const value = { fileKey, nodeId: "1:1", sessionId, source: "src/Button.tsx", componentName: "Button", label: "React" };
+		stub.failNext = { tool: "add_code_connect_map", skipEffect: true };
+		const unknown = await previewApply(run, "add_code_connect_map", value);
+		expect(station(unknown)).toEqual({ code: 3, cause: "DOMAIN_RUN_EFFECT_UNKNOWN", connectorCause: null });
+		expect(station(await run(["run", "figma", "add_code_connect_map", ...input(value), "--preview"]))).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "object-blocked" });
+		stub.landMapping(fileKey, "1:1", "Button", "src/Button.tsx");
+		const settled = await run(["recover", "figma", "--run", unknown.result.data?.runId as string, "--adjudicate", ...input(value)]);
+		expect(station(settled)).toEqual({ code: 0, cause: "SUCCESS_RUN_RECORDED", connectorCause: null });
+		expect(callsOf(stub, "add_code_connect_map")).toHaveLength(1);
+		const fileCalls = stub.calls.filter(({ tool }) => tool !== "create_session");
+		expect(fileCalls).toHaveLength(5);
+		expect(fileCalls.map(({ args }) => args.sessionId)).toEqual(Array(5).fill("9b7513a6-fc1a-4b25-945c-46f3b900b4de"));
+	});
+}, 120_000);

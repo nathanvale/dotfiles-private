@@ -45,11 +45,6 @@ EXPECTED_MODELS = {
         "bindings": (("gpt", "claude-sonnet-5", "unverified"),
                      ("claude", "claude-sonnet-5", "azure-anthropic-messages")),
     },
-    # Independent oracle: live Claude-resource deployment inventory, 2026-11-02.
-    "claude-sonnet-5-5": {
-        "format": "Anthropic",
-        "bindings": (("claude", "claude-sonnet-5-5", "azure-anthropic-messages"),),
-    },
     "claude-sonnet-4.6": {
         "format": "Anthropic",
         "bindings": (("gpt", "claude-sonnet-4-6", "unverified"),
@@ -124,7 +119,6 @@ def inventory_input() -> dict[str, object]:
         ("gpt-5.5", "codex"): "gpt",
         ("gpt-6.1-sol", "codex"): "gpt",
         ("claude-sonnet-5", "claude"): "claude",
-        ("claude-sonnet-5-5", "claude"): "claude",
         ("claude-sonnet-4.6", "claude"): "claude",
         ("claude-haiku-4.5", "claude"): "claude",
     }
@@ -219,6 +213,7 @@ Path({str(self.child_capture)!r}).write_text(json.dumps({{
     "argv": sys.argv[1:],
     "settings_text": settings_text,
     "cwd": os.getcwd(),
+    "home": os.environ.get("HOME"),
     "env": {{key: os.environ[key] for key in {OBSERVED_ENV!r} if key in os.environ}},
 }}))
 control = Path({str(self.exit_control)!r})
@@ -267,7 +262,6 @@ deployments = {{
         ("claude-haiku-4-5", "Anthropic"), ("DeepSeek-V4-Pro", "DeepSeek"),
         ("DeepSeek-V4-Flash", "DeepSeek"), ("Kimi-K2.7-Code", "MoonshotAI"),
         ("Kimi-K2.6", "MoonshotAI"),
-        ("claude-sonnet-5-5", "Anthropic"),
     ],
 }}
 print(json.dumps([{{"name": name, "properties": {{"provisioningState": "Succeeded", "model": {{
@@ -381,7 +375,7 @@ print(json.dumps([{{"name": name, "properties": {{"provisioningState": "Succeede
             )
             self.assertTrue(all(route["status"] != "qualified" for route in item["routes"]))
 
-    def test_snapshot_reports_literal_eleven_model_inventory_without_azure(self) -> None:
+    def test_snapshot_reports_literal_ten_model_inventory_without_azure(self) -> None:
         result = self.run_cli("models", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
@@ -689,33 +683,6 @@ print(json.dumps([{{"name": name, "properties": {{"provisioningState": "Succeede
         wrapper = json.loads(self.wrapper_capture.read_text(encoding="utf-8"))
         self.assertEqual(wrapper[:4], ["inject", "AZURE_OPENAI_API_KEY", "op://synthetic/credential", "--"])
 
-    def test_restrictive_control_bundle_uses_the_selected_sol_route(self) -> None:
-        # Independent oracle: the bounded caller's exact capability reductions.
-        native = [
-            "-c", 'model_reasoning_effort="high"', "--no-daemon", "-a", "never",
-            "exec", "--ignore-user-config", "--sandbox", "read-only",
-            "--disable", "hooks", "--disable", "multi_agent", "--disable", "apps",
-            "--disable", "browser_use", "--disable", "computer_use",
-            "--disable", "unbounded_connection_retries",
-            "-c", 'web_search="disabled"',
-            "-c", "model_providers.monash_foundry.request_max_retries=0",
-            "-c", "model_providers.monash_foundry.stream_max_retries=0",
-        ]
-        result = self.run_cli("launch", "--model", "gpt-6.1-sol", "--agent", "codex",
-                              "--qualification", "--", *native)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        child = self.child_result()
-        self.assertEqual(child["argv"][-len(native):], native)
-        values = {key: value.strip('"') for key, value in
-                  (item.split("=", 1) for item in self.codex_argv_assignments(child["argv"]))}
-        self.assertEqual(values["web_search"], "disabled")
-        self.assertEqual(values["model_providers.monash_foundry.request_max_retries"], "0")
-        self.assertEqual(values["model_providers.monash_foundry.stream_max_retries"], "0")
-        self.assertEqual(values["model_provider"], "monash_foundry")
-        self.assertEqual(values["model"], "gpt-6.1-sol")
-        self.assertEqual(self.effort_values(child["argv"]), ["high"])
-        self.assertEqual(child["env"], {"AZURE_OPENAI_API_KEY": "synthetic-child-key"})
-
     def test_codex_effort_defaults_and_other_routes_are_unchanged(self) -> None:
         sol = self.run_cli("launch", "--model", "gpt-6.1-sol", "--agent", "codex", "--qualification")
         self.assertEqual(sol.returncode, 0, sol.stderr)
@@ -770,35 +737,112 @@ print(json.dumps([{{"name": name, "properties": {{"provisioningState": "Succeede
         codex_route = next(route for route in sol["routes"] if route["agent"] == "codex")
         self.assertEqual((codex_route["implemented"], codex_route["compatibility"], codex_route["binding_resource_id"]),
                          (True, "compatible", "gpt"))
-        # FLS-32's Root-installed record (revision 6467aa5b): native Codex High inference,
-        # file-read tools and resume on Mini and Laptop.
-        receipts = "receipt:dotfiles/32/evidence/"
-        self.assertEqual(codex_route["status"], "qualified")
-        self.assertEqual(
-            [(item["host"], item["kind"], item["reference"], item["observed"]) for item in codex_route["evidence"]],
-            [(host, "native-inference-and-file-read-tool", receipts + name, True) for host, name in (
-                ("mini", "mini-tui-first.json"),
-                ("mini", "mini-tui-resume.json"),
-                ("mini", "mini-tui-typed.json"),
-                ("laptop", "continued-mini-20261102/laptop-local-tui-root.json"),
-                ("laptop", "continued-mini-20261102/laptop-local-resume-root.json"),
-            )],
-        )
-
-        # A qualified route launches without the explicit --qualification trial flag.
-        native = ["-c", 'model_reasoning_effort="high"']
+        # Independent oracle: the exact LOCAL command justified by CLI-DAILY's
+        # both-host typed TUI/read/resume receipts. Do not drop --no-daemon or
+        # turn this into shared-daemon, SSH, write-sandbox or live-auth proof.
+        native = ["-c", 'model_reasoning_effort="high"', "--no-daemon", "--no-alt-screen",
+                  "--sandbox", "read-only", "--ask-for-approval", "never"]
+        home = self.root / "canonical-home"
+        canonical = home / ".codex"
+        canonical.mkdir(parents=True)
+        protected = {
+            "auth.json": b'{"synthetic_personal_login":"untouched"}\n',
+            "config.toml": b'model = "synthetic-personal-default"\n',
+            "history.jsonl": b'{"synthetic_previous_session":"untouched"}\n',
+        }
+        for name, content in protected.items():
+            (canonical / name).write_bytes(content)
+            (canonical / name).chmod(0o600)
+        self.env["HOME"] = str(home)
+        config_before = config_path.read_bytes()
         trial = self.run_with_config(
             config_path, "launch", "--model", "gpt-6.1-sol", "--agent", "codex", "--", *native)
-        self.assertEqual(trial.returncode, 0, trial.stderr)
-        argv = self.child_result()["argv"]
-        values = {key.strip(): value.strip().strip('"') for key, value in
-                  (item.split("=", 1) for item in self.codex_argv_assignments(argv))}
-        self.assertEqual(values["model"], "gpt-6.1-sol")
-        self.assertEqual(self.effort_values(argv), ["high"])
-        self.assertEqual(argv[-2:], native)
-        self.assert_pinned_codex_catalogue(Path(values["model_catalog_json"]))
-        self.assertEqual(self.child_result()["env"], {"AZURE_OPENAI_API_KEY": "synthetic-child-key"},
-                         "canonical Codex home: CODEX_HOME must not be forwarded")
+        self.assertEqual(trial.returncode, 0, trial.stderr)  # RED: untested refuses before custody.
+        self.assertEqual(codex_route["status"], "qualified")
+        # Independent historical receipt identities, not values derived from config.
+        self.assertEqual([(e["observed"], e["kind"], e["host"], e["reference"])
+                          for e in codex_route["evidence"]], [
+            (True, "native-inference-and-file-read-tool", "mini",
+             "receipt:dotfiles/32/evidence/mini-tui-first.json"),
+            (True, "native-inference-and-file-read-tool", "mini",
+             "receipt:dotfiles/32/evidence/mini-tui-resume.json"),
+            (True, "native-inference-and-file-read-tool", "mini",
+             "receipt:dotfiles/32/evidence/mini-tui-typed.json"),
+            (True, "native-inference-and-file-read-tool", "laptop",
+             "receipt:dotfiles/32/evidence/continued-mini-20261102/laptop-local-tui-root.json"),
+            (True, "native-inference-and-file-read-tool", "laptop",
+             "receipt:dotfiles/32/evidence/continued-mini-20261102/laptop-local-resume-root.json"),
+        ])
+        self.assertEqual([(r["agent"], r["status"], r["implemented"], r["compatibility"], r["evidence"])
+                          for r in sol["routes"] if r["agent"] != "codex"],
+                         [("claude", "untested", False, "incompatible", []),
+                          ("opencode", "untested", False, "incompatible", [])])
+
+        for suffix, expected_exit in (([], 0), (["resume", "00000000-0000-7000-8000-000000000032"], 19)):
+            if suffix:
+                self.exit_control.write_text("19", encoding="utf-8")
+                resumed = self.run_with_config(
+                    config_path, "launch", "--model", "gpt-6.1-sol", "--agent", "codex", "--", *native, *suffix)
+                self.assertEqual(resumed.returncode, expected_exit, resumed.stderr)
+            child = self.child_result()
+            argv = child["argv"]
+            values = {key.strip(): value.strip().strip('"') for key, value in
+                      (item.split("=", 1) for item in self.codex_argv_assignments(argv))}
+            self.assertEqual(values["model"], "gpt-6.1-sol")
+            self.assertEqual(values["model_provider"], "monash_foundry")
+            self.assertEqual(values["model_providers.monash_foundry.base_url"],
+                             f"https://{GPT_RESOURCE}.openai.azure.com/openai/v1")
+            self.assertEqual(values["model_providers.monash_foundry.wire_api"], "responses")
+            self.assertEqual(values["model_providers.monash_foundry.env_key"], "AZURE_OPENAI_API_KEY")
+            self.assertEqual(values["model_providers.monash_foundry.requires_openai_auth"], "false")
+            self.assertEqual(values["service_tier"], "default")
+            self.assertEqual(self.effort_values(argv), ["high"])
+            self.assertEqual(argv[-len(native + suffix):], native + suffix)
+            self.assertEqual(argv.count("--no-daemon"), 1)
+            self.assertEqual(child["cwd"], str(self.root))
+            self.assertEqual(child["home"], str(home))
+            self.assert_pinned_codex_catalogue(Path(values["model_catalog_json"]))
+            self.assertEqual(child["env"], {"AZURE_OPENAI_API_KEY": "synthetic-child-key"},
+                             "personal credentials and CODEX_HOME must not be forwarded")
+            wrapper = json.loads(self.wrapper_capture.read_text(encoding="utf-8"))
+            self.assertEqual(wrapper[:4], ["inject", "AZURE_OPENAI_API_KEY",
+                                          "op://API Credentials/AZURE_OPENAI_API_KEY_MONASH/credential", "--"])
+            self.assertEqual(config_path.read_bytes(), config_before)
+            for name, content in protected.items():
+                self.assertEqual((canonical / name).read_bytes(), content)
+            self.assertEqual(self.azure_calls(), [])
+
+        # Bare codex still uses the existing default, not Sol/High.
+        self.exit_control.unlink()
+        legacy = self.run_with_config(config_path, "codex")
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        legacy_argv = self.child_result()["argv"]
+        legacy_values = {key.strip(): value.strip().strip('"') for key, value in
+                         (item.split("=", 1) for item in self.codex_argv_assignments(legacy_argv))}
+        self.assertEqual(legacy_values["model"], "gpt-5.5")
+        self.assertEqual(self.effort_values(legacy_argv), ["medium"])
+
+    def test_sol_rollback_and_failed_states_refuse_ordinary_launch_before_custody(self) -> None:
+        shipped = json.loads(LAUNCHER.with_name("config.json").read_text(encoding="utf-8"))
+        shipped["commands"] = {
+            "codex": str(self.native), "with_one_password_token": str(self.wrapper), "az": str(self.az),
+        }
+        sol = next(m for m in shipped["inventory"]["models"] if m["id"] == "gpt-6.1-sol")
+        route = next(r for r in sol["routes"] if r["agent"] == "codex")
+        config_path = self.root / "rollback-config.json"
+        for status in ("untested", "failed"):
+            with self.subTest(status=status):
+                route.update({"status": status, "reason": "synthetic rollback/refusal", "evidence": []})
+                config_path.write_text(json.dumps(shipped), encoding="utf-8")
+                refused = self.run_with_config(
+                    config_path, "launch", "--model", "gpt-6.1-sol", "--agent", "codex", "--",
+                    "-c", 'model_reasoning_effort="high"', "--no-daemon", "--no-alt-screen",
+                    "--sandbox", "read-only", "--ask-for-approval", "never")
+                self.assertEqual(refused.returncode, 3, refused.stderr)
+                self.assertIn("is untested for codex" if status == "untested" else
+                              "failed qualification for codex", refused.stderr)
+                self.assert_no_external_launch()
+                self.assertEqual(self.azure_calls(), [])
 
     def test_sol_catalogue_oracle_rejects_a_borrowed_gpt_5_5_entry_through_the_public_route(self) -> None:
         shipped = json.loads(LAUNCHER.with_name("codex-models.json").read_text(encoding="utf-8"))
@@ -854,50 +898,6 @@ print(json.dumps([{{"name": name, "properties": {{"provisioningState": "Succeede
         self.assertEqual(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], "claude-sonnet-5-5")
         self.assertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "claude-haiku-5-5")
         self.assertEqual(env["ANTHROPIC_FOUNDRY_RESOURCE"], CLAUDE_RESOURCE)
-
-        catalogue = self.run_with_config(config_path, "models", "--json")
-        self.assertEqual(catalogue.returncode, 0, catalogue.stderr)
-        sonnet = next(model for model in json.loads(catalogue.stdout)["models"]
-                      if model["id"] == "claude-sonnet-5-5")
-        self.assertEqual([(binding["resource_id"], binding["deployment"], binding["protocol"])
-                          for binding in sonnet["bindings"]],
-                         [("claude", "claude-sonnet-5-5", "azure-anthropic-messages")])
-        claude_route = next(route for route in sonnet["routes"] if route["agent"] == "claude")
-        self.assertEqual(claude_route["status"], "qualified")
-        self.assertTrue(any(receipt["observed"] and receipt["host"] == "laptop"
-                            and receipt["kind"] == "native-inference-and-file-read-tool"
-                            for receipt in claude_route["evidence"]))
-        selected = self.run_with_config(
-            config_path, "launch", "--model", "claude-sonnet-5-5", "--agent", "claude",
-            "--", "-p", "marker")
-        self.assertEqual(selected.returncode, 0, selected.stderr)
-        selected_argv = self.child_result()["argv"]
-        self.assertEqual(selected_argv[selected_argv.index("--model") + 1], "claude-sonnet-5-5")
-        selected_env = json.loads(selected_argv[selected_argv.index("--settings") + 1])["env"]
-        self.assertEqual(selected_env["CLAUDE_CODE_USE_FOUNDRY"], "1")
-        self.assertEqual(selected_env["ANTHROPIC_FOUNDRY_RESOURCE"], CLAUDE_RESOURCE)
-        self.assertFalse(self.wrapper_capture.exists())
-
-    def test_legacy_ten_model_input_remains_valid_and_requires_stable_ids(self) -> None:
-        legacy = json.loads(self.config_file.read_text(encoding="utf-8"))
-        legacy["inventory"]["models"] = [model for model in legacy["inventory"]["models"]
-                                         if model["id"] != "claude-sonnet-5-5"]
-        self.config_file.write_text(json.dumps(legacy), encoding="utf-8")
-        result = self.run_cli("models", "--json")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        ids = [model["id"] for model in json.loads(result.stdout)["models"]]
-        self.assertEqual(len(ids), 10)
-        self.assertNotIn("claude-sonnet-5-5", ids)
-        self.assertIn("gpt-6.1-sol", ids)
-
-        legacy["inventory"]["models"] = [model for model in legacy["inventory"]["models"]
-                                         if model["id"] != "gpt-5.5"]
-        self.config_file.write_text(json.dumps(legacy), encoding="utf-8")
-        refused = self.run_cli("models", "--json")
-        self.assertEqual(refused.returncode, 2)
-        self.assertIn("required stable catalogue IDs", refused.stderr)
-        self.assertFalse(self.child_capture.exists())
-        self.assertFalse(self.wrapper_capture.exists())
 
     def test_legacy_codex_entry_point_remains_compatible(self) -> None:
         result = self.run_cli("codex", "--", "exec", "--ephemeral")

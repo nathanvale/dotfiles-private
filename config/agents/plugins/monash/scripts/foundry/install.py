@@ -31,18 +31,14 @@ SOURCE_FILES = (
     "monash",
     "monash_hosts.py",
     "monash_remote.py",
-    "monash-codex-token",
-    "monash-codex-desktop",
     "config.json",
     "codex-models.json",
     "CODEX-CATALOG-LICENSE",
     "CODEX-CATALOG-NOTICE",
 )
 COMMANDS = ("foundry", "monash-foundry", "monash")
-# Executable payload that is run by absolute installed path, never linked into bin.
-EXECUTABLE_HELPERS = ("monash_remote.py", "monash-codex-token", "monash-codex-desktop")
 SOURCE_INSTALL_MODES = {
-    name: 0o500 if name in COMMANDS or name in EXECUTABLE_HELPERS else 0o600
+    name: 0o500 if name in COMMANDS or name == "monash_remote.py" else 0o600
     for name in SOURCE_FILES
 }
 HOST_ROLES = ("laptop", "mini")

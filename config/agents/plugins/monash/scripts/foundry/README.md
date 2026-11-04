@@ -37,7 +37,6 @@ monash-foundry check
 monash-foundry models --json
 monash-foundry models --refresh --json
 monash-foundry launch --model claude-sonnet-5 --agent claude --qualification
-monash-foundry launch --model gpt-6.1-sol --agent codex -- -c 'model_reasoning_effort="high"'
 monash-foundry launch --model gpt-5.4-nano --agent opencode --qualification -- run --prompt "bounded smoke test"
 ```
 
@@ -228,13 +227,49 @@ cannot borrow GPT-5.5 metadata.
 `gpt-6.1-sol` is a Codex-only route on the GPT resource. `az cognitiveservices
 account deployment list` showed deployment `gpt-6.1-sol` (OpenAI format, version
 2026-09-29, `Succeeded`) on 1 November 2026, and the pinned Codex catalogue holds
-its own metadata. Its Codex route is `qualified` from FLS-32's native trials on
-2 November 2026: interactive High inference, harmless file-read tools and
-same-session resume on Mini and Laptop, with `--no-daemon`, a read-only sandbox
-and never-approve. The five receipts are in its `evidence`. That covers
-completed turns only, not normal-exit proof; shared daemon, SSH and
-workspace-write use remain unqualified. The snapshot date above predates this
-entry; only this binding was observed on 1 November 2026.
+its own metadata. Its Codex route is qualified by local native Codex 0.166.0
+interactive inference, successful README file-read tools and same-session
+resumes on Mini and Laptop on 2 November 2026. The five catalogue references
+retain the actual receipts, including genuinely typed composer turns on both
+hosts. The snapshot date above predates this entry; only this binding was
+observed on 1 November 2026.
+
+### Everyday local Sol command
+
+After Root's reviewed host-specific installation, run this explicit command
+from the desired working directory:
+
+```sh
+~/.local/bin/monash-foundry launch \
+  --model gpt-6.1-sol --agent codex -- \
+  -c 'model_reasoning_effort="high"' \
+  --no-daemon --no-alt-screen --sandbox read-only --ask-for-approval never
+```
+
+Keep `--no-daemon`: every successful interactive/resume receipt used it.
+Append `resume SESSION_ID` to select the same canonical session; the recorded
+resume trials also supplied a harmless native resume prompt. The prompt-free
+resume variant was not separately exercised. Plain `monash-foundry codex`
+still selects the existing GPT-5.5/Medium default, not Sol/High. No personal
+Codex default or login changes, profile file, proxy or fallback are needed.
+
+The qualified claim is local High/read-only completed turns, not normal TUI
+exit, shared-daemon, SSH or workspace-write readiness. The retained Laptop
+SSH custody refusal remains separate. Other models and incompatible pairings
+keep their existing evidence states and guards.
+
+The installer writes the entire `config.json` snapshot. Root must stage and
+review exact bytes for each host, preserving that host's additional inventory
+rows (including Laptop's approved Sonnet 5.5 row), other routes, defaults,
+host profiles and credential references. Apply only the Sol/Codex
+status/reason/evidence delta to that host's current config; never install a
+Mini config snapshot onto Laptop. Run the unchanged `install.py --dry-run`,
+installation and `--check` from the reviewed host-specific payload directory,
+with the matching `--host-role`. Stop on managed-state drift. Preserve its
+exact prior host payload/manifest and managed backup for rollback through the
+same installer and readback. Root owns installation and the exact ordinary
+Sol/High/`--no-daemon` post-install turn; source qualification is not proof of
+an installed ordinary launch.
 
 `launch` selects exactly one stable ID and native agent. Selection and all
 compatibility, implementation, and availability checks happen before Azure
@@ -408,27 +443,13 @@ official sources with `python3 scripts/foundry/refresh_codex_catalog.py >
 scripts/foundry/codex-models.json`. Requalify the catalogue when upgrading
 Codex.
 
-The route sets `model_reasoning_effort="medium"` unless the caller supplies
-`-c model_reasoning_effort="LEVEL"` (also
+The route sets `model_reasoning_effort="medium"` unless the caller supplies the
+one supported native override, `-c model_reasoning_effort="LEVEL"` (also
 `--config` and `--config=`), once. The launcher then omits its own default and
 leaves the caller's argument last and unchanged. `LEVEL` must be one the pinned
 catalogue lists for the selected deployment (`gpt-5.5`: low, medium, high,
 xhigh; `gpt-6.1-sol`: low, medium, high, xhigh, max, ultra). A deployment with
 no catalogue entry has no known levels, so the override is refused.
-
-The same native config forms accept three capability reductions, once per key:
-
-- `web_search="disabled"` (the bare string `disabled` is also accepted).
-- `model_providers.monash_foundry.request_max_retries=0`.
-- `model_providers.monash_foundry.stream_max_retries=0`.
-
-Values use these exact literals; retry counts accept only the integer literal
-`0`. Other providers, duplicate keys, and `--search` combined with disabled
-search are refused before credential delivery. Accepted arguments remain last
-and unchanged in the native argv. These settings reduce tools or retries;
-they leave the provider, endpoint, model, catalogue and authentication pinned.
-They do not alone prove read-only isolation, hook/MCP restrictions, or a bounded
-process lifetime; the invocation owner still verifies those controls.
 
 All other native Codex `--config` or `-c`, `--profile` or `-p`, `--oss`, and
 `--local-provider`, `--remote`, and `--remote-auth-token-env` arguments are rejected because they could change provider,
@@ -453,128 +474,6 @@ wrapper boundary. Its repair output must remain non-secret.
 The installed wrapper and its broker custody are live prerequisites. A broker
 sign-in compatibility failure is an installation or custody issue, not a
 launcher route that this file attempts to repair.
-
-## Codex desktop provider
-
-The Codex app cannot take `-c` overrides or `--profile`, it starts every new
-chat with no provider of its own (`modelProvider` null), and it ignores a
-project's provider keys. A new app chat therefore uses the user-level
-top-level `model_provider`. `monash-codex-desktop` has two levels:
-
-- `apply` appends one marker block to the user's `~/.codex/config.toml`
-  holding only `[model_providers.monash_foundry]` and its `auth` table, so the
-  provider resolves in the app while new chats keep the personal default. A
-  thread that already records `monash_foundry`, such as one started through
-  `monash-foundry codex`, resumes in the app on that provider.
-- `apply --new-chat-default` also puts a second marker block at the top of the
-  file holding only `model_provider = "monash_foundry"`, so new app chats use
-  Monash until `rollback`. It is a temporary qualification setting. Existing
-  chats keep the provider they recorded: a personal chat still resumes on the
-  personal provider, and no personal history reaches Monash. It refuses an
-  existing top-level `model_provider` or `profile`, and it refuses unless the
-  top-level `model` and `model_reasoning_effort` are already `gpt-6.1-sol` and
-  `high`, the qualified route. It never writes `model`, effort, `profile` or
-  `model_catalog_json`, and there is no fallback model. While a managed
-  default exists, every `apply`, with or without the flag, refuses again if
-  the model or effort has changed or a top-level `profile` appeared, so a
-  missing provider is never restored onto another route.
-- Either level refuses an unmarked top-level
-  `model_provider = "monash_foundry"`; `status` reports it as
-  `new_chat_default=unmanaged`.
-
-```text
-<install>/monash-codex-desktop [--codex-home DIR] plan|apply [--new-chat-default]
-<install>/monash-codex-desktop [--codex-home DIR] status|rollback
-```
-
-- `plan` prints only the managed lines it would add and where, never a diff
-  of the personal document, and never the current default provider's value.
-- `apply` appends the block directly after the file's final newline. It
-  refuses: a linked, foreign-owned, group- or world-writable, non-UTF-8 or
-  invalid file; a Codex home that is not a private real directory, or one
-  below a directory another user can write; a file without a final newline;
-  marker text anywhere outside one exact marker pair; an existing
-  `monash_foundry` provider outside the markers; and a token helper that is
-  missing or not a private executable in trusted directories. It verifies on
-  the parsed document that the result is exactly the original plus the
-  provider, and that removing the block restores the original bytes.
-- `rollback` removes exactly the marker-delimited lines of both blocks,
-  keeping every other byte, including later app edits. The default block must
-  delimit the document's real top-level `model_provider` and nothing else; an
-  unmarked `model_provider = "monash_foundry"` is refused, because it would
-  name a provider that rollback removes, and so is a Codex profile whose
-  `model_provider` is `monash_foundry` (only their count is printed). A
-  personal setting found between the default markers is refused with advice
-  to move it out and keep it. It refuses unless the parsed result is
-  exactly the current document minus the provider, so markers inside a string
-  or a setting that moved past the block can never delete or reparent personal
-  settings. An unmarked `monash_foundry` provider is refused with the manual
-  repair.
-- `status` reports the provider block as `absent`, `applied`,
-  `applied-differs`, `applied-unverifiable` or `unmanaged-provider`; the
-  default block as `new_chat_default=absent`, `applied`,
-  `applied-route-changed` (the app changed the top-level model or effort) or
-  `applied-unverifiable`; and whether the default provider is `unset`,
-  `monash_foundry` or another provider. It exits non-zero unless the two
-  blocks are consistent and verified.
-
-Writer quiescence is a gate, not advice. `apply` and `rollback` refuse while
-any process of yours that looks like Codex (the ChatGPT app and its helpers,
-its app-server, or a Codex CLI session) uses that Codex home, judged by its
-`CODEX_HOME` or, without one, `~/.codex`; a Codex process whose environment
-cannot be read blocks every home. They check once before preparing and
-again immediately before replacing the file, and name the blocking processes.
-Quit the Codex app and every Codex session on this home first; `plan` and
-`status` do not need that. Reads use a no-follow descriptor whose identity is
-checked again before replacement, and runs on one home are serialized by a
-directory lock. A Codex process started in the instant between the last check
-and the replacement is not detected, and the app offers no lock this tool can
-honour. Run `apply` and `rollback` from a terminal that is not a Codex
-session, with the ChatGPT app and every Codex session quit, and start nothing
-Codex until the command returns.
-
-Both tools start Python isolated (`#!/usr/bin/env -S python3 -I -B`), so no
-module beside them, `PYTHONPATH` entry or user site code is imported. Before
-running any Foundry code or reading `config.json`, both tools admit each
-file through a no-follow descriptor: a regular file owned by you, writable only
-by you, in directories no other user can write. The launcher is executed from
-the admitted bytes, not imported by path, and the desktop tool never imports
-the token helper. Both tools carry the same trust rules, which a test keeps
-identical. An invalid `config.toml` is reported without the parser's message,
-which can name personal tables.
-
-The block's `base_url` is the installed `config.json` `codex.base_url`. Its auth
-command is the installed `monash-codex-token`, with `args = []`,
-`timeout_ms = 30000` and `refresh_interval_ms = 300000`. The helper resolves
-`codex.credential_ref` through `with-one-password-token inject
-AZURE_OPENAI_API_KEY <ref> -- /usr/bin/printenv AZURE_OPENAI_API_KEY` within 20
-seconds and writes the one printable value to Codex's pipe. It takes no
-arguments and refuses a terminal on stdin or stdout. It never searches `PATH`
-or the working directory for the wrapper: a `commands.with_one_password_token`
-override must be absolute, and the wrapper must be a regular file (not a link)
-owned by you, writable only by you, in directories no other user can write. On
-any failure it prints nothing to stdout and exits non-zero. It
-runs on the macOS system Python 3.9, which a GUI-launched Codex may resolve
-first. Never run it by hand.
-
-Helper failure limitation: bundled Codex 0.166.0-alpha.5.1 logs a failed or
-empty auth command but still sends the prompt without `Authorization`,
-retrying until the endpoint refuses (Azure answers 401). The turn then fails.
-No personal or `auth.json` credential is substituted
-(`requires_openai_auth = false`). Command-backed auth is therefore not a
-zero-request gate, and qualification needs an authenticated Azure completion.
-
-`test_codex_desktop.py` proves the helper and the config edits as processes. With
-the bundled app engine present, it drives `codex app-server` through the
-app's JSON-RPC against loopback fakes. A new chat stays on the personal
-provider without running the helper. With `--new-chat-default`, a new chat
-resolves `monash_foundry`, `gpt-6.1-sol` and `high` and completes with the
-helper's token, a personal chat started earlier still resumes on the personal
-provider, and after rollback new chats are personal again. A completed `monash_foundry` thread
-resumes with the helper's token. An app-written config edit survives
-rollback, and after rollback resume refuses with ``Model provider
-`monash_foundry` not found`` before any request. The test replaces the block's
-Azure `base_url` with the loopback fake after `apply`.
 
 ## Claude Code route
 

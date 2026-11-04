@@ -126,7 +126,6 @@ SHIPPED_OPENCODE_REFUSALS = (
     "gpt-5.5",
     "gpt-6.1-sol",
     "claude-sonnet-5",
-    "claude-sonnet-5-5",
     "claude-sonnet-4.6",
     "claude-haiku-4.5",
 )
@@ -1135,9 +1134,7 @@ class OpenCodeProcessTests(unittest.TestCase):
         self.assertEqual(models_result.returncode, 0, models_result.stderr)
         payload = json.loads(models_result.stdout)
         self.assertEqual(payload["schema_version"], 1)
-        expected_ids = list(MODEL_IDS)
-        expected_ids.insert(3, "claude-sonnet-5-5")
-        self.assertEqual([model["id"] for model in payload["models"]], expected_ids)
+        self.assertEqual([model["id"] for model in payload["models"]], list(MODEL_IDS))
         models = {model["id"]: model for model in payload["models"]}
         self.assertEqual(set(models), set(SHIPPED_OPENCODE_ROUTES) | set(SHIPPED_OPENCODE_REFUSALS))
 

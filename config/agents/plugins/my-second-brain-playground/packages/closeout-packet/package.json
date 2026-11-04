@@ -1,0 +1,9 @@
+{
+  "name": "closeout-packet",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cli:example": "bun run src/cli.ts"
+  }
+}

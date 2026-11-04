@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
-// Owned Jira REST v2 Provider for the wiki-comment and attachment-delete
-// capability exceptions (ADR 0001 amendments). One process per request: recovers the invocation from
+// Owned Atlassian REST Provider for fixed read collections and guarded Jira
+// write exceptions (ADR 0001 amendments). One process per request: recovers the invocation from
 // the dispatcher's internal channel, re-reads the bound Jira item inside this
 // process, reads exactly one {tool, args} request from stdin, makes that one
 // HTTPS request against the item's Trusted Site Origin, and writes one
 // {status, body} line. The credential exists only in this process's memory
 // and in the Authorization header; it is never printed and never an argument.
+import { discoveryProduct } from "./dispatch/discovery.ts";
 import { boundItem, providerInvocation } from "./custody/index.ts";
 import { attachmentOnIssue, authorGuardVerdict, deleteGuardRequests, editGuardRequests, HEAD_BYTES, readLeadingBytes, type RestReply, type RestRequest, restRequest } from "./dispatch/rest.ts";
 import { atlassianProcess, singleLine } from "./provider-process.ts";
@@ -117,7 +118,6 @@ async function guardDelete(origin: string, authorization: string, args: unknown)
 export async function runRestProvider(argv: readonly string[]): Promise<never> {
 	atlassianProcess.refuseArguments([...argv]);
 	const invocation = providerInvocation();
-	if (invocation.product !== "jira") atlassianProcess.fail("product-invalid", "the REST route serves Jira only", 2);
 	// The full-item read and comparison happen before stdin is consumed or any
 	// request is shaped.
 	const item = boundItem(invocation);
@@ -126,6 +126,7 @@ export async function runRestProvider(argv: readonly string[]): Promise<never> {
 	const stdin = await Bun.stdin.text();
 	if (stdin.length > REQUEST_LIMIT) atlassianProcess.fail("arguments-invalid", "the request is too large", 2);
 	const { tool, args, request } = requestFromStdin(stdin);
+	if ((discoveryProduct(tool) ?? "jira") !== invocation.product) atlassianProcess.fail("product-invalid", "the REST tool does not belong to the bound product", 2);
 	const authorization = `Basic ${Buffer.from(`${item.principal}:${item.credential}`).toString("base64")}`;
 	if (tool === EDIT_TOOL) await guardEdit(item.origin, authorization, args);
 	if (tool === DELETE_TOOL) await guardDelete(item.origin, authorization, args);

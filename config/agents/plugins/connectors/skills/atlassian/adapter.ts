@@ -97,7 +97,7 @@ const removedLock = (data: unknown): boolean => typeof data === "object" && data
 // closed cause and fixed repair text map to one executed outcome for the
 // station. Anything outside this table is a defect.
 function translate({ outcome, provenance }: Dispatched, station: Station, label: Record<string, string>): Executed {
-	const data = { ...label, result: outcome.data ?? null, provenance };
+	const data = { ...label, result: outcome.data ?? null, provenance, ...(outcome.read ? { read: outcome.read } : {}) };
 	if (station === "apply") return applied(outcome, data);
 	if (outcome.cause !== "success") return unchanged(outcome, station);
 	const effect = station === "unlock" && !removedLock(outcome.data) ? undefined : RECORDED[station];

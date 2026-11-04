@@ -29,11 +29,6 @@ PROVIDER_NAME = "Monash Foundry Azure Responses"
 CODEX_CATALOG = SCRIPT_DIR / "codex-models.json"
 CODEX_EFFORT_KEY = "model_reasoning_effort"
 CODEX_DEFAULT_EFFORT = "medium"
-CODEX_RESTRICTIVE_CONFIG_VALUES = {
-    "web_search": ("disabled", '"disabled"'),
-    f"model_providers.{PROVIDER_ID}.request_max_retries": ("0",),
-    f"model_providers.{PROVIDER_ID}.stream_max_retries": ("0",),
-}
 
 WRAPPER_ENV_NAMES = ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR")
 CODEX_ENV_HOP_NAMES = (
@@ -56,7 +51,6 @@ MODEL_IDS = (
     "gpt-5.5",
     "gpt-5.4-nano",
     "claude-sonnet-5",
-    "claude-sonnet-5-5",
     "claude-sonnet-4.6",
     "claude-haiku-4.5",
     "deepseek-v4-pro",
@@ -800,8 +794,8 @@ def _parse_inventory(value: object) -> Optional[ModelInventory]:
                 routes=tuple(routes),
             )
         )
-    if set(model_ids) | {"claude-sonnet-5-5"} != set(MODEL_IDS):
-        raise ConfigError("config field inventory.models must contain the required stable catalogue IDs")
+    if set(model_ids) != set(MODEL_IDS):
+        raise ConfigError("config field inventory.models must contain the ten stable catalogue IDs")
 
     return ModelInventory(
         schema_version=1,
@@ -1106,26 +1100,13 @@ def _codex_native_effort(assignment: str, deployment: str) -> Optional[str]:
     return effort
 
 
-def _codex_native_restriction(assignment: str) -> Optional[str]:
-    """Accept only exact capability-reducing literals on the pinned provider."""
-    key, separator, raw = assignment.partition("=")
-    allowed = CODEX_RESTRICTIVE_CONFIG_VALUES.get(key)
-    if not separator or allowed is None:
-        return None
-    if raw not in allowed:
-        raise UsageError(f"Codex native {key} accepts only its restrictive value")
-    return key
-
-
 def validate_codex_native_args(native_args: Sequence[str], deployment: str) -> Optional[str]:
     """Refuse reserved Codex overrides; return the validated native effort, if any.
 
-    Native config accepts the catalogue-validated effort and closed restrictive
-    settings, once per key. Provider, model and authentication remain pinned.
+    Only the exact reasoning-effort key is allowed through -c/--config, once,
+    and only at a level Codex's own catalogue lists for the deployment.
     """
     native_effort: Optional[str] = None
-    restrictions = set()
-    search_requested = False
     index = 0
     while index < len(native_args):
         token = native_args[index]
@@ -1138,21 +1119,13 @@ def validate_codex_native_args(native_args: Sequence[str], deployment: str) -> O
             else:
                 assignment, consumed = token.split("=", 1)[1], 1
             effort = _codex_native_effort(assignment, deployment)
-            if effort is not None:
-                if native_effort is not None:
-                    raise UsageError(f"Codex native {CODEX_EFFORT_KEY} may be provided only once")
-                native_effort = effort
-            else:
-                restriction = _codex_native_restriction(assignment)
-                if restriction is None:
-                    raise UsageError("Codex native --config and -c overrides are reserved by monash-foundry")
-                if restriction in restrictions:
-                    raise UsageError(f"Codex native {restriction} may be provided only once")
-                restrictions.add(restriction)
+            if effort is None:
+                raise UsageError("Codex native --config and -c overrides are reserved by monash-foundry")
+            if native_effort is not None:
+                raise UsageError(f"Codex native {CODEX_EFFORT_KEY} may be provided only once")
+            native_effort = effort
             index += consumed
             continue
-        if _long_option(token, "--search"):
-            search_requested = True
         if _long_option(token, "--config") or _short_option(token, "-c"):
             raise UsageError("Codex native --config and -c overrides are reserved by monash-foundry")
         if _long_option(token, "--profile") or _short_option(token, "-p"):
@@ -1181,8 +1154,6 @@ def validate_codex_native_args(native_args: Sequence[str], deployment: str) -> O
         if model_value is not None and model_value != deployment:
             raise UsageError("Codex native model selection must equal the configured deployment")
         index += 2 if consumes_next else 1
-    if search_requested and "web_search" in restrictions:
-        raise UsageError("Codex native --search conflicts with web_search=disabled")
     return native_effort
 
 

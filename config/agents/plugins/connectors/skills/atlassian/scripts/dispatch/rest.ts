@@ -3,6 +3,7 @@
 // schema the dispatcher confirms arguments against, and the reply shape the
 // REST Provider hands back. Pure and I/O free; the Provider script performs
 // the request and the runtime transport translates the status.
+import { discoveryRequest, discoveryTool } from "./discovery.ts";
 import { isRestTool, REST_TOOLS, type RestTool } from "./contract.ts";
 import type { SchemaTool } from "./engine.ts";
 
@@ -80,6 +81,7 @@ function validArguments(tool: RestTool, args: Record<string, unknown>): boolean 
 // are outside the closed vocabulary. Every argument that enters a path is
 // pattern-checked above, so nothing here can escape its path segment.
 export function restRequest(tool: string, args: unknown): RestRequest | null {
+	if (discoveryTool(tool)) return discoveryRequest(tool, args);
 	if (!isRestTool(tool) || !isRecord(args) || !validArguments(tool, args)) return null;
 	const issue = `/rest/api/2/issue/${args.issue_key as string}`;
 	switch (tool) {
@@ -104,6 +106,7 @@ export function restRequest(tool: string, args: unknown): RestRequest | null {
 		case "jira_rest_attachment_delete":
 			return { method: "DELETE", path: `/rest/api/2/attachment/${args.attachment_id as string}` };
 	}
+	return null;
 }
 
 // The author guard the REST Provider enforces itself before any comment edit,
