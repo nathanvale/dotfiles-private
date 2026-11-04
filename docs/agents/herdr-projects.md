@@ -7,7 +7,7 @@ Read app-generated coordinator or task rules supplied to this session.
 ## Delivery and improvement
 
 For sustained coordination, dispatch, delivery handbacks and recovery, apply the
-[shared coordination policy](../../config/agents/plugins/my-second-brain-playground/skills/stage-manager/references/delivery.md).
+[coordinate-delivery skill](../../config/agents/plugins/personal/library/coordinate-delivery/SKILL.md).
 It owns bounded delegation, evidence pointers, durable learning and the strategic
 question about improving the next task. App-generated role and authority rules
 remain in force.
