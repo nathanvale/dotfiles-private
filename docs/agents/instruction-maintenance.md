@@ -22,7 +22,26 @@
   proof, and rollback. Ask for approval when Nathan did not explicitly request
   the change.
 - Verify every changed pointer.
-- The `Weekly agent instruction structure check` Codex automation owns file and
-  adapter proof.
-- The `Monthly agent instruction loading canary` Codex automation owns root and
-  nested Harness-loading proof.
+
+## Verification
+
+- Check whitespace in the exact candidate diff and paths. Record its comparison
+  base, end state (worktree, index or commit), pathspec and corresponding
+  `git diff --check` arguments. Run the repository's installed formatter in check
+  mode where it supports the changed format;
+  record unsupported formats separately. Inspect every changed local pointer and
+  heading anchor against that candidate. Record the checked paths and outcomes;
+  formatting alone does not prove pointer validity.
+- For installed startup links, run
+  `bin/dotfiles/symlinks/symlinks_manage.sh --status --machine` from Dotfiles.
+  Inspect the instruction rows' stored targets and status, not only the exit code.
+  A correct link does not prove that a running Harness loaded its content.
+- For native instruction-loading proof, follow
+  [Agent Instructions Evaluation](../../config/agents/evaluation/README.md).
+  Its deterministic grader tests qualify the grader, not a native run. Execute a
+  bounded native canary only within its separate authority; retain unrun loading
+  proof as incomplete.
+- Before relying on a scheduled check, verify its live entry is enabled and its
+  referenced executable or skill is available on this host. Record the entry and
+  result. Keep file verification, installed-link readback and native loading as
+  separate results.
