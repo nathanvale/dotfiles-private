@@ -1,47 +1,67 @@
 # Extension handover
 
-Use when a delivery team needs the current package, preview and integration
-instructions. For Monash work, read the installed
-`monash-tools:extension-verify-deliver` skill and follow its pointer to delivery
-communications. That workflow owns qualification, recipients, publication and
-readback; this template owns the readable announcement.
+Use when a cross-functional team reviews or integrates an extension package.
+For Monash work, follow the installed `monash-tools:extension-verify-deliver`
+communications route. It owns qualification, recipients, publication and
+readback; this reference owns the announcement's structure.
 
-1. Resolve the admitted checkpoint, intended integration owner and verified
-   artifact links from that delivery record. Retain its actual scope and gaps.
-2. Lead with what the recipient can use now. Pair the canonical review or
-   journey link with its Jira delivery item; supply the package and migration
-   guide when they are part of this handover. Apply
-   [preview-link verification](message-types.md#verify-preview-links) to the
-   review link. Use the delivery owner's verified package and guide receipts;
-   omit artifact links that have not been supplied or published.
-3. Describe the contents and practical limits in plain language. Keep source
-   hashes, commands and detailed qualification in the linked technical record.
-4. Name one next action, its owner and any genuine deadline. Tag only verified
-   intended stakeholders and use the approved delivery destination.
+## Prepare
+
+1. Read the current delivery record and existing message. Resolve the usable
+   checkpoint, package, Catalog, guide, Jira requirements and example states.
+   Preserve current mentions and unrelated edits when revising a saved post.
+2. Map each relevant Jira requirement to its actual family or scoped example.
+   Name held references and uncovered acceptance criteria beside that mapping.
+   Apply [preview-link verification](message-types.md#verify-preview-links).
+3. Select up to three useful examples and describe one action or state to
+   review in each. Use exact published links where available. For source-only
+   handovers, label examples as packaged and name their module or story;
+   explicitly state that no published preview is included.
+4. Draft in the order below. Keep detailed proof in the linked receipt, with
+   material limits and their practical effect visible in the announcement.
+   End with one concrete review or integration request.
 
 ## Draft shape
 
 ```text
-Hi team, we've prepared {extension and scoped checkpoint} for {next action}.
+Hi team, the {extension and scoped checkpoint} is ready for {review/integration}.
 
-*Review and integration links*
-[Storybook: {journey}](url) | [{Jira delivery item}](url)
-[Source package](url) | [Developer or migration guide](url)
+[Source package](url) | [Full Catalog](url) | [Developer Guide](url)
 
-{One sentence explaining Storybook when needed.}
+The Catalog is our review gallery for {extension}'s sections and example states.
+Product, design, BA and development owners can go from their Jira requirement
+to the relevant family below. Each family's Docs explain what is built,
+the examples to try and the remaining questions.
 
-*What's included*
-{Reader-facing scope and what the recipient can review or integrate.}
+*Explore by Jira requirement*
 
-*What still needs attention*
-{Material decisions, limitations or missing proof with the relevant ticket.}
+- *{Requirement or capability}*, [{Jira key}](url): [{Family}](url), [{Family}](url).
+- *{Requirement or capability}*, [{Jira key}](url): {scoped packaged reference or held state}.
 
-*Next step*
-{Named recipient's concrete action and supported timing.}
+*Three examples to try*
 
-cc: {verified stakeholder mentions}
+- [{Specific example}](url): {one useful action or state to review}.
+- [{Specific example}](url): {one useful action or state to review}.
+- [{Specific example}](url): {one useful action or state to review}.
+
+{Concise qualification and practical limits. Distinguish sample data,
+caller callbacks, held references and incomplete integrations.}
+
+Please reply with the Jira item, exact Storybook example link, what needs
+changing and what the student should see instead.
+
+{Optional related handover, with verified links and its own scope.}
 ```
 
-Use only sections that carry useful information. A preview, source handover,
-package release, deployment and recipient acceptance are separate checkpoints;
-reuse the delivery record's exact state rather than upgrading it in the copy.
+Adapt to the evidence, rather than filling every slot. Omit unavailable links;
+use a verification/limitations receipt when that is the useful technical home.
+For a source-only package, replace the Catalog explanation with a short map of
+its packaged families and guides. Use `Examples to try` for fewer than three,
+or `Three packaged examples to try` when the examples have no published URLs.
+Ask source-only recipients for the Jira item and packaged example/module name.
+
+Keep headings descriptive, use Slack lists rather than pipe tables, and use
+verified clickable labels. Follow the service's composer mode and saved-link
+readback rules. Keep hashes, commands and test counts in the technical record.
+A preview, source handover, deployment and recipient acceptance are distinct
+checkpoints; retain the delivery record's actual scope and limitations.
