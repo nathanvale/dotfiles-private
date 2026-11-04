@@ -95,7 +95,15 @@ def read_desktop(reader_arguments):
             finally:
                 # No output is released until the owned GUI job has been removed.
                 # bootout also kills its process group, including a stalled reader.
-                removed = launchctl("bootout", target)
+                previous = {
+                    number: signal.signal(number, signal.SIG_IGN)
+                    for number in (signal.SIGINT, signal.SIGTERM)
+                }
+                try:
+                    removed = launchctl("bootout", target)
+                finally:
+                    for number, handler in previous.items():
+                        signal.signal(number, handler)
         finally:
             os.close(descriptor)
         if removed != 0:
