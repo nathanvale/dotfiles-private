@@ -7,9 +7,10 @@ description: Coordinate an authorized task through worker dispatch, handback, in
 
 ## Contract
 
-- **Inputs.** Resolve the current assignment, accepted outcome, existing owners,
-  dependencies, candidate and evidence, applicable authority and agreed stop
-  boundary. Include explicit holds, spending and repair limits, and authority expiry.
+- **Inputs.** Resolve the current assignment, accepted outcome, owners,
+  dependencies, applicable authority and agreed stop boundary. Identify the
+  candidate and evidence when they exist. Include explicit holds, spending and
+  repair limits, and authority expiry.
 - **Responsibility.** Move authorized work through dispatch, independent review,
   Repair and closeout. Give every unfinished action a next owner and release
   condition through the existing task and execution routes.
@@ -30,12 +31,15 @@ description: Coordinate an authorized task through worker dispatch, handback, in
 
 1. Read the current records for the contract's inputs. Refresh live state before
    acting on retained knowledge.
-2. Verify the acting coordinator, execution host, worker and worktree against
-   live records. Continue the existing assignment when it still fits.
+2. Verify the acting coordinator against live records. Verify the execution host
+   when the request needs one, and the worker and worktree when already assigned.
+   Reuse the existing assignment when it fits.
 3. Carry valid approvals forward within their scope.
 
-Continue when the current owner, candidate, next action and authority are known.
-A historical handoff or a board label alone establishes none of these facts.
+Continue when the current owner, next action and authority are known. A fresh
+assignment can proceed before a worker produces a candidate. Identify an existing
+candidate exactly before reviewing it or reporting claims about it. A historical
+handoff or a board label alone establishes none of these facts.
 
 ## Dispatch bounded work
 
@@ -59,7 +63,8 @@ Neither a pending record nor queue acceptance proves that a worker started.
 
 ## Act on each handback
 
-Read the exact candidate and evidence before selecting the next action.
+Read the handback and its evidence before selecting the next action. For a
+candidate handback, verify the exact candidate identity.
 
 - Review needed. Request the existing independent review owner through an
   authorized route and verify its return route. A sent request is not a verdict.
