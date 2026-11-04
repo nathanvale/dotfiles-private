@@ -25,8 +25,10 @@
 
 ## Verification
 
-- Check the exact candidate files with `git diff --check`. Run the repository's
-  installed formatter in check mode where it supports the changed format;
+- Check whitespace in the exact candidate diff and paths. Record its comparison
+  base, end state (worktree, index or commit), pathspec and corresponding
+  `git diff --check` arguments. Run the repository's installed formatter in check
+  mode where it supports the changed format;
   record unsupported formats separately. Inspect every changed local pointer and
   heading anchor against that candidate. Record the checked paths and outcomes;
   formatting alone does not prove pointer validity.
@@ -39,6 +41,7 @@
   Its deterministic grader tests qualify the grader, not a native run. Execute a
   bounded native canary only within its separate authority; retain unrun loading
   proof as incomplete.
-- Resolve a scheduled check's live identity before relying on it. An absent
-  automation or retired skill is not an executable check. Keep file verification,
-  installed-link readback and native loading as separate results.
+- Before relying on a scheduled check, verify its live entry is enabled and its
+  referenced executable or skill is available on this host. Record the entry and
+  result. Keep file verification, installed-link readback and native loading as
+  separate results.
