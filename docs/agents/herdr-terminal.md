@@ -25,7 +25,7 @@ reviewed payload intact. Board operations use [their own route](herdr-projects.m
 
 ## Coordinator-managed worktrees
 
-- For direct workers managed by a coordinator, make Herdr the sole checkout
+- For direct terminal Herdr workers managed by a coordinator, make Herdr the sole checkout
   creator. Use `worktree create` with explicit `--cwd`, `--base` at the
   admitted commit SHA, and `--path <repo>/.worktrees/<name>`. Reopen a retained
   checkout with `worktree open`, supplying both `--cwd` and `--path`.
@@ -38,8 +38,10 @@ reviewed payload intact. Board operations use [their own route](herdr-projects.m
   finite host-operation grants and publication with their declared owners.
   Checkout creation proves none of those requirements complete. Preserve
   existing assignments and retained candidates through their handback.
-- Use [Projects ownership](herdr-projects.md#tasks-and-settings) for native
-  delegated tasks and board records of coordinator-managed workers.
+- Use [Projects ownership](herdr-projects.md#tasks-and-settings) for legacy
+  Herdr Projects tasks and their board records. Route Shepherdr-managed
+  Experience SDK tasks through the SDK `AGENTS.md`; the direct terminal
+  checkout procedure above does not create their worktrees.
 
 ## Capability and recovery
 

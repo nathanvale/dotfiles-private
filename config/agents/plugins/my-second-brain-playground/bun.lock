@@ -27,6 +27,10 @@
         "zod": "4.4.3",
       },
     },
+    "packages/closeout-packet": {
+      "name": "closeout-packet",
+      "version": "0.0.0",
+    },
     "packages/compaction-recovery": {
       "name": "compaction-recovery",
       "version": "0.0.0",
@@ -89,6 +93,8 @@
     "cli-design-compose": ["cli-design-compose@workspace:packages/cli-design-compose"],
 
     "cli-design-exemplar": ["cli-design-exemplar@workspace:packages/cli-design-exemplar"],
+
+    "closeout-packet": ["closeout-packet@workspace:packages/closeout-packet"],
 
     "compaction-recovery": ["compaction-recovery@workspace:packages/compaction-recovery"],
 

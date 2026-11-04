@@ -28,15 +28,32 @@ The registration identifies MCPorter to Figma as `Claude Code` because MCPorter'
 
 `"$CONNECTORS" schema figma` lists every admitted tool with its live input schema in `result.data.schema.tools`. Take argument names from it. A Figma URL's `node-id=1-2` becomes `nodeId` `1:2`.
 
+Before any file tool, create one task session after the target file key is known. Reuse its exact returned `sessionId` on every eligible file call for that task, including other files. This records task correlation; it changes no design and grants no additional file access. A failed session setup does not authorize a dependent read.
+
 ```sh
-"$CONNECTORS" run figma get_design_context --input '{"fileKey":"<key>","nodeId":"1:2"}'
+"$CONNECTORS" run figma create_session --input '{"fileKey":"<key>","description":"Inspect the requested frame"}'
+"$CONNECTORS" run figma get_metadata --input '{"fileKey":"<key>","nodeId":"1:2","sessionId":"<returned UUID>"}'
 ```
 
-The reads are `whoami`, `get_metadata`, `get_design_context`, `get_screenshot`, `get_variable_defs`, `download_assets`, `get_motion_context`, `get_figjam`, `get_libraries`, `search_design_system`, `get_code_connect_map`, `get_code_connect_suggestions`, `get_context_for_code_connect`, `list_generative_plugins`, `get_generative_plugin`, `list_shaders`, `get_shader`, `list_file_shaders`, `weave_list_tools`, `weave_get_tool_inputs`, and `weave_get_tool_run_output`.
+Before `get_design_context`, load the hosted guidance through the same front door. Read the index first, then the skill and any relevant linked reference. Follow the returned guidance before the design read.
+
+```sh
+"$CONNECTORS" run figma get_figma_skill --input '{"uri":"skill://index.json"}'
+"$CONNECTORS" run figma get_figma_skill --input '{"uri":"skill://figma/figma-design-to-code/SKILL.md"}'
+"$CONNECTORS" run figma get_design_context --input '{"fileKey":"<key>","nodeId":"1:2","sessionId":"<returned UUID>"}'
+```
+
+`get_figma_skill` is a bounded alias for MCPorter's hosted `resources/read`, because the current server names that tool in its instructions but does not advertise it in `tools/list`. It accepts only the skill index, `skill://figma/<skill>/SKILL.md`, and Markdown under that skill's `references/`. It cannot list arbitrary resources or read local files. `schema figma` distinguishes its declared resource operation from live provider tools.
+
+The reads include the task setup `create_session`, the guidance alias `get_figma_skill`, and `whoami`, `get_metadata`, `get_design_context`, `get_screenshot`, `get_variable_defs`, `download_assets`, `get_motion_context`, `get_figjam`, `get_libraries`, `search_design_system`, `get_code_connect_map`, `get_code_connect_suggestions`, `get_context_for_code_connect`, `list_generative_plugins`, `get_generative_plugin`, `list_shaders`, `get_shader`, `list_file_shaders`, `weave_list_tools`, `weave_get_tool_inputs`, and `weave_get_tool_run_output`.
+
+Malformed session setup, guidance URIs, and UUIDs refuse locally as `input-invalid` before a provider call. A provider failure can remain unclassified; do not infer an expired grant from it.
 
 Figma rate-limits reads by seat: a View or Collab seat gets a few per month, and `whoami` is exempt. Stop at the first rate-limit or access error and report it with the file and node.
 
 ## Writes
+
+For an eligible file write, include the task's `sessionId` in both preview and apply inputs. The adapter carries it into every eligible preview, read-back, and recovery call. Keep the identical input for adjudication.
 
 A write changes Nathan's Figma account. Run one only when Nathan asked for that change. Each is two commands with the identical `--input`:
 

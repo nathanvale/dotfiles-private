@@ -64,6 +64,7 @@
     "maxCrap": 0
   },
   "entry": [
+    "bin/dotfiles/credentials/read-desktop-keychain.py",
     "bin/dotfiles/herdr-defaults.py",
     "bin/model-selection-preflight",
     "bin/teams/teams-scraper.ts",
@@ -84,6 +85,7 @@
     "config/agents/plugins/my-second-brain-playground/packages/*/src/{main,trace-command,recovery-observer}.ts",
     "config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/main.ts",
     "config/agents/plugins/my-second-brain-playground/packages/agent-router/src/cli.ts",
+    "config/agents/plugins/my-second-brain-playground/packages/closeout-packet/src/cli.ts",
     "config/agents/plugins/my-second-brain-playground/packages/workflow-cli/src/cli.ts",
     "config/agents/plugins/proof/hooks/**/*.ts",
     "pilot/generate.ts",

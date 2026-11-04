@@ -64,13 +64,17 @@ function testCanonical(value: unknown): string {
 }
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
-const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.attachment.delete", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
+const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.scan", "issue.comments.scan", "issue.changelog.scan", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.attachment.delete", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.scan", "page.comments.scan", "page.attachments.scan", "page.children.scan", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
 
 // Independent oracle: the exact Community tool and product per operation,
 // from the v0.23.1 Community reference.
 const EXPECTED_TOOLS: Record<string, [string, "read" | "write", "jira" | "confluence"]> = {
 	"issue.get": ["jira_get_issue", "read", "jira"],
 	"issue.search": ["jira_search", "read", "jira"],
+	"issue.scan": ["jira_rest_search", "read", "jira"],
+	"issue.comments.scan": ["jira_rest_comments", "read", "jira"],
+	"issue.changelog.scan": ["jira_rest_changelog", "read", "jira"],
+
 	"issue.transitions": ["jira_get_transitions", "read", "jira"],
 	"issue.create": ["jira_create_issue", "write", "jira"],
 	"issue.update": ["jira_update_issue", "write", "jira"],
@@ -85,6 +89,11 @@ const EXPECTED_TOOLS: Record<string, [string, "read" | "write", "jira" | "conflu
 	"issue.delete": ["jira_delete_issue", "write", "jira"],
 	"page.get": ["confluence_get_page", "read", "confluence"],
 	"page.search": ["confluence_search", "read", "confluence"],
+	"page.scan": ["confluence_rest_search", "read", "confluence"],
+	"page.comments.scan": ["confluence_rest_comments", "read", "confluence"],
+	"page.attachments.scan": ["confluence_rest_attachments", "read", "confluence"],
+	"page.children.scan": ["confluence_rest_children", "read", "confluence"],
+
 	"page.create": ["confluence_create_page", "write", "confluence"],
 	"page.update": ["confluence_update_page", "write", "confluence"],
 	"page.comment": ["confluence_add_comment", "write", "confluence"],
@@ -230,10 +239,10 @@ describe("operation contract and routes", () => {
 		expect(PROVIDER).toBe("community");
 	});
 
-	test("only the two wiki-comment operations and the attachment delete name the rest Provider on the owned REST server; every other operation is Community on its product route", () => {
+	test("only the declared write exceptions and discovery reads use the owned REST product routes", () => {
 		expect(REST_SERVER).toBe(RJ);
 		const routes = Object.values(OPERATION_SPECS).map((spec) => [spec.id, spec.provider, spec.server]);
-		expect(routes.filter(([, provider]) => provider === "rest")).toEqual([["issue.comment.media", "rest", RJ], ["issue.comment.media.update", "rest", RJ], ["issue.attachment.delete", "rest", RJ]]);
+		expect(routes.filter(([, provider]) => provider === "rest")).toEqual([["issue.scan", "rest", RJ], ["issue.comments.scan", "rest", RJ], ["issue.changelog.scan", "rest", RJ], ["issue.comment.media", "rest", RJ], ["issue.comment.media.update", "rest", RJ], ["issue.attachment.delete", "rest", RJ], ["page.scan", "rest", "atlassian-rest-confluence"], ["page.comments.scan", "rest", "atlassian-rest-confluence"], ["page.attachments.scan", "rest", "atlassian-rest-confluence"], ["page.children.scan", "rest", "atlassian-rest-confluence"]]);
 		expect(routes.filter(([, provider]) => provider !== "rest").every(([id, , server]) => server === serverFor(EXPECTED_TOOLS[id as string]?.[2] as "jira" | "confluence"))).toBe(true);
 	});
 
@@ -1876,7 +1885,7 @@ describe("production adapters", () => {
 		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID };
 		const transport = routeTransport(env(), "example", path.join(fixture.pluginRoot, "skills"), capabilities());
 		const listed = await transport.listTools(binding, RJ);
-		expect(listed.ok && (listed.data as { name: string }[]).map((tool) => tool.name)).toEqual(["jira_rest_myself", "jira_rest_issue_attachments", "jira_rest_comments_list", "jira_rest_comment_get", "jira_rest_comment_add", "jira_rest_comment_edit", "jira_rest_attachment_head", "jira_rest_issue_attachment_context", "jira_rest_attachment_delete"]);
+		expect(listed.ok && (listed.data as { name: string }[]).map((tool) => tool.name)).toEqual(["jira_rest_search", "jira_rest_comments", "jira_rest_changelog", "jira_rest_myself", "jira_rest_issue_attachments", "jira_rest_comments_list", "jira_rest_comment_get", "jira_rest_comment_add", "jira_rest_comment_edit", "jira_rest_attachment_head", "jira_rest_issue_attachment_context", "jira_rest_attachment_delete"]);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
 		// No item: the Provider's own item read fails closed before stdin is consumed.
 		expect(await transport.call(binding, RJ, "jira_rest_myself", {})).toEqual({ ok: false, cause: "refused-precondition", hint: "the product credential item is not in 1Password; its owner must create and store it" });

@@ -4,6 +4,7 @@
 // flow returns an Outcome that the adapter maps onto the front door's result. Provider
 // text never crosses the transport seam; the outcomes carry fixed text and
 // identifiers only.
+import { discoveryRequest, discoveryTool, type ReadEvidence, readEvidence, readPosition, readScope } from "./discovery.ts";
 import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, type Provenance, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
@@ -11,6 +12,7 @@ import { canonicalDigest, type Evidence, JournalError, type Receipt, type WriteO
 import { ATTACHMENT_AUTHOR_GUARD_REASON, AUTHOR_GUARD_REASON, accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, bindParent, commentSources, createdIssueEvidence, createdIssueKey, createdIssuePlan, descriptionSource, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, parentDigest, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
+	read?: ReadEvidence;
 	cause: CauseCode;
 	data: unknown;
 	detail: string | null;
@@ -127,8 +129,16 @@ export async function readFlow(session: Session, spec: OperationSpec, input: Inp
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
 	const route = routeFor(session, spec, bound.binding);
 	const args = providerArguments(spec, input);
+	if (discoveryTool(spec.tool)) {
+		const position = readPosition(input.continuation, readScope(session.tenant, bound.binding, spec.id, input));
+		if (!position) return refusal("input-invalid", "the continuation does not match this read scope; restart the bounded query");
+		Object.assign(args, position);
+	}
+	const request = discoveryRequest(spec.tool, args);
+	if (discoveryTool(spec.tool) && !request) return refusal("input-invalid");
 	const attempt = (await route.ready({ tool: spec.tool, args })) ?? (await route.call(spec.tool, args));
-	return attempt.cause === "success" ? success(attempt.data) : failed(attempt);
+	if (attempt.cause !== "success") return failed(attempt);
+	return { ...success(attempt.data), read: readEvidence(session.tenant, bound.binding, spec.product, spec.id, input, attempt.data, session.deps.now(), request ?? undefined) };
 }
 
 type Prepared = { ctx: PreparedContext } | { outcome: Outcome };

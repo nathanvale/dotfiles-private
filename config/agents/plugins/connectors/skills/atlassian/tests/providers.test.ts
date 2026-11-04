@@ -319,12 +319,14 @@ describe("Community provider plugin-owned dependencies", () => {
 describe("REST provider process", () => {
 	const request = (tool: string, args: unknown = {}) => JSON.stringify({ tool, args });
 
-	test("refuses arguments, a non-Jira product, and a rotated item before reading a request", async () => {
+	test("refuses arguments, a tool for another product, and a rotated item before any network request", async () => {
 		write(FULL_ITEM);
 		expect((await runProvider(REST, ["--preflight"], {}, request("jira_rest_myself"))).stderr).toContain("atlassian-provider:error:arguments-invalid:");
 		expect(opLines()).toEqual([]);
 		const confluence = await runProvider(REST, [], { ATLASSIAN_PRODUCT: "confluence" }, request("jira_rest_myself"));
 		expect([confluence.code, confluence.stderr.includes("atlassian-provider:error:product-invalid:")]).toEqual([2, true]);
+		const wrongProduct = await runProvider(REST, [], {}, request("confluence_rest_search", { cql: "type=page", limit: 1, start: 0, cursor: "" }));
+		expect([wrongProduct.code, wrongProduct.stderr.includes("atlassian-provider:error:product-invalid:")]).toEqual([2, true]);
 		write(item({ username: "service@example.invalid", credential: "fixture-community-secret" }, 2));
 		const stale = await runProvider(REST, [], {}, request("jira_rest_myself"));
 		expect([stale.code, stale.stderr.includes("atlassian-provider:error:credential-context-stale:")]).toEqual([4, true]);

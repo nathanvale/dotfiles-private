@@ -1,4 +1,4 @@
-// Atlassian dispatch contract: the nineteen semantic operations, their exact
+// Atlassian dispatch contract: semantic operations, their exact
 // Community provider tools, the allow-lists the registry must mirror, the
 // operator commands, and the closed cause vocabulary. Tool names are
 // documented, not live-verified; the engine binds one only after live schema
@@ -12,6 +12,7 @@ export type { Product } from "../custody/index.ts";
 // directory is virtual, so the registry cannot be read from disk beside it.
 // MCPorter still enforces the on-disk allow-list, so the effective set is the
 // intersection of the two.
+import { DISCOVERY_TOOLS } from "./discovery.ts";
 import registry from "../../config/mcporter.json" with { type: "json" };
 
 // The active Providers. Community is the one Atlassian Provider; `rest` is the
@@ -26,10 +27,12 @@ export const PROVIDERS = [PROVIDER, REST_PROVIDER] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
 
 // The owned REST route: one static server name and the exact request shapes
-// the two capability exceptions may make, with the arguments each requires.
+// declared capability exceptions may make, with the arguments each requires.
 // The REST Provider script refuses any other tool or argument.
 export const REST_SERVER = "atlassian-rest-jira" as const;
+export const REST_CONFLUENCE_SERVER = "atlassian-rest-confluence" as const;
 export const REST_TOOLS = Object.freeze({
+	...DISCOVERY_TOOLS,
 	jira_rest_myself: Object.freeze([] as string[]),
 	jira_rest_issue_attachments: Object.freeze(["issue_key"]),
 	jira_rest_comments_list: Object.freeze(["issue_key"]),
@@ -99,6 +102,10 @@ interface OperationDescriptor {
 const OPERATION_REGISTRY = [
 	{ id: "issue.get", kind: "read", product: "jira", provider: PROVIDER, tool: "jira_get_issue" },
 	{ id: "issue.search", kind: "read", product: "jira", provider: PROVIDER, tool: "jira_search" },
+	{ id: "issue.scan", kind: "read", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_search" },
+	{ id: "issue.comments.scan", kind: "read", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_comments" },
+	{ id: "issue.changelog.scan", kind: "read", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_changelog" },
+
 	{ id: "issue.transitions", kind: "read", product: "jira", provider: PROVIDER, tool: "jira_get_transitions" },
 	{ id: "issue.create", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_create_issue" },
 	{ id: "issue.update", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_update_issue" },
@@ -119,6 +126,10 @@ const OPERATION_REGISTRY = [
 	{ id: "issue.delete", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_delete_issue" },
 	{ id: "page.get", kind: "read", product: "confluence", provider: PROVIDER, tool: "confluence_get_page" },
 	{ id: "page.search", kind: "read", product: "confluence", provider: PROVIDER, tool: "confluence_search" },
+	{ id: "page.scan", kind: "read", product: "confluence", provider: REST_PROVIDER, tool: "confluence_rest_search" },
+	{ id: "page.comments.scan", kind: "read", product: "confluence", provider: REST_PROVIDER, tool: "confluence_rest_comments" },
+	{ id: "page.attachments.scan", kind: "read", product: "confluence", provider: REST_PROVIDER, tool: "confluence_rest_attachments" },
+	{ id: "page.children.scan", kind: "read", product: "confluence", provider: REST_PROVIDER, tool: "confluence_rest_children" },
 	{ id: "page.create", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_create_page" },
 	{ id: "page.update", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_update_page" },
 	{ id: "page.comment", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_add_comment" },
@@ -140,7 +151,7 @@ export interface OperationSpec {
 	product: Product;
 	provider: ProviderName;
 	// The route server the operation's tool is confirmed and called on.
-	server: ServerName | typeof REST_SERVER;
+	server: ServerName | typeof REST_SERVER | typeof REST_CONFLUENCE_SERVER;
 	tool: string;
 }
 
@@ -152,7 +163,7 @@ function exactTool(server: ServerName, tool: string): string {
 function admittedSpec(spec: (typeof OPERATION_REGISTRY)[number]): OperationSpec {
 	if (spec.provider === REST_PROVIDER) {
 		if (!isRestTool(spec.tool)) throw new Error(`registry-invalid: ${REST_SERVER} lacks ${spec.tool}`);
-		return { ...spec, server: REST_SERVER };
+		return { ...spec, server: spec.product === "jira" ? REST_SERVER : REST_CONFLUENCE_SERVER };
 	}
 	const server = serverFor(spec.product);
 	return { ...spec, server, tool: exactTool(server, spec.tool) };

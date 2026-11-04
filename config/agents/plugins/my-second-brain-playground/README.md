@@ -42,6 +42,14 @@ card for the Herdr Projects goal. It never launches an agent.
 [`packages/agent-router/README.md`](packages/agent-router/README.md) owns the
 routes-file schema, gates and evidence owners; `--help` owns the syntax.
 
+## Closeout Packet check
+
+`bin/closeout-packet` is the read-only completeness check for one Closeout
+Packet against a separately supplied expected context. It never approves,
+transitions or closes anything.
+[`packages/closeout-packet/README.md`](packages/closeout-packet/README.md) owns
+the input format and result reading; `--help` owns the syntax.
+
 ## Vault Notes
 
 `bin/vault-notes` is the inspect-only front door for the vault's `check`,
