@@ -119,6 +119,11 @@
   `WorktreeCreate` hook.
 - Stray worktree: `worktree status` reports `stray_worktree_count`; relocate
   with `git worktree move`. Deletion is Nathan's decision.
+- For Shepherdr-managed Experience SDK tasks only, retain native paths and
+  branch names instead of the repository-local placement rule above. Follow
+  the SDK `AGENTS.md` owner routes for creation and cleanup. A generic stray
+  report on a verified native task worktree requires an ownership check;
+  it does not authorize relocation, renaming or deletion.
 - Never force-push, hard-reset, run `git clean -f`, restore an entire working
   tree, or stage with `git add .` or `git add -A`.
 - Dirty or untracked work: treat it as owned until proven disposable. Preserve

@@ -62,7 +62,7 @@ those operations. Herdr transport does not transfer their ownership.
 
 ## Coordinator-managed worktrees
 
-- For direct workers managed by a coordinator, make Herdr the sole checkout
+- For direct terminal Herdr workers managed by a coordinator, make Herdr the sole checkout
   creator. Use `worktree create` with explicit `--cwd`, `--base` at the
   admitted commit SHA, and `--path <repo>/.worktrees/<name>`. Reopen a retained
   checkout with `worktree open`, supplying both `--cwd` and `--path`.
@@ -75,7 +75,9 @@ those operations. Herdr transport does not transfer their ownership.
   finite host-operation grants and publication with their declared owners.
   Checkout creation proves none of those requirements complete. Preserve
   existing assignments and retained candidates through their handback.
-- For native delegated tasks, keep the Projects lifecycle with the board.
+- For native Herdr Projects tasks, keep the legacy lifecycle with that board.
+  Route Shepherdr-managed Experience SDK tasks through the SDK `AGENTS.md`;
+  the direct terminal checkout procedure above does not create their worktrees.
   For manually coordinated workers, record the owning task, worker and handback
   without claiming native adoption or automatic checks and reviews. Verify a
   supported adoption route before transferring lifecycle ownership.
