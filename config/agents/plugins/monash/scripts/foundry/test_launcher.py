@@ -348,6 +348,98 @@ print(json.dumps([account] if "list" in sys.argv else account))
                 self.assertIn("model=\"gpt-6.1-sol\"", argv)
                 self.assertEqual(self.child_result()["env"], {"AZURE_OPENAI_API_KEY": "synthetic-child-key"})
 
+    def test_codex_restrictive_config_preserves_provider_and_auth(self):
+        self.use_codex_deployment("gpt-6.1-sol")
+        # Independent oracles: only disabled search and zero retry counts are
+        # admitted; the provider, deployment and credential binding stay pinned.
+        assignments = [
+            'web_search="disabled"',
+            'model_providers.monash_foundry.request_max_retries=0',
+            'model_providers.monash_foundry.stream_max_retries=0',
+        ]
+        forms = [
+            [part for value in assignments for part in ("-c", value)],
+            [part for value in assignments for part in ("--config", value)],
+            ["--config=" + value for value in assignments],
+            ["-c", "web_search=disabled"],
+        ]
+        for restrictions in forms:
+            with self.subTest(restrictions=restrictions):
+                self.capture.unlink(missing_ok=True)
+                native = ["-c", 'model_reasoning_effort="high"', *restrictions,
+                          "exec", "--sandbox", "read-only", "--no-daemon", "explain"]
+                result = self.run_cli("codex", "--", *native)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                child = self.child_result()
+                argv = child["argv"]
+                self.assertEqual(argv[-len(native):], native)
+                self.assertEqual(self.codex_efforts(argv), ["high"])
+                for pinned in (
+                    'model_provider="monash_foundry"', 'model="gpt-6.1-sol"',
+                    'model_providers.monash_foundry.base_url="https://example.openai.azure.com/openai/v1"',
+                    'model_providers.monash_foundry.wire_api="responses"',
+                    'model_providers.monash_foundry.env_key="AZURE_OPENAI_API_KEY"',
+                    'model_providers.monash_foundry.requires_openai_auth=false',
+                ):
+                    self.assertEqual(argv.count(pinned), 1, pinned)
+                self.assertEqual(child["env"], {"AZURE_OPENAI_API_KEY": "synthetic-child-key"})
+                wrapper = json.loads(self.wrapper_capture.read_text())
+                self.assertEqual(wrapper[:4], ["inject", "AZURE_OPENAI_API_KEY",
+                                               "op://API Credentials/TEST/credential", "--"])
+
+    def test_codex_restrictive_config_refusals_precede_credentials(self):
+        self.use_codex_deployment("gpt-6.1-sol")
+        assignments = [
+            'web_search="live"', 'web_search="cached"', 'web_search="indexed"',
+            'web_search=true', 'web_search=false', 'web_search=["disabled"]',
+            'web_search="disabled"\nmodel_provider="openai"',
+            'web_search="disabled" # comment',
+            'model_providers.monash_foundry.request_max_retries=1',
+            'model_providers.monash_foundry.request_max_retries=-1',
+            'model_providers.monash_foundry.request_max_retries=0.0',
+            'model_providers.monash_foundry.request_max_retries=false',
+            'model_providers.monash_foundry.request_max_retries="0"',
+            'model_providers.monash_foundry.stream_max_retries=5',
+            'model_providers.monash_foundry.stream_max_retries=0\nmodel="other"',
+            'model_providers.openai.request_max_retries=0',
+            'model_providers."monash_foundry".request_max_retries=0',
+            'model_providers.monash_foundry={request_max_retries=0}',
+            'model_provider="openai"', 'model="other"',
+            'model_providers.monash_foundry.base_url="https://attacker.example"',
+            'model_providers.monash_foundry.env_key="OPENAI_API_KEY"',
+            'model_providers.monash_foundry.requires_openai_auth=true',
+            'model_providers.monash_foundry.wire_api="chat"',
+            'hooks={}', 'mcp_servers={}', 'sandbox_mode="danger-full-access"',
+        ]
+        cases = [["-c", assignment] for assignment in assignments]
+        for assignment in (
+            'web_search="disabled"',
+            'model_providers.monash_foundry.request_max_retries=0',
+            'model_providers.monash_foundry.stream_max_retries=0',
+        ):
+            cases.append(["-c", assignment, "--config=" + assignment])
+        cases.extend([
+            ["-c", 'web_search="disabled"', "--search"],
+            ["--search", "--config=web_search=disabled"],
+            ["-c", 'web_search="disabled"', "--search=true"],
+            ["-cweb_search=disabled"],
+        ])
+        for native in cases:
+            with self.subTest(native=native):
+                result = self.run_cli("codex", "--", *native)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(self.wrapper_capture.exists(), "credential wrapper ran before refusal")
+                self.assertFalse(self.capture.exists(), "native child ran")
+
+    def test_codex_restrictive_config_dry_run_has_no_external_effect(self):
+        result = self.run_cli("--dry-run", "codex", "--", "-c", 'web_search="disabled"',
+                              "-c", "model_providers.monash_foundry.request_max_retries=0",
+                              "-c", "model_providers.monash_foundry.stream_max_retries=0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.wrapper_capture.exists())
+        self.assertFalse(self.az_capture.exists())
+        self.assertFalse(self.capture.exists())
+
     def test_codex_reasoning_effort_defaults_to_medium_without_an_override(self):
         for deployment in ("test-codex-deployment", "gpt-6.1-sol"):
             with self.subTest(deployment=deployment):

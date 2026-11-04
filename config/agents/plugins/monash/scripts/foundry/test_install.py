@@ -36,6 +36,8 @@ EXPECTED_SOURCE_FILES = (
     "monash",
     "monash_hosts.py",
     "monash_remote.py",
+    "monash-codex-token",
+    "monash-codex-desktop",
     "config.json",
     "codex-models.json",
     "CODEX-CATALOG-LICENSE",
@@ -129,13 +131,16 @@ LEGACY_SOURCE_MODES = {
     "CODEX-CATALOG-NOTICE": 0o600,
 }
 
-# Independent mode oracle. The remote helper is executable data, not a command.
+# Independent mode oracle. The remote helper and the Codex desktop helper and
+# token command are executable data run by installed path, not bin commands.
 EXPECTED_SOURCE_MODES = {
     "foundry": 0o500,
     "monash-foundry": 0o500,
     "monash": 0o500,
     "monash_hosts.py": 0o600,
     "monash_remote.py": 0o500,
+    "monash-codex-token": 0o500,
+    "monash-codex-desktop": 0o500,
     "config.json": 0o600,
     "codex-models.json": 0o600,
     "CODEX-CATALOG-LICENSE": 0o600,

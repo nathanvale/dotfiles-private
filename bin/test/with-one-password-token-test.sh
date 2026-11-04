@@ -7,7 +7,30 @@ set -euo pipefail
 # into SUBJECT, producing a two-line path that cannot be executed.
 SOURCE_SUBJECT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)/with-one-password-token"
 TEST_ROOT="$(mktemp -d)"
-trap 'rm -rf "$TEST_ROOT"' EXIT
+cleanup() {
+  # A failing cleanup assertion must not leave its test-owned GUI group alive.
+  python3 - "$TEST_ROOT" <<'PY_CLEANUP'
+from pathlib import Path
+import os
+import signal
+import subprocess
+import sys
+for marker in Path(sys.argv[1]).rglob("gui-job-started-pid"):
+    group = int(marker.read_text())
+    if group > 0 and group != os.getpgrp():
+        listing = subprocess.check_output(["/bin/ps", "-axo", "pid=,pgid=,stat="], text=True)
+        live = [line for line in listing.splitlines()
+                if len(row := line.split()) == 3 and int(row[1]) == group and "Z" not in row[2]]
+        if live:
+            print(f"# fixture teardown retired {len(live)} live processes from owned group {group}", file=sys.stderr)
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+PY_CLEANUP
+  rm -rf "$TEST_ROOT"
+}
+trap cleanup EXIT
 
 # Substitute native executables only in this private test copy. Production has
 # no environment override for its credential reader, op, or signature verifier.
@@ -19,8 +42,6 @@ source = Path(sys.argv[1]).read_text()
 replacements = {
     "OP_PATH='/opt/homebrew/bin/op'": 'OP_PATH="$DOTFILES_DIR/bin/op"',
     "reader='/usr/bin/security'": 'reader="$DOTFILES_DIR/bin/security"',
-    '/usr/bin/sudo -n': '"$DOTFILES_DIR/bin/sudo" -n',
-    '/bin/launchctl asuser': '"$DOTFILES_DIR/bin/launchctl" asuser',
     '/usr/bin/codesign --verify': '"$DOTFILES_DIR/bin/codesign" --verify',
     '/usr/bin/stat ': '"$DOTFILES_DIR/bin/stat" ',
     '$(/usr/bin/id -u)': '$("$DOTFILES_DIR/bin/id" -u)',
@@ -32,6 +53,17 @@ for old, new in replacements.items():
 Path(sys.argv[2]).write_text(source)
 PY_COPY
 chmod 700 "$SUBJECT"
+
+# Only the test-owned helper substitutes launchctl. Production has no override.
+mkdir -p "$TEST_ROOT/dotfiles/credentials"
+python3 - "${SOURCE_SUBJECT%/*}/dotfiles/credentials/read-desktop-keychain.py" "$TEST_ROOT/dotfiles/credentials/read-desktop-keychain.py" <<'PY_HELPER'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+old = 'LAUNCHCTL = "/bin/launchctl"'
+assert old in source
+Path(sys.argv[2]).write_text(source.replace(old, 'LAUNCHCTL = os.environ["DOTFILES_DIR"] + "/bin/launchctl"'))
+PY_HELPER
 
 
 # The wrapper prefers the login Keychain under HOME. A test-owned HOME keeps
@@ -260,18 +292,77 @@ EOF
 
   cat >"$fixture/bin/sudo" <<'EOF'
 #!/bin/bash
+[[ ! -e "${0%/*}/sudo-refused" ]] || exit 1
 [[ "$1" == -n ]] || exit 64
 shift
 if [[ "$1" == -u ]]; then shift 2; fi
 exec "$@"
 EOF
   cat >"$fixture/bin/launchctl" <<'EOF'
-#!/bin/bash
-[[ "$1" == asuser && "$2" =~ ^[0-9]+$ ]] || exit 64
-shift 2
-# Model the desktop context only inside this private fake process.
-export FIXTURE_DESKTOP_CONTEXT=1
-exec "$@"
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import plistlib
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+root = Path(__file__).parent
+mode = (root / "launchctl-mode").read_text() if (root / "launchctl-mode").exists() else "ok"
+operation = sys.argv[1]
+if operation == "bootstrap":
+    if mode == "bootstrap-denied":
+        sys.exit(1)
+    assert sys.argv[2] == f"gui/{os.getuid()}"
+    path = Path(sys.argv[3])
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    job = plistlib.loads(path.read_bytes())
+    fifo = Path(job["StandardOutPath"])
+    assert stat.S_ISFIFO(fifo.stat().st_mode)
+    assert stat.S_IMODE(fifo.stat().st_mode) == 0o600
+    assert set(job["EnvironmentVariables"]) == {"HOME", "PATH"}
+    assert job["AbandonProcessGroup"] is False
+    assert job["ExitTimeOut"] == 1
+    assert job["ProgramArguments"][4] == str(root / "security")
+    with fifo.open("wb", buffering=0) as output:
+        process = subprocess.Popen(job["ProgramArguments"],
+            env={**job["EnvironmentVariables"], "FIXTURE_DESKTOP_CONTEXT": "1"},
+            stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+    (root / "gui-job-pid").write_text(str(process.pid))
+    (root / "gui-job-started-pid").write_text(str(process.pid))
+    (root / "gui-job-target").write_text(sys.argv[2] + "/" + job["Label"])
+    if mode.startswith("interrupt-cleanup-"):
+        deadline = time.monotonic() + 2
+        while not (root / "desktop-reader-pid").exists():
+            assert time.monotonic() < deadline, "desktop reader did not start"
+            time.sleep(0.01)
+        os.kill(os.getppid(), signal.SIGTERM)
+elif operation == "bootout":
+    if not (root / "gui-job-pid").exists():
+        sys.exit(3)
+    assert sys.argv[2] == (root / "gui-job-target").read_text()
+    (root / "bootout-started").touch()
+    if mode.startswith("interrupt-cleanup-"):
+        number = signal.SIGINT if mode.endswith("int") else signal.SIGTERM
+        os.kill(os.getppid(), number)
+        (root / "bootout-signal-sent").touch()
+        time.sleep(0.1)
+    if mode == "bootout-timeout":
+        time.sleep(30)
+    try:
+        os.killpg(int((root / "gui-job-pid").read_text()), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    (root / "gui-job-pid").unlink()
+    (root / "gui-job-removed").touch()
+    if mode == "bootout-denied":
+        sys.exit(1)
+else:
+    sys.exit(64)
 EOF
   chmod +x "$fixture/bin/sudo" "$fixture/bin/launchctl"
 
@@ -285,6 +376,9 @@ set -euo pipefail
 fixture_bin="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 printf '%s\n' "$*" >>"$fixture_bin/security-argv"
 mode="$(cat "$fixture_bin/security-mode" 2>/dev/null || printf 'item-missing')"
+if [[ "${FIXTURE_DESKTOP_CONTEXT:-}" == 1 ]]; then
+  printf '%s\n' "$$" >"$fixture_bin/desktop-reader-pid"
+fi
 case "$mode" in
   token) printf 'ops_KEYCHAIN_SENTINEL\n' ;;
   item-missing)
@@ -294,6 +388,10 @@ case "$mode" in
   desktop-only)
     [[ "${FIXTURE_DESKTOP_CONTEXT:-}" == 1 ]] || exit 36
     printf 'ops_KEYCHAIN_SENTINEL\n'
+    ;;
+  desktop-hang)
+    [[ "${FIXTURE_DESKTOP_CONTEXT:-}" == 1 ]] || exit 36
+    exec sleep 30
     ;;
   interaction-denied)
     printf 'security: User interaction is not allowed.\n' >&2
@@ -812,13 +910,142 @@ blocked_error="$(DOTFILES_DIR="$blocked_fixture" PATH="$blocked_fixture/bin:$PAT
 set -e
 assert_contains "$blocked_error" '"status":"blocked","command":"check","code":"token-file-missing","keychain_status":"item-missing","keychain_reader_exit":44' 'blocked check names the Keychain reason behind the .env failure'
 
-# SSH can use the existing desktop audit context without forwarding a token
-# through sudo or launchctl arguments.
+# SSH must reach the same user's GUI session without passwordless sudo or a
+# plaintext fallback. The fake launchctl validates the private job and FIFO.
+reset_desktop_observations() {
+  [[ ! -e "$desktop_fixture/bin/gui-job-pid" ]] || fail 'previous desktop job remains owned'
+  rm -f "$desktop_fixture/bin/gui-job-removed" "$desktop_fixture/bin/gui-job-started-pid" \
+    "$desktop_fixture/bin/desktop-reader-pid" "$desktop_fixture/bin/bootout-started" \
+    "$desktop_fixture/bin/bootout-signal-sent"
+}
+
+assert_desktop_group_removed() {
+  [[ -s "$desktop_fixture/bin/gui-job-started-pid" && -s "$desktop_fixture/bin/desktop-reader-pid" &&
+    -e "$desktop_fixture/bin/gui-job-removed" && ! -e "$desktop_fixture/bin/gui-job-pid" ]] || fail "$1"
+  python3 - "$desktop_fixture/bin" <<'PY_GROUP_GONE' || fail "$1"
+from pathlib import Path
+import subprocess
+import sys
+import time
+root = Path(sys.argv[1])
+group = int((root / "gui-job-started-pid").read_text())
+reader = int((root / "desktop-reader-pid").read_text())
+deadline = time.monotonic() + 2
+while True:
+    listing = subprocess.check_output(["/bin/ps", "-axo", "pid=,pgid=,stat="], text=True)
+    live = [line for line in listing.splitlines()
+            if len(row := line.split()) == 3 and "Z" not in row[2]
+            and (int(row[1]) == group or int(row[0]) == reader)]
+    if not live:
+        break
+    if time.monotonic() >= deadline:
+        raise SystemExit("test-owned desktop reader/group is still running")
+    time.sleep(0.02)
+PY_GROUP_GONE
+  pass "$1"
+}
+
 desktop_fixture="$TEST_ROOT/desktop-context"
 make_fixture "$desktop_fixture"
 printf 'desktop-only' >"$desktop_fixture/bin/security-mode"
+: >"$desktop_fixture/bin/sudo-refused"
+rm "$desktop_fixture/.env"
+reset_desktop_observations
 desktop_output="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
 assert_contains "$desktop_output" '"token_source":"desktop-keychain"' 'SSH uses the desktop Keychain context after an interaction refusal'
 assert_not_contains "$desktop_output" 'KEYCHAIN_SENTINEL' 'desktop context output excludes the token'
+
+[[ -e "$desktop_fixture/bin/gui-job-removed" && ! -e "$desktop_fixture/bin/gui-job-pid" ]] || fail 'desktop job is removed before custody succeeds'
+pass 'desktop job is removed before custody succeeds'
+
+for desktop_mode in bootstrap-denied bootout-denied; do
+  reset_desktop_observations
+  printf '%s' "$desktop_mode" >"$desktop_fixture/bin/launchctl-mode"
+  set +e
+  desktop_error="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+  desktop_status=$?
+  set -e
+  [[ "$desktop_status" -eq 3 ]] || fail "$desktop_mode blocks custody without an env fallback"
+  pass "$desktop_mode blocks custody without an env fallback"
+  assert_contains "$desktop_error" '"keychain_status":"unavailable","keychain_reader_exit":1' "$desktop_mode reports failed desktop delivery"
+  assert_not_contains "$desktop_error" 'SENTINEL' "$desktop_mode never releases token bytes"
+done
+printf 'ok' >"$desktop_fixture/bin/launchctl-mode"
+
+printf 'interaction-denied' >"$desktop_fixture/bin/security-mode"
+reset_desktop_observations
+set +e
+desktop_locked="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+desktop_status=$?
+set -e
+[[ "$desktop_status" -eq 3 ]] || fail 'locked desktop fails closed'
+pass 'locked desktop fails closed'
+assert_contains "$desktop_locked" '"keychain_status":"unavailable","keychain_reader_exit":36' 'locked desktop preserves native refusal'
+
+printf 'desktop-hang' >"$desktop_fixture/bin/security-mode"
+reset_desktop_observations
+desktop_started="$SECONDS"
+set +e
+desktop_timeout="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+desktop_status=$?
+set -e
+[[ "$desktop_status" -eq 3 && $((SECONDS - desktop_started)) -lt 15 ]] || fail 'stalled desktop custody is bounded'
+pass 'stalled desktop custody is bounded'
+assert_contains "$desktop_timeout" '"keychain_status":"timeout","keychain_reader_exit":null' 'stalled desktop reports timeout'
+[[ -e "$desktop_fixture/bin/gui-job-removed" && ! -e "$desktop_fixture/bin/gui-job-pid" ]] || fail 'timeout removes the desktop job and reader group'
+assert_desktop_group_removed 'timeout removes the desktop job and reader group'
+
+for cleanup_signal in term int; do
+  reset_desktop_observations
+  printf 'interrupt-cleanup-%s' "$cleanup_signal" >"$desktop_fixture/bin/launchctl-mode"
+  set +e
+  interrupted_output="$(SSH_CONNECTION=fixture DOTFILES_DIR="$desktop_fixture" PATH="$desktop_fixture/bin:$PATH" "$SUBJECT" check 2>&1)"
+  interrupted_status=$?
+  set -e
+  [[ "$interrupted_status" -eq 3 ]] || fail "$cleanup_signal interruption fails closed"
+  pass "$cleanup_signal interruption fails closed"
+  assert_contains "$interrupted_output" '"keychain_status":"timeout","keychain_reader_exit":null' "$cleanup_signal interruption retains interrupted-reader status"
+  assert_not_contains "$interrupted_output" 'SENTINEL' "$cleanup_signal interruption releases no token"
+  [[ -e "$desktop_fixture/bin/bootout-signal-sent" ]] || fail "$cleanup_signal reached bootout"
+  pass "$cleanup_signal reached bootout"
+  assert_desktop_group_removed "$cleanup_signal during bootout still removes the reader group"
+done
+
+printf 'desktop-only' >"$desktop_fixture/bin/security-mode"
+for cleanup_failure in bootout-denied bootout-timeout; do
+  reset_desktop_observations
+  printf '%s' "$cleanup_failure" >"$desktop_fixture/bin/launchctl-mode"
+  restore_output="$(DOTFILES_DIR="$desktop_fixture" python3 - "$TEST_ROOT/dotfiles/credentials/read-desktop-keychain.py" "$desktop_fixture/bin" "$cleanup_failure" <<'PY_RESTORE'
+from pathlib import Path
+import os
+import runpy
+import signal
+import subprocess
+import sys
+module = runpy.run_path(sys.argv[1])
+root = Path(sys.argv[2])
+seen = []
+def observe(number, _frame):
+    seen.append(number)
+for number in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(number, observe)
+try:
+    status = module["read_desktop"]([str(root / "security"), "find-generic-password", "-s", "fixture", "-a", "fixture", "-w", "fixture"])
+    assert sys.argv[3] == "bootout-denied" and status == 1
+except subprocess.TimeoutExpired:
+    assert sys.argv[3] == "bootout-timeout"
+for number in (signal.SIGINT, signal.SIGTERM):
+    os.kill(os.getpid(), number)
+assert seen == [signal.SIGINT, signal.SIGTERM], "cleanup did not restore prior signal handlers"
+PY_RESTORE
+  )" || fail "$cleanup_failure restores prior handlers"
+  [[ -z "$restore_output" ]] || fail "$cleanup_failure releases no token"
+  pass "$cleanup_failure restores handlers and releases no token"
+  # A timed-out fake bootout cannot remove its job; retire only this fixture.
+  if [[ "$cleanup_failure" == bootout-timeout ]]; then
+    printf 'ok' >"$desktop_fixture/bin/launchctl-mode"
+    "$desktop_fixture/bin/launchctl" bootout "$(cat "$desktop_fixture/bin/gui-job-target")"
+  fi
+done
 
 printf '1..%d\n' "$pass_count"
