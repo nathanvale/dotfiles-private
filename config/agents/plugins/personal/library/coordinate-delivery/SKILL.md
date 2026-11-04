@@ -5,19 +5,34 @@ description: Coordinate an authorized task through worker dispatch, handback, in
 
 # Coordinate delivery
 
-Carry the selected task to its agreed stop boundary through its existing owners.
-This skill guides coordination. The selected application's role rules, supported
-interfaces and the user's grant determine which actions you can perform.
+## Contract
+
+- **Inputs.** Resolve the current assignment, accepted outcome, existing owners,
+  dependencies, candidate and evidence, applicable authority and agreed stop
+  boundary. Include explicit holds, spending and repair limits, and authority expiry.
+- **Responsibility.** Move authorized work through dispatch, independent review,
+  Repair and closeout. Give every unfinished action a next owner and release
+  condition through the existing task and execution routes.
+- **Authority.** Act within the user's grant, application role rules and supported
+  interfaces. Invocation grants no role, permission or budget. Hold the affected
+  action when authority is missing, expired or conflicting. This is behavioral
+  guidance; application controls remain responsible for enforcement.
+- **Outputs.** Record the proved outcome, exact candidate when applicable,
+  evidence pointers, remaining gaps, next action, owner and release condition in
+  the existing task or report. Escalate only decisions the human owns. Keep
+  implementation, review, CI, installation and live qualification distinct.
+- **Completion.** End the coordination step at the verified stop boundary or a
+  documented block with its owner and release condition. Keep an unknown delivery
+  outcome unresolved. Mark the assignment complete only after its acceptance and
+  every required check, review and authorized lifecycle operation are proved.
 
 ## Recover the current assignment
 
-1. Read the current task, accepted scope, dependencies and latest evidence.
-   Keep its outcome and observable completion condition visible.
+1. Read the current records for the contract's inputs. Refresh live state before
+   acting on retained knowledge.
 2. Verify the acting coordinator, execution host, worker and worktree against
    live records. Continue the existing assignment when it still fits.
-3. Identify the permitted operations, explicit holds, spending and repair limits,
-   authority expiry and stop boundary. Carry valid approvals forward within
-   their scope. Resolve conflicts before the affected action.
+3. Carry valid approvals forward within their scope.
 
 Continue when the current owner, candidate, next action and authority are known.
 A historical handoff or a board label alone establishes none of these facts.
@@ -38,9 +53,9 @@ A historical handoff or a board label alone establishes none of these facts.
   for unfamiliar operations. Select skills for the actual gap; use an available
   skill router when needed. A missing optional skill does not block a working route.
 
-Dispatch is complete when the intended existing owner has accepted the assignment
-or you have recorded a pending delivery with a concrete reconciliation action.
-Queue acceptance alone does not prove that a worker started.
+Report dispatch as accepted only when the intended owner has accepted the
+assignment. Record pending delivery with a concrete reconciliation action.
+Neither a pending record nor queue acceptance proves that a worker started.
 
 ## Act on each handback
 
@@ -54,8 +69,8 @@ Read the exact candidate and evidence before selecting the next action.
   another attempt. Preserve consumed repair allowance across handoffs.
 - Evidence complete. Perform only the authorized next lifecycle operation.
   Review PASS, ready, merged and cleaned up are distinct claims.
-- Hold or missing authority. Record the next owner, release condition and last
-  proved state in the existing task. Continue unrelated authorized work when safe.
+- Hold or missing authority. Return the contract's blocked output. Continue
+  unrelated authorized work when safe.
 
 Revalidate the candidate after changes. Reuse evidence only for content and
 identities it still covers. Keep native review evidence with its owning mechanism;
@@ -86,17 +101,15 @@ A read acknowledgement does not establish acceptance of implementation or review
 
 ## Close out and retain knowledge
 
-- Verify the task's acceptance, required checks, independent review and authorized
-  commit or lifecycle operation before reporting completion.
-- Keep candidate revision, evidence pointers, gaps and next action together in
-  the existing task or report. Maintain its execution labels through reassignment.
+- Apply the contract's completion criterion. Maintain execution labels through
+  reassignment.
 - Preserve conversations and work through the declared retention or cleanup
   procedure. A completed turn alone is not permission to remove resources.
 - Keep dated decisions and recurring friction in the existing knowledge owner.
   Bind code claims to a repository and commit. Cite raw execution receipts
   rather than copying them into knowledge notes.
-- On resume, refresh live state before acting on retained knowledge.
-  Repair contradictions and broken pointers in material used for this task.
+- Repair contradictions and broken pointers used for this task within its scope
+  and authority.
 
 ## Improve the next task without delaying this one
 
@@ -108,12 +121,6 @@ for delivery or fits an existing improvement mandate without delaying ready work
 Otherwise record the proposal with its owner and continue delivery. For a new
 deterministic check, prove it rejects the observed failure and accepts the valid
 case. Broader audits, schedules and third-party maintenance retain their own scope.
-
-## Return the result
-
-Report the proved outcome, exact candidate, remaining gaps, next owner and any
-human decision. Distinguish implementation, review, CI, installation and live
-qualification. Stop at the agreed boundary.
 
 Adapted from Matt Pocock's [chief-of-staff](https://github.com/mattpocock/skills/blob/main/skills/in-progress/chief-of-staff/SKILL.md).
 
