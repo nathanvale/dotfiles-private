@@ -42,11 +42,13 @@ when invoked without arguments; ask only for missing context that changes the as
    the draft with the source so shortening retains the decision, choices,
    deadlines and limitations that matter. Keep proposed, checked, live, released
    and accepted claims at the state the evidence supports.
-5. Read `$HOME/.agents/skills/unslop/SKILL.md` as the canonical editing checklist
-   and apply its rules to the draft. This reads reference text; it does not
-   automatically invoke the user-only Unslop skill or change its settings.
-   If the file is unavailable, report the missing editing pass instead of
-   claiming it ran. Preserve the meaning while editing.
+5. Locate `pstack:unslop` in the active harness's enabled pstack plugin using
+   its current skill catalogue or native plugin inventory. Read that installed
+   plugin's `skills/unslop/SKILL.md` and apply its editing checklist to the draft.
+   This reads reference text; it does not automatically invoke the user-only
+   Unslop skill or change its settings. If the plugin or file is unavailable,
+   report the missing editing pass instead of claiming it ran. Preserve the
+   meaning while editing.
 6. Trace every factual claim, link, image, mention and recipient to its source.
    Check that links name the intended destination and mentions identify the
    intended person. Keep uncertain identities and unsupported claims out of
