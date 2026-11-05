@@ -11,17 +11,22 @@ Read the current request, delivery receipt and existing message. Resolve the
 requested package, online review, Jira scope and next recipient action before
 writing. Use the service owner to read the actual saved post for an edit.
 
-Select the active harness's installed browser owner. Open a task-owned diagnostic
-tab for the receipt's preview URL; preserve the user's tabs and drafts. Use the
-browser's returned controls. Ready means the intended Docs or example is visibly
-usable, with its expected heading or state, rather than an HTTP response or an
-indexed story. A missing preview returns to the delivery owner; drafting does not
-start or deploy the app.
+When the delivery receipt requests a preview, select the active harness's
+installed browser owner and open a task-owned diagnostic tab for its preview
+URL. Preserve the user's tabs and drafts. Use the browser's returned controls.
+Ready means the intended Docs or example is visibly usable, with its expected
+heading or state, rather than an HTTP response or an indexed story. A missing
+requested preview returns to the delivery owner; drafting does not start or
+deploy the app.
+
+For a source-only receipt without a preview URL, skip preview actions, including
+diagnostic tabs, preview Doctor checks and missing-preview escalation. Continue
+Jira mapping, draft custody, evidence and cleanup checks.
 
 ## Doctor
 
-Read the actual URL and visible page identity before driving. Check the intended
-extension and route in Storybook's sidebar and preview frame. Join the published
+When the receipt requests a preview, read the actual URL and visible page
+identity before driving. Check the intended extension and route in Storybook's sidebar and preview frame. Join the published
 candidate to the delivery receipt through the preview owner's identity evidence.
 Keep an unknown or older build labelled; a working page alone does not prove it
 shows the packaged revision. Establish the intended recipient's access route;
@@ -29,8 +34,9 @@ loopback and machine-local forwards are local proof, not team links.
 
 ## Drive
 
-- Run [preview links](verification/preview-links.md) for every requested preview
-  destination and linked example. Classify a missing story or access failure from
+- When the receipt requests a preview, run
+  [preview links](verification/preview-links.md) for every requested destination
+  and linked example. Classify a missing story or access failure from
   the actual rendered result, even when the Storybook manager loads.
 - Run [Jira mapping](verification/jira-map.md) to pair each admitted requirement
   with an actual example, packaged module or explicitly held reference.

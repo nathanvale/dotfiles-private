@@ -23,7 +23,9 @@ when invoked without arguments; ask only for missing context that changes the as
    For extension handovers, use its Jira-to-family map and examples structure,
    adapting published links and packaged-only references to the actual delivery.
    Before returning that draft, run [handover verification](references/verify-handover.md).
-   Report a missing requested preview as a delivery gap outside the copy.
+   Run preview actions and report a missing preview only when the delivery
+   receipt requests one. Source-only handovers without a preview URL proceed
+   through the remaining checks without opening a diagnostic tab.
    For Jira comments, read [Jira comment templates](references/jira-comments.md)
    for issue context, formatting and comment-specific checks.
    Finish this step when the recipient's next action is clear, or the update is
