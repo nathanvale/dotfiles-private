@@ -26,8 +26,11 @@ Jira mapping, draft custody, evidence and cleanup checks.
 ## Doctor
 
 When the receipt requests a preview, read the actual URL and visible page
-identity before driving. Check the intended extension and route in Storybook's sidebar and preview frame. Join the published
-candidate to the delivery receipt through the preview owner's identity evidence.
+identity before driving. Verify the intended extension and route in rendered
+content. Check Storybook's sidebar and preview frame when present; a Docs
+destination without them can qualify through its rendered heading or state and
+published identity. Join the published candidate to the delivery receipt through
+the preview owner's identity evidence.
 Keep an unknown or older build labelled; a working page alone does not prove it
 shows the packaged revision. Establish the intended recipient's access route;
 loopback and machine-local forwards are local proof, not team links.
