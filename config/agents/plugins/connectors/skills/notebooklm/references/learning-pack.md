@@ -139,10 +139,15 @@ present pack sources, and `durationSeconds`.
 `pack_status` returns `startHere`: one primary action, the 5-minute mission,
 two links, the Short Deep Dive audio and the map, a one-line next action and
 text rendered from [the Start Here template](templates/start-here.md). Links
-carry read-back artifact ids and the vendor notebook URL, kept only when it is
-`https://notebooklm.google.com/notebook/ID` for the bound id; any other URL is
-dropped and the link carries no URL. A per-artifact deep
-link is unqualified; open the notebook full view and choose the Studio item.
+retain exact read-back artifact ids. Navigation requires one UUID artifact id
+whose read-back type matches its role, plus a vendor notebook URL for the bound
+id on `https://notebooklm.google.com/notebook/ID` or
+`https://notebook.google.com/notebook/ID`, with no userinfo, query, fragment or
+extra path. Mission and map links open `/artifact/ARTIFACT_ID` below that
+notebook URL. Audio opens the notebook; select the matching audio item in
+Studio using its read-back id. No standalone audio route is qualified. Missing
+or unsafe notebook URLs, missing or duplicate artifacts, non-UUID artifact ids
+and wrong-role types carry no navigation URL.
 
 ## Not yet admitted
 

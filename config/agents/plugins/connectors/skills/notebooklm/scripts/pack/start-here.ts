@@ -1,6 +1,7 @@
 // The local Start Here view: one primary action (the mission) and two links
 // (audio and map), built only from read-back artifact ids and the vendor's
-// notebook URL. Rendered text comes from the packaged template.
+// trusted notebook URL. Mission and map use qualified artifact routes; audio
+// opens its Studio item from the notebook. Text comes from the packaged template.
 import template from "../../references/templates/start-here.md" with { type: "text" };
 import type { PackManifest, Role } from "./manifest.ts";
 import type { Item } from "./reconcile.ts";
@@ -9,13 +10,18 @@ export interface StartHereEntry { readonly role: Role; readonly label: string; r
 export interface StartHere { readonly primary: StartHereEntry; readonly links: readonly [StartHereEntry, StartHereEntry]; readonly next: string; readonly text: string }
 
 const LABELS: Readonly<Record<Role, string>> = { mission: "5-minute mission", audio: "Short Deep Dive audio", map: "Map" };
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const plain = (value: string): string => value.replace(/\s+/g, " ").trim().slice(0, 120);
 
 function entry(items: readonly Item[], role: Role, notebookUrl: string | null): StartHereEntry {
 	const item = items.find((candidate) => candidate.role === role);
 	const state = item?.state ?? "missing";
 	const artifactId = item !== undefined && item.ids.length === 1 && state !== "duplicate" ? (item.ids[0] ?? null) : null;
-	return { role, label: LABELS[role], state, artifactId, url: artifactId === null ? null : notebookUrl };
+	let url: string | null = null;
+	if (notebookUrl !== null && artifactId !== null && artifactId.length === 36 && UUID.test(artifactId) && item?.evidence.typeMatches === true) {
+		url = role === "audio" ? notebookUrl : `${notebookUrl}/artifact/${artifactId}`;
+	}
+	return { role, label: LABELS[role], state, artifactId, url };
 }
 
 function nextAction(notebook: Item | undefined, primary: StartHereEntry): string {
@@ -33,7 +39,7 @@ function nextAction(notebook: Item | undefined, primary: StartHereEntry): string
 	}
 }
 
-const line = (value: StartHereEntry): string => `${value.state}${value.artifactId === null ? "" : ` (artifact ${value.artifactId})`}${value.url === null ? "" : ` ${value.url}`}`;
+const line = (value: StartHereEntry): string => `${value.state}${value.artifactId === null ? "" : ` (artifact ${value.artifactId})`}${value.url === null ? "" : ` ${value.url}`}${value.role === "audio" && value.url !== null ? " Select this audio item in Studio." : ""}`;
 
 export function startHere(manifest: PackManifest, items: readonly Item[], notebookUrl: string | null): StartHere {
 	const notebook = items.find((item) => item.role === "notebook");

@@ -340,7 +340,7 @@ processTest("bind-mode status reads five sources by exact title, Studio items an
 		expect(audio.evidence).toEqual({ match: "manifest-id", type: "audio", status: "completed", typeMatches: true, customInstructions: "present", sourceIds: { exposed: 5, equalsPresentSources: true }, durationSeconds: 339 });
 		expect(run.data.items.find((item: { key: string }) => item.key === "map").evidence).toMatchObject({ customInstructions: "absent", sourceIds: null, durationSeconds: null });
 		const view = run.data.startHere;
-		expect([view.primary.role, view.primary.artifactId, view.primary.url, view.links.map((link: { role: string; artifactId: string }) => [link.role, link.artifactId])]).toEqual(["mission", QUIZ, `https://notebooklm.google.com/notebook/${TRIAL}`, [["audio", AUDIO], ["map", MAP]]]);
+		expect([view.primary.role, view.primary.artifactId, view.primary.url, view.links.map((link: { role: string; artifactId: string }) => [link.role, link.artifactId])]).toEqual(["mission", QUIZ, `https://notebooklm.google.com/notebook/${TRIAL}/artifact/${QUIZ}`, [["audio", AUDIO], ["map", MAP]]]);
 		expect(view.text.split("\n").length).toBeLessThanOrEqual(15);
 		expect(view.text).toContain("Start the 5-minute mission: completed-unconfirmed");
 		const calls = m.calls();
@@ -483,7 +483,7 @@ processTest("an artifact repeated across overlapping pages stays one artifact, a
 		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: [], artifacts: rows, studio: "overlap" } });
 		const overlap = await m.status();
 		expect([overlap.data.studio, overlap.data.items.find((item: { key: string }) => item.key === "map")]).toEqual([{ read: "completed", pages: 2, complete: true, seen: 21 }, { key: "map", role: "map", state: "stale-sources", ids: [MAP], evidence: { match: "manifest-id", type: "mind_map", status: "completed", typeMatches: true, customInstructions: "absent", sourceIds: null, durationSeconds: null } }]);
-		expect(overlap.data.startHere.links[1]).toEqual({ role: "map", label: "Map", state: "stale-sources", artifactId: MAP, url: `https://notebooklm.google.com/notebook/${TRIAL}` });
+		expect(overlap.data.startHere.links[1]).toEqual({ role: "map", label: "Map", state: "stale-sources", artifactId: MAP, url: `https://notebooklm.google.com/notebook/${TRIAL}/artifact/${MAP}` });
 		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: [], artifacts: rows.slice(0, 1), notebookUrl: `https://untrusted.invalid/notebook/${TRIAL}` } });
 		const foreign = await m.status();
 		expect([foreign.data.notebook.url, foreign.data.startHere.primary.artifactId, foreign.data.startHere.primary.url]).toEqual([null, QUIZ, null]);
@@ -534,3 +534,79 @@ for (const scan of ["incomplete", "failed"] as const) processTest(`${scan === "i
 		expect(m.calls().map((call) => call.name)).toEqual(["server_info", "notebook_list"]);
 	} finally { m.dispose(); }
 }, 120000);
+
+
+for (const host of ["notebook.google.com", "notebooklm.google.com"]) processTest(`Start Here navigation on ${host} opens exact mission and map artifacts with an audio notebook fallback`, async () => {
+	const m = machine(); try {
+		m.register();
+		m.pack(trialManifest(), trialFiles());
+		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: TRIAL_SOURCES, artifacts: trialArtifacts(), notebookUrl: `https://${host}/notebook/${TRIAL}` } });
+		const run = await m.status();
+		expect([run.code, run.data.notebook.url]).toEqual([0, `https://${host}/notebook/${TRIAL}`]);
+		const view = run.data.startHere;
+		expect([view.primary, ...view.links].map((entry: { role: string; artifactId: string; url: string }) => [entry.role, entry.artifactId, entry.url])).toEqual([
+			["mission", QUIZ, `https://${host}/notebook/${TRIAL}/artifact/${QUIZ}`],
+			["audio", AUDIO, `https://${host}/notebook/${TRIAL}`],
+			["map", MAP, `https://${host}/notebook/${TRIAL}/artifact/${MAP}`],
+		]);
+		expect(view.text).toContain(`https://${host}/notebook/${TRIAL}/artifact/${QUIZ}`);
+		expect(view.text).toContain(`https://${host}/notebook/${TRIAL}/artifact/${MAP}`);
+		expect(view.text).toContain(`artifact ${AUDIO}`);
+		expect(view.text).toContain("Select this audio item in Studio.");
+		expect(view.text).not.toContain(`/artifact/${AUDIO}`);
+		expect(view.text.split("\n").length).toBeLessThanOrEqual(15);
+		expect(m.calls().map((call) => call.name)).toEqual(["server_info", "notebook_get", "studio_status"]);
+	} finally { m.dispose(); }
+}, 120000);
+
+processTest("Start Here navigation withholds every URL when the vendor notebook URL is missing, foreign or unsafe", async () => {
+	const m = machine(); try {
+		m.register();
+		m.pack(trialManifest(), trialFiles());
+		const urls = [
+			null,
+			`https://untrusted.invalid/notebook/${TRIAL}`,
+			`https://notebook.google.com/notebook/${OTHER}`,
+			`https://notebooklm.google.com/notebook/${OTHER}`,
+			`http://notebook.google.com/notebook/${TRIAL}`,
+			`https://user@notebook.google.com/notebook/${TRIAL}`,
+			`https://notebook.google.com/notebook/${TRIAL}?next=elsewhere`,
+			`https://notebook.google.com/notebook/${TRIAL}#fragment`,
+			`https://notebook.google.com/notebook/${TRIAL}/artifact/${QUIZ}`,
+			`https://notebook.google.com.evil.invalid/notebook/${TRIAL}`,
+			`https://notebook.google.com:443/notebook/${TRIAL}`,
+		];
+		for (const notebookUrl of urls) {
+			m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: TRIAL_SOURCES, artifacts: trialArtifacts(), notebookUrl } });
+			const run = await m.status();
+			expect([run.code, run.data.notebook.url]).toEqual([0, null]);
+			expect([run.data.startHere.primary, ...run.data.startHere.links].map((entry: { artifactId: string; url: string | null }) => [entry.artifactId, entry.url])).toEqual([[QUIZ, null], [AUDIO, null], [MAP, null]]);
+			expect(run.data.startHere.text).not.toContain("https://");
+		}
+	} finally { m.dispose(); }
+}, 180000);
+
+processTest("Start Here navigation requires unique read-back UUIDs with matching role types", async () => {
+	const m = machine(); try {
+		m.register();
+		m.pack(trialManifest(), trialFiles());
+		for (const artifacts of [[], [{ artifact_id: OTHER, title: "Unrelated quiz", type: "quiz", status: "completed" }]]) {
+			m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: TRIAL_SOURCES, artifacts } });
+			const run = await m.status();
+			expect(run.code).toBe(0);
+			expect([run.data.startHere.primary, ...run.data.startHere.links].map((entry: { artifactId: string | null; url: string | null }) => [entry.artifactId, entry.url])).toEqual([[null, null], [null, null], [null, null]]);
+		}
+		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: TRIAL_SOURCES, artifacts: trialArtifacts().map((row) => ({ ...row, type: "report" })) } });
+		const wrongTypes = await m.status();
+		expect([wrongTypes.data.startHere.primary, ...wrongTypes.data.startHere.links].map((entry: { artifactId: string; url: string | null }) => [entry.artifactId, entry.url])).toEqual([[QUIZ, null], [AUDIO, null], [MAP, null]]);
+		m.pack(manifest({ notebook: { mode: "bind", id: TRIAL } }));
+		for (const artifactId of ["../escape", "https://untrusted.invalid/artifact", `${QUIZ}?next=elsewhere`, "not-a-uuid", ""]) {
+			m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: [], artifacts: [{ artifact_id: artifactId, title: `Mission lp:${PACK}:mission:n1`, type: "quiz", status: "completed" }] } });
+			const run = await m.status();
+			expect([run.code, run.data.startHere.primary.artifactId, run.data.startHere.primary.url]).toEqual([0, artifactId, null]);
+		}
+		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: [], artifacts: [QUIZ, OTHER].map((artifact_id) => ({ artifact_id, title: `Mission lp:${PACK}:mission:n1`, type: "quiz", status: "completed" })) } });
+		const duplicate = await m.status();
+		expect([duplicate.data.startHere.primary.state, duplicate.data.startHere.primary.artifactId, duplicate.data.startHere.primary.url]).toEqual(["duplicate", null, null]);
+	} finally { m.dispose(); }
+}, 180000);

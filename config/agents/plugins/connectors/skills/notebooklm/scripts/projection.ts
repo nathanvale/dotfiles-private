@@ -90,9 +90,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const optional = <T>(value: unknown, valid: (item: unknown) => item is T): T | null | undefined => value === undefined || value === null ? null : valid(value) ? value : undefined;
 function notebookUrl(value: unknown, notebookId: unknown): string | null {
 	if (typeof value !== "string" || typeof notebookId !== "string") return null;
-	// Only NotebookLM's own host may become a Start Here link.
-	const match = /^https:\/\/notebooklm\.google\.com\/notebook\/([0-9a-f-]{36})$/.exec(value);
-	return match?.[1] === notebookId && UUID.test(notebookId) ? value : null;
+	// Only the two qualified NotebookLM consumer hosts may become Start Here links.
+	const match = /^https:\/\/(?:notebooklm|notebook)\.google\.com\/notebook\/([0-9a-f-]{36})$/.exec(value);
+	return match?.[0] === value && match[1] === notebookId && UUID.test(notebookId) ? value : null;
 }
 function markerFields(row: Record<string, unknown>): Record<string, unknown> | null {
 	const instructions = optional(row.custom_instructions, string);
