@@ -12,7 +12,7 @@ const sourceId = "22222222-2222-2222-2222-222222222222";
 interface Artifact { artifact_id: string; title: string; type: string; status: string; custom_instructions?: string | null; source_ids?: string[]; duration_seconds?: number | null }
 // A learning-pack notebook: when present, notebook_get serves it only for its
 // own id, studio_status pages its artifacts, and notebook_list reports count.
-interface Pack { notebookId: string; notebookTitle: string; sources: { id: string; title: string }[]; artifacts: Artifact[]; notebooks?: { id: string; title: string }[]; total?: number; studio?: "error" | "no-pagination" | "overlap"; notebookUrl?: string }
+interface Pack { notebookId: string; notebookTitle: string; sources: { id: string; title: string }[]; artifacts: Artifact[]; notebooks?: { id: string; title: string }[]; total?: number; studio?: "error" | "no-pagination" | "overlap"; studioNotebookIds?: string[]; scan?: "error"; notebookUrl?: string }
 interface State { title: string; sourceTitle: string; mode: string; auth: string; version: string; pack?: Pack }
 const load = (): State => existsSync(state) ? JSON.parse(readFileSync(state, "utf8")) : { title: "Synthetic notebook", sourceTitle: "Synthetic source", mode: "normal", auth: "configured", version: "0.15.8" };
 const text = { type: "string" };
@@ -34,6 +34,7 @@ const tools = [
 function packCall(pack: Pack, name: string, args: Record<string, unknown>): unknown {
 	if (name === "notebook_get") return args.notebook_id === pack.notebookId ? { status: "success", notebook: { id: pack.notebookId, title: pack.notebookTitle, source_count: pack.sources.length, url: "https://fixture.invalid/?token=SENTINEL_REPLY_CREDENTIAL" }, sources: pack.sources } : { status: "error", error: "Notebook not found SENTINEL_REPLY_CREDENTIAL" };
 	if (name === "notebook_list") {
+		if (pack.scan === "error") return { status: "error", error: "SENTINEL_REPLY_CREDENTIAL" };
 		const notebooks = pack.notebooks ?? [];
 		return { status: "success", notebooks: notebooks.slice(0, Number(args.max_results)).map((row) => ({ ...row, url: "https://fixture.invalid/?token=SENTINEL_REPLY_CREDENTIAL" })), count: pack.total ?? notebooks.length };
 	}
@@ -46,7 +47,8 @@ function studioPage(pack: Pack, args: Record<string, unknown>): unknown {
 	const limit = Number(args.limit ?? 100);
 	const page = pack.artifacts.slice(offset, offset + limit).map((row) => args.include_details === true ? { ...row, audio_url: "https://fixture.invalid/?token=SENTINEL_REPLY_CREDENTIAL" } : { artifact_id: row.artifact_id, title: row.title, type: row.type, status: row.status });
 	const pagination = pack.studio === "no-pagination" ? {} : { pagination: { returned: page.length, offset, limit, has_more: offset + page.length < pack.artifacts.length } };
-	return { status: "success", notebook_id: pack.notebookId, artifacts: page, summary: { total: pack.artifacts.length }, ...pagination, notebook_url: pack.notebookUrl ?? `https://notebooklm.google.com/notebook/${pack.notebookId}` };
+	const notebookId = pack.studioNotebookIds?.[Math.floor(Number(args.offset ?? 0) / 20)] ?? pack.notebookId;
+	return { status: "success", notebook_id: notebookId, artifacts: page, summary: { total: pack.artifacts.length }, ...pagination, notebook_url: pack.notebookUrl ?? `https://notebooklm.google.com/notebook/${notebookId}` };
 }
 function call(name: string, args: Record<string, unknown>): unknown {
 	const value = load();

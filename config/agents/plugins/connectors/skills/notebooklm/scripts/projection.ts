@@ -102,9 +102,9 @@ function markerFields(row: Record<string, unknown>): Record<string, unknown> | n
 }
 function studioMarker(value: Record<string, unknown>): Record<string, unknown> | null {
 	const artifacts = artifactRows(value.artifacts, markerFields);
-	if (artifacts === null) return null;
+	if (artifacts === null || !string(value.notebook_id)) return null;
 	const hasMore = record(value.pagination) && typeof value.pagination.has_more === "boolean" ? value.pagination.has_more : null;
-	return { artifacts, has_more: hasMore, notebook_url: notebookUrl(value.notebook_url, value.notebook_id) };
+	return { notebook_id: value.notebook_id, artifacts, has_more: hasMore, notebook_url: notebookUrl(value.notebook_url, value.notebook_id) };
 }
 function notebookScan(value: Record<string, unknown>): Record<string, unknown> | null {
 	const notebooks = summaries(value.notebooks);

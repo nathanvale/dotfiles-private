@@ -58,6 +58,7 @@ async function studioRead(client: Caller, notebookId: string): Promise<StudioRea
 	for (let page = 0; page < STUDIO_PAGES; page += 1) {
 		const reply = await client.internal("studio_marker", { notebook_id: notebookId, include_details: true, limit: STUDIO_PAGE, offset: page * STUDIO_PAGE });
 		if (!reply.ok) return { cause: reply.cause };
+		if (reply.data.notebook_id !== notebookId) return { cause: "projection-shape-mismatch" };
 		// Pages can overlap when the list shifts; one artifact id is one artifact.
 		for (const artifact of reply.data.artifacts as StudioArtifact[]) if (!seen.has(artifact.artifact_id)) { seen.add(artifact.artifact_id); artifacts.push(artifact); }
 		notebookUrl ??= reply.data.notebook_url as string | null;
@@ -87,11 +88,12 @@ async function unbound(client: Caller, manifest: PackManifest, sources: readonly
 	const reply = await client.internal("notebook_scan", { max_results: 20 });
 	const notebooks = reply.ok ? (reply.data.notebooks as { id: string; title: string }[]) : [];
 	const total = reply.ok ? (reply.data.total as number | null) : null;
+	const complete = total !== null && notebooks.length >= total;
 	const marked = notebooks.filter((notebook) => notebookItem(manifest, { ...notebook, sources: [] }).state === "present").map((notebook) => notebook.id);
 	const scan = reply.ok
-		? { read: "completed", advisory: true, seen: notebooks.length, total, complete: total !== null && notebooks.length >= total, marked }
+		? { read: "completed", advisory: true, seen: notebooks.length, total, complete, marked }
 		: { read: "failed", advisory: true, cause: reply.cause };
-	const notebook: Item = { key: "notebook", role: "notebook", state: marked.length > 0 ? "unknown" : "missing", ids: [], evidence: { mode: manifest.notebook.mode, binding: "none", scan: "advisory" } };
+	const notebook: Item = { key: "notebook", role: "notebook", state: complete && marked.length === 0 ? "missing" : "unknown", ids: [], evidence: { mode: manifest.notebook.mode, binding: "none", scan: "advisory" } };
 	return { items: [notebook, ...sourceItems(sources, null), ...roleItems(manifest, null, [])], scan };
 }
 

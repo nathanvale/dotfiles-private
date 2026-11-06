@@ -116,8 +116,8 @@ checks are pattern heuristics; a `verified` verdict is not a review.
 
 - Notebook: `present` when its title carries `[lp:PACKID]` or
   `[lp:PACKID:NONCE]`, or it holds a source titled `Start Here [lp:PACKID]`;
-  otherwise `unmarked`, which stays read-only. Unbound: `missing`, or `unknown`
-  when the advisory scan saw a pack-marked notebook.
+  otherwise `unmarked`, which stays read-only. Unbound: `missing` only when a
+  complete advisory scan saw no pack-marked notebook; otherwise `unknown`.
 - Source: one exact title is `present`; several are `duplicate`; a digest title
   for the same key with another digest is `stale`.
 - Mission, audio and map: a bound id, or the role marker as a whole token,

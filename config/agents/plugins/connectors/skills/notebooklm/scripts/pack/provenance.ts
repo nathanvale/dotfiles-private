@@ -40,7 +40,7 @@ const PRIVATE: readonly { readonly code: string; readonly pattern: RegExp }[] = 
 	{ code: "account-email", pattern: /(?<![\w.%+-])(?!(?<=(?:^|\s)["'`(<[]*)git@[A-Za-z0-9.-]+:\S)(?!(?<=(?:^|\s)["'`(<[]*(?:git\+)?ssh:\/\/)git@[A-Za-z0-9.-]+(?::\d+)?\/)[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/ },
 	{ code: "home-path", pattern: /(?:\/Users\/|\/home\/)[^/\s]+|\/(?:private\/)?var\/folders\/|\b[A-Z]:\\Users\\/ },
 	// A host name ends its token; client.internal( and settings.local.json do not.
-	{ code: "host-name", pattern: /\b[A-Za-z0-9-]+\.(?:local|lan|home\.arpa|ts\.net|internal)\b(?![\w(/-]|\.\w)/i },
+	{ code: "host-name", pattern: /\b[A-Za-z0-9-]+\.(?:local|lan|home\.arpa|ts\.net|internal)\b(?![\w(-]|\.\w)/i },
 ];
 
 function frontMatter(lines: readonly string[]): { fields: Record<string, string>; end: number } | null {

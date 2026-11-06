@@ -394,7 +394,10 @@ processTest("create-if-needed status binds nothing, never creates and reports on
 		const empty = await m.status();
 		expect([empty.data.notebook.state, empty.data.scan.complete, empty.data.startHere.primary.state]).toEqual(["missing", true, "missing"]);
 		expect(empty.data.startHere.next).toContain("Pack creation is not admitted in this release");
-		expect(m.calls().map((call) => [call.name, call.args])).toEqual([["server_info", {}], ["notebook_list", { max_results: 20 }], ["server_info", {}], ["notebook_list", { max_results: 20 }]]);
+		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: [], artifacts: [], notebooks: [] } });
+		const absent = await m.status();
+		expect([absent.data.notebook.state, absent.data.scan, absent.data.startHere.primary.state]).toEqual(["missing", { read: "completed", advisory: true, seen: 0, total: 0, complete: true, marked: [] }, "missing"]);
+		expect(m.calls().map((call) => [call.name, call.args])).toEqual([["server_info", {}], ["notebook_list", { max_results: 20 }], ["server_info", {}], ["notebook_list", { max_results: 20 }], ["server_info", {}], ["notebook_list", { max_results: 20 }]]);
 	} finally { m.dispose(); }
 }, 120000);
 
@@ -485,5 +488,49 @@ processTest("an artifact repeated across overlapping pages stays one artifact, a
 		const foreign = await m.status();
 		expect([foreign.data.notebook.url, foreign.data.startHere.primary.artifactId, foreign.data.startHere.primary.url]).toEqual([null, QUIZ, null]);
 		expect(foreign.stdout).not.toContain("untrusted.invalid");
+	} finally { m.dispose(); }
+}, 120000);
+
+
+test("pack_check refuses a private hostname followed by a URL path", async () => {
+	const m = machine(); try {
+		m.register();
+		m.pack(manifest(), { "overview.md": source("- [verified] See https://build.internal/jobs for details.") });
+		const run = await m.check();
+		expect([run.code, run.data.ready, run.data.sources.length]).toEqual([0, false, 1]);
+		expect(run.data.sources[0].provenance).toEqual({ verdict: "refused", mismatched: [], reasons: [{ code: "host-name", line: 10 }] });
+		expect(run.data.sources[0].ready).toBe(false);
+		expect(run.stdout).not.toContain("build.internal");
+		expect(m.calls()).toEqual([]);
+	} finally { m.dispose(); }
+});
+
+for (const laterPage of [false, true]) processTest(`Studio notebook identity mismatch on ${laterPage ? "a later" : "the first"} page discards all artifacts and links`, async () => {
+	const m = machine(); try {
+		m.register();
+		m.pack(manifest({ notebook: { mode: "bind", id: TRIAL }, artifacts: { mission: { id: QUIZ }, audio: { id: AUDIO }, map: { id: MAP } } }));
+		const reports = Array.from({ length: 18 }, (_, index) => ({ artifact_id: `66666666-6666-4666-8666-${String(index).padStart(12, "0")}`, title: `Report ${index}`, type: "report", status: "completed" }));
+		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: [], artifacts: [...trialArtifacts(), ...reports], studioNotebookIds: laterPage ? [TRIAL, OTHER] : [OTHER] } });
+		const run = await m.status();
+		expect([run.code, run.data.notebook.id, run.data.studio, run.data.notebook.url]).toEqual([0, TRIAL, { read: "failed", cause: "projection-shape-mismatch" }, null]);
+		expect(run.data.items.filter((item: { role: string }) => ["mission", "audio", "map"].includes(item.role)).map((item: { state: string; ids: string[] }) => [item.state, item.ids])).toEqual([["unknown", []], ["unknown", []], ["unknown", []]]);
+		expect([run.data.startHere.primary.artifactId, run.data.startHere.primary.url]).toEqual([null, null]);
+		expect(run.data.startHere.links.map((link: { artifactId: string | null; url: string | null }) => [link.artifactId, link.url])).toEqual([[null, null], [null, null]]);
+		expect(m.calls().filter((call) => call.name === "studio_status").map((call) => call.args.offset)).toEqual(laterPage ? [0, 20] : [0]);
+		expect(run.stdout).not.toContain(OTHER);
+	} finally { m.dispose(); }
+}, 120000);
+
+for (const scan of ["incomplete", "failed"] as const) processTest(`${scan === "incomplete" ? "an" : "a"} ${scan} unbound notebook scan keeps notebook status unknown`, async () => {
+	const m = machine(); try {
+		m.register();
+		m.pack(manifest());
+		m.change({ pack: { notebookId: TRIAL, notebookTitle: "Plain", sources: [], artifacts: [], total: 30, notebooks: [{ id: TRIAL, title: "Plain" }], ...(scan === "failed" ? { scan: "error" } : {}) } });
+		const run = await m.status();
+		const expectedScan = scan === "failed" ? { read: "failed", advisory: true, cause: "provider-rejected" } : { read: "completed", advisory: true, seen: 1, total: 30, complete: false, marked: [] };
+		expect([run.code, run.data.scan, run.data.notebook.state]).toEqual([0, expectedScan, "unknown"]);
+		expect(run.data.startHere.text).toContain("Notebook: unknown.");
+		expect(run.data.startHere.next).toBe("A pack-marked notebook may exist. Name it in the manifest with notebook.mode bind; nothing was bound.");
+		expect(m.calls().map((call) => call.name)).toEqual(["server_info", "notebook_list"]);
 	} finally { m.dispose(); }
 }, 120000);
