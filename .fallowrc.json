@@ -93,6 +93,8 @@
     "tests/type-contracts-loose.ts",
     "config/agents/plugins/connectors/bin/provider-route.ts",
     "config/agents/plugins/connectors/bin/connectors.ts",
+    "config/agents/plugins/connectors/skills/notebooklm/scripts/desktop-command.py",
+    "config/agents/plugins/connectors/skills/notebooklm/tests/fixtures/desktop-launchctl.py",
     "config/agents/plugins/personal/library/classic-cinema/src/list-movies.ts",
     "config/agents/plugins/personal/library/classic-cinema/src/check-availability.ts",
     "config/agents/plugins/personal/library/classic-cinema/src/parse-tickets.ts",
