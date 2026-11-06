@@ -120,6 +120,9 @@ config/cmux/cmux.json
 config/last30days/last-report.json
 config/last30days/last-run.json
 config/code-server/
+# Third-party Herdr desktop payload and machine-local core state.
+config/herdr-app/
+config/herdr-core/
 config/herdr/*
 !config/herdr/config.toml
 !config/herdr/coordinator-instructions.txt
