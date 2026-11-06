@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Adapter, AdapterRequest, Executed, Prepared, SchemaRequest } from "../../bin/adapters/contract.ts";
 import registry from "./config/mcporter.json";
 import { admittedNames, CATALOGUE, hash, inputFor, operation, record } from "./scripts/policy.ts";
+import { isPackRead, PACK_READS, packRead } from "./scripts/pack/reads.ts";
 import { runProvider } from "./scripts/provider.ts";
 import { caller, type Caller } from "./scripts/transport.ts";
 
@@ -40,7 +41,8 @@ function readiness(request: SchemaRequest): Prepared {
 function prepare(request: AdapterRequest): Prepared {
 	if (request.action.kind === "auth") return request.action.verb === "status" || request.action.verb === "check" ? readiness(request) : refused("vendor-login-required", "For an authorized login, use nlm login --profile with this exact profile through the browser-authorization procedure. Connectors never accepts cookies or tokens");
 	const { operation: name, input } = request.action;
-	if (name === "capabilities" && (input === null || Object.keys(input).length === 0)) return { kind: "inspected", data: { vendorVersion: CATALOGUE.vendorVersion, operations: CATALOGUE.operations.map(({ name, effect, admission }) => ({ name, effect, admission })) } };
+	if (name === "capabilities" && (input === null || Object.keys(input).length === 0)) return { kind: "inspected", data: { vendorVersion: CATALOGUE.vendorVersion, operations: CATALOGUE.operations.map(({ name, effect, admission }) => ({ name, effect, admission })), packOperations: PACK_READS.map((name) => ({ name, effect: "read", input: "manifest" })) } };
+	if (isPackRead(name)) return packRead(request, name, input, (step) => execute(request, step));
 	const spec = operation(name);
 	if (!spec) return refused("operation-not-allowed");
 	if (spec.admission !== "admitted") return refused(spec.effect === "auth-forbidden" ? "auth-tool-forbidden" : "capability-not-qualified");
