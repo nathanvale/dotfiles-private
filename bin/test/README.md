@@ -37,6 +37,7 @@ bin/test/pnpm-provision-test.sh
 bin/test/mise-config-review-test.sh
 bin/test/setup-completion-test.sh
 bin/test/setup-state-recovery-test.sh
+bin/test/claude-settings-policy-test.sh
 bin/test/profile-link-parity-test.sh
 bin/test/bun-core-install-test.sh
 bin/test/lm-studio-ensure-test.sh
@@ -104,13 +105,43 @@ the retired fnm are process fakes, so this does not prove a Homebrew install,
 real runtime download, project-local override, arbitrary GUI host, or clean
 no-cache Mac.
 
+`claude-settings-policy-test.sh` copies `bin/dotfiles/claude-settings.py` and
+a policy into disposable Git checkouts and runs it under an empty environment
+with a temporary HOME. It proves fresh install, byte-identical repeat, drift
+reporting, policy repair with preserved machine choices, three-way hook and
+permission merges (policy edits and retirements land, host rules,
+`defaultMode`, plugin choices and host-correct paths survive, missing or
+mis-shaped policy hooks and rules return, host-removed plugins, marketplaces
+and status lines stay removed, only committed policy is recorded), legacy
+symlink
+conversion, refusal of foreign or redirected targets and invalid JSON,
+`CLAUDE_CONFIG_DIR` placement, and a clean merge of an intentional policy edit.
+With an installed `claude`, it also proves that the legacy symlink lets one
+supported plugin operation dirty a clean checkout, and that the installed
+layout keeps repeated plugin operations out of Git while hooks, permissions
+and skill overrides keep their tracked values, that
+`~/.claude/settings.local.json` applies only when Claude runs from HOME, that
+setup keeps a `plugin uninstall` and `plugin marketplace remove` of a
+policy-declared entry, and that a converted machine file's SessionStart and
+PreToolUse hooks fire and block an allowed call in a real Claude turn, with a
+no-gate control, and that the tracked policy's own UserPromptSubmit hook fires
+after a legacy-link activation, with a no-hook control. Those turns use
+`fixtures/claude-mock-messages-api.py` and a placeholder key, so it proves
+settings behavior, not an account-backed session. Without `claude` those five
+rows skip; covered and skipped rows and the total assertion count are pinned.
+
 `setup-completion-test.sh` runs the complete public `setup.sh` process in a
 disposable HOME fixture. It proves phase-option arity and range validation,
 environment and stored-profile validation before state writes, documented phase
 suffix execution, mandatory verification before checkpoint clearance, retained
 repair checkpoints for failed or missing verification, qualified warning
 receipts, malformed machine-summary refusal, the real verifier's stable summary
-emission, and the linked-worktree activation boundary. It uses harmless Phase 6
+emission, the linked-worktree activation boundary, and that public setup
+installs a regular Claude settings file with the tracked hooks and permissions,
+that the real verifier reports a missing policy without installing it and
+passes both Claude rows once it is installed,
+and converts a legacy settings link without writing through it, keeping
+host-only controls across repeated setup before the tracked file is cleaned. It uses harmless Phase 6
 collaborators and a fake verifier for setup boundary cases, so it does not prove
 live macOS, Homebrew, Mise, profile dependency parity, or serialized setup-state
 recovery.

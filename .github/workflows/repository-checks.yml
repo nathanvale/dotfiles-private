@@ -60,6 +60,7 @@ jobs:
             bin/test/agent-lane-zsh-test.sh
             bin/test/atuin-agent-history-test.sh
             bin/test/bun-core-install-test.sh
+            bin/test/claude-settings-policy-test.sh
             bin/test/claude-native-install-test.sh
             bin/test/cloudflare-access-headers-test.sh
             bin/test/codex-ambient-credential-boundary-test.sh

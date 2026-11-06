@@ -66,6 +66,7 @@
   "entry": [
     "bin/dotfiles/credentials/read-desktop-keychain.py",
     "bin/dotfiles/herdr-defaults.py",
+    "bin/dotfiles/claude-settings.py",
     "bin/model-selection-preflight",
     "bin/teams/teams-scraper.ts",
     "config/agents/claude/hooks/**/*.ts",
