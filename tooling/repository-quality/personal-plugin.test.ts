@@ -8,20 +8,20 @@ const pluginRoot = join(repoRoot, "config/agents/plugins/personal");
 // Independent oracle: preserved identities from the pre-migration discovery matrix.
 const codexNames = [
 	"agent-reliability-guardrails", "apple-reminders", "bestie", "bestie-chapter-design", "ci-reproduce", "ci-testbed",
-	"classic-cinema", "codex-code-review", "context-advisor", "context-unhobble-audit",
+	"classic-cinema", "codex-code-review", "context-advisor", "context-unhobble-audit", "credential-custody",
 	"design-parity-session", "draft-message", "figma", "gh-account-switch", "heal-skill", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "mcp-doctor", "notion", "one-password",
 	"pattern-referee", "peekaboo", "resume-handoff", "retro-scrum-master", "session-picker",
 	"session-recovery", "storybook-matrix", "stream-deck-author", "stream-deck-use", "summarize",
-	"teams", "test-design", "test-runner", "timesheets", "vocab-refresh", "work-music", "worktree",
+	"teams", "test-design", "test-runner", "timesheets", "verify-credentials", "vocab-refresh", "work-music", "worktree",
 	"xero", "xero-cash-coding",
 ];
 const claudeNames = [
-	"bestie", "bestie-chapter-design", "ci-reproduce", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor",
+	"bestie", "bestie-chapter-design", "ci-reproduce", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor", "credential-custody",
 	"design-parity-session", "draft-message", "fix-microphone", "gh-account-switch", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "one-password", "pattern-referee",
 	"peekaboo", "resume-handoff", "session-picker", "storybook-matrix", "summarize",
-	"test-design", "test-runner", "timesheets", "work-music", "worktree", "xero", "xero-cash-coding",
+	"test-design", "test-runner", "timesheets", "verify-credentials", "work-music", "worktree", "xero", "xero-cash-coding",
 ];
 const bundleEntries = [
 	"classic-cinema/dist/list-movies.js", "classic-cinema/dist/check-availability.js",
