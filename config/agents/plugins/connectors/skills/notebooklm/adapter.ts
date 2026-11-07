@@ -8,8 +8,9 @@ import { runProvider } from "./scripts/provider.ts";
 import { caller, type Caller } from "./scripts/transport.ts";
 
 const REPAIR = "Use connectors schema notebooklm for the admitted operations and exact input; unsupported workflows remain blocked";
+const DESKTOP_REPAIR = "Inspect the NotebookLM skill's references/desktop-session.md for this desktop-session cause; verify the same-user GUI session, protected vendor storage and owned job cleanup before retrying. A route failure does not establish expired login";
 const refused = (cause: string, repair = REPAIR): Prepared => ({ kind: "refused", refusal: { kind: "domain", connectorCause: cause, repair } });
-const refusal = (cause: string, repair = REPAIR): Executed => ({ kind: "refused", refusal: { kind: "domain", connectorCause: cause, repair } });
+const refusal = (cause: string, repair = REPAIR): Executed => ({ kind: "refused", refusal: { kind: "domain", connectorCause: cause, repair: cause.startsWith("desktop-") ? DESKTOP_REPAIR : repair } });
 function checked<T extends SchemaRequest>(prepare: (request: T) => Prepared): (request: T) => Prepared {
 	return (request) => {
 		try {

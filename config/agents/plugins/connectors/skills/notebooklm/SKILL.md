@@ -68,6 +68,7 @@ The connector refuses token-ingestion and authentication-refresh MCP tools.
 
 If authentication is stale or missing, report the login handoff. If readiness
 is unverified, diagnose the failed probe before assuming a login is needed.
+For macOS SSH or desktop-session failures, read [desktop session](references/desktop-session.md) before requesting another login.
 After a transport or projection failure, report the fixed cause. A missing
 projection or unqualified workflow is blocked, not permission to bypass the
 connector with raw MCPorter calls.

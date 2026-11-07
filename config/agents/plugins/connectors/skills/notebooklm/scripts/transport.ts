@@ -2,6 +2,7 @@ import type { ExecutionCapabilities, SchemaRequest } from "../../../bin/adapters
 import { planDispatcherRoute } from "../../../bin/provider-route.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../bin/safe-environment.ts";
 import { profileContext } from "./provider.ts";
+import { runNotebooklmCommand } from "./desktop-command.ts";
 import { type InternalRead, internalInputFor, internalTool } from "./policy.ts";
 import { project, projectInternal, providerFault } from "./projection.ts";
 
@@ -22,8 +23,8 @@ export function caller(request: SchemaRequest, capabilities: ExecutionCapabiliti
 		const binary = await capabilities.selectMcporter();
 		if (binary === null) return { ok: false, cause: "mcporter-unselected" };
 		try {
-			const child = Bun.spawn([binary, ...plan.argv], { env: plan.env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 65000 });
-			const [stdout, , exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+			const { stdout, exit, cause } = await runNotebooklmCommand([binary, ...plan.argv], plan.env);
+			if (cause) return { ok: false, cause };
 			if (stdout.length > 8_000_000) return { ok: false, cause: "transport-failed" };
 			const parsed: unknown = JSON.parse(stdout);
 			const fault = providerFault(parsed);
