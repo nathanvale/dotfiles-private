@@ -176,12 +176,14 @@ test("persistent group permission failure withholds the result", async () => {
 	} finally { m.dispose(); }
 }, 15000);
 
+// The 8 MB FIFO transfer plus bounded startup and cleanup can exceed Bun's
+// default 5-second test deadline on a shared CI runner.
 test("oversized output is withheld before removing the owned job", async () => {
 	const m = fixture(); try {
 		expect(await result(m.start("print('x' * 8000001)"))).toEqual({ status: 1, cause: "desktop-result-too-large" });
 		expect(existsSync(path.join(m.root, "removed"))).toBe(true);
 	} finally { m.dispose(); }
-});
+}, 15000);
 
 test("large replies cross launchd's nonblocking FIFO without truncation", async () => {
 	const m = fixture(); try {
