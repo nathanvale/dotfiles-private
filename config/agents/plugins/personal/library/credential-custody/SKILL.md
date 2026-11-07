@@ -13,9 +13,10 @@ credential in another terminal, harness, or Mac does not establish access here.
 1. Name the host, account, harness, intended operation, and credential owner.
    Establish the expected hostname, account home, and account name from the
    known target. An SSH alias is not the kernel hostname.
-2. Run the metadata doctor from this loaded skill directory. Set the three
-   expectation variables from that target record, independently of the current
-   process environment. Set `CREDENTIAL_CONTEXT` to `local` or `ssh`.
+2. Set `CREDENTIAL_SKILL_DIR` to the absolute directory containing this loaded
+   `SKILL.md`. Set the three expectation variables from that target record,
+   independently of the current process environment. Set `CREDENTIAL_CONTEXT`
+   to `local` or `ssh`, then run the metadata doctor:
 
    ```sh
    python3 "$CREDENTIAL_SKILL_DIR/scripts/doctor.py" \
