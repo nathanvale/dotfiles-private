@@ -28,6 +28,7 @@ class QuietParser(argparse.ArgumentParser):
 
 
 def arguments(argv):
+    """Parse required target expectations, converting argument errors to Blocked."""
     parser = QuietParser(description=__doc__)
     parser.add_argument("--expect-host", required=True, help="Known target hostname, not an SSH alias")
     parser.add_argument("--expect-user", required=True, help="Known target account name")
@@ -37,6 +38,10 @@ def arguments(argv):
 
 
 def admit_context(args):
+    """Validate the expected macOS host, non-root account, home and transport hints.
+
+    Return the admitted UID and canonical home before metadata probes start.
+    """
     if platform.system() != "Darwin":
         raise Blocked("unsupported-platform")
     uid = os.getuid()
@@ -61,6 +66,10 @@ def admit_context(args):
 
 
 def read_bounded(process):
+    """Return at most 64 KiB, reading and waiting with one five-second deadline.
+
+    Reject excess output or expired reads; the caller owns process cleanup.
+    """
     deadline = time.monotonic() + 5
     output = bytearray()
     with selectors.DefaultSelector() as selector:
@@ -81,6 +90,10 @@ def read_bounded(process):
 
 
 def query(arguments, home, capture=True):
+    """Run with closed input and a minimal environment, returning code and bytes.
+
+    Bound capture and waiting, then kill any surviving child and reap it.
+    """
     try:
         with subprocess.Popen(
             arguments,
@@ -107,6 +120,10 @@ def query(arguments, home, capture=True):
 
 
 def keychain_paths(option, home):
+    """Accept only UTF-8, quoted absolute paths from security metadata output.
+
+    Each nonblank line must contain one path, escaping only quotes or backslashes.
+    """
     code, output = query(["/usr/bin/security", option, "-d", "user"], home)
     if code != 0:
         raise Blocked("keychain-metadata-query-failed")
@@ -126,6 +143,10 @@ def keychain_paths(option, home):
 
 
 def inspect_keychain(uid, home):
+    """Check login file ownership and collect selection and GUI-domain metadata.
+
+    These probes inspect file and account metadata without reading credential items.
+    """
     login = home / "Library/Keychains/login.keychain-db"
     if login.parent.resolve() != login.parent:
         raise Blocked("login-keychain-file-context")
@@ -150,6 +171,10 @@ def inspect_keychain(uid, home):
 
 
 def report(argv):
+    """Build a versioned report, admitting context before metadata probes start.
+
+    Metadata success leaves custody, authentication and unlock state unchecked.
+    """
     result = {
         "schema_version": 1,
         "status": "blocked",
@@ -180,6 +205,7 @@ def report(argv):
 
 
 def main():
+    """Emit a JSON report and return 0 for metadata-ok or 2 for a blocked report."""
     result = report(sys.argv[1:])
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "metadata-ok" else 2
