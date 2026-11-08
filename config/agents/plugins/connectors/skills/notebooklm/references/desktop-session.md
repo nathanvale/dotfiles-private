@@ -90,8 +90,10 @@ state. Keep evidence outside temporary fixture directories.
    the compiled binary's hash alone cannot turn it into public-CLI proof.
 5. **Prove an authorized provider read separately.** Use the loaded NotebookLM
    skill's readiness command in the named receiver, then `pack_check` and
-   `pack_status` for one declared existing manifest under the task's read
-   authority. Require the actual Studio response and its completeness result.
+   `pack_status` for one declared existing manifest in bind mode with a notebook
+   ID under the task's read authority. Qualify complete consumer output only
+   from an actual Studio response with `studio.read=completed` and
+   `studio.complete=true`; leave incomplete or failed reads unqualified.
    Keep source readiness
    and stale-artifact states as returned; successful access need not make the
    pack ready. Record a direct desktop run separately from GUI-job coverage.
