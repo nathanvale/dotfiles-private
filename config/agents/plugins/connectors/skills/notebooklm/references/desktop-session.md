@@ -85,8 +85,9 @@ state. Keep evidence outside temporary fixture directories.
    helper with synthetic commands and an explicit live owner PID. Require a
    large reply to equal an independently prepared payload byte for byte.
    Separately exceed the helper's current output bound and request deadline;
-   require the matching cause, no released payload, and owned-process/job
-   absence before verifier teardown. Record this as real-launchd helper proof;
+   require the matching cause, no released payload, and observed absence of
+   request-owned processes, the exact GUI job, and the temporary request
+   directory before verifier teardown. Record this as real-launchd helper proof;
    the compiled binary's hash alone cannot turn it into public-CLI proof.
 5. **Prove an authorized provider read separately.** Use the loaded NotebookLM
    skill's readiness command in the named receiver, then `pack_check` and

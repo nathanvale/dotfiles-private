@@ -30,11 +30,12 @@ Preconditions:
    exact fixture bytes, expected identities, or pagination completion as
    appropriate. Exit 0 or parseable partial output alone is insufficient.
 5. For a temporary desktop route, follow the owner's qualification recipe for
-   its supported interruption, deadline, and output-limit cases. Identify owned
-   jobs and descendants before the failure. Observe their absence before the
-   verifier's emergency teardown; parent exit or a successful removal command
-   alone does not prove cleanup. Keep inconclusive probes unresolved and retain
-   evidence after teardown. Keep mechanism-specific commands with that owner.
+   its supported interruption, deadline, and output-limit cases. Identify all
+   temporary resources owned by the request before the failure. Observe their
+   absence before the verifier's emergency teardown; parent exit or a successful
+   removal command alone does not prove cleanup. Keep inconclusive probes
+   unresolved and retain evidence after teardown. Keep mechanism-specific
+   commands with that owner.
 
 ## Gotchas
 
