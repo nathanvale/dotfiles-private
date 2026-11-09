@@ -1,6 +1,7 @@
 {
   "name": "my-second-brain-playground",
   "version": "0.18.1",
+  "license": "ISC",
   "description": "A local playground for building My Second Brain skills one vertical slice at a time.",
   "author": {
     "name": "Nathan Vale"
