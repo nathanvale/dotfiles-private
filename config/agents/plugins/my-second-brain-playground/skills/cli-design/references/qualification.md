@@ -40,20 +40,29 @@ repository's own `bun run check` passes.
 
 Preserve the host's TypeScript, Biome, Fallow, package, lockfile, script, test,
 and source owners. Review an explicit scoped policy delta for the added or
-changed CLI paths. Run the accepted gradual-adoption review from the host root:
+changed CLI paths. Set `COMPARISON_BASE` to the verified immutable commit SHA
+of the intended integration baseline. Run the accepted gradual-adoption review
+from the host root:
 
 ```bash
-node_modules/.bin/fallow audit --format json --quiet --gate new-only --type-aware --type-aware-require complete
+node_modules/.bin/fallow audit --base "$COMPARISON_BASE" --format json --quiet --gate new-only --type-aware --type-aware-require complete
 ```
 
-Keep the host's existing quality commands visible and run them. This review
-must fail when required semantic evidence is missing, but it does not qualify
-inherited findings away or claim that the whole existing project is clean.
+Verify the audit's resolved comparison and changed-file scope cover every
+intended CLI change. Require non-empty relevant coverage when CLI paths changed.
+Keep the host's existing quality commands visible and run them. Require complete
+evidence for every required semantic query and inspect base/head attribution.
+Qualification requires comparable semantic identities or independent review of
+every affected semantic-only finding against the reviewed baseline. A passing
+new-only gate can fall back to syntactic attribution while semantic-only
+findings remain advisory. Preserve inherited findings and the host's reviewed
+baseline gaps.
 
 Completion criterion: the preservation diff contains only the selected owner
 paths and reviewed additive deltas, host checks pass, and the new-only review
-passes with complete required evidence for the changed CLI paths. For maintenance,
-run this branch without bootstrap or composition.
+passes with the verified comparison, CLI coverage, complete required semantic
+evidence, and semantic attribution or independent review defined above. For
+maintenance, run this branch without bootstrap or composition.
 
 ## Run the process checks
 
