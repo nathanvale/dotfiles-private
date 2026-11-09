@@ -69,9 +69,10 @@ public process expectations in the same change.
 
 ## Diagnostics
 
-Add LogTape `2.3.1` only for multi-step or asynchronous ordering, partial or
+Add LogTape `2.4.2` only for multi-step or asynchronous ordering, partial or
 unknown history, structured secret redaction, or material cross-step correlation.
-Keep the journal separate.
+Keep the journal separate. Read [LogTape diagnostics](logtape.md) before
+selecting sinks, redaction, drain, disposal, or file retention.
 
 Private per-run diagnostics use the CLI's XDG state directory, disclose the path,
 and remain bounded by the accepted per-run, aggregate, record, retention, and
