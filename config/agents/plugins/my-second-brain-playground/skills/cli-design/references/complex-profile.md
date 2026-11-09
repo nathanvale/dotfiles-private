@@ -1,10 +1,8 @@
 # Complex profile
 
-Use complex when any command changes user data or configuration, or when
-identity, authentication, approval, handoff, ordered effects, recovery, partial
-state, unknown state, or durable diagnostics applies. The canonical starter
-lives in `bun-typescript-template/starters/complex`; consume it through the
-public bootstrap or preservation-safe composer.
+Use the [skill's profile decision](../SKILL.md#2-select-the-profile-before-writing).
+The canonical starter lives in `bun-typescript-template/starters/complex`.
+Consume it through the public bootstrap or preservation-safe composer.
 
 ## Layout
 
@@ -64,14 +62,12 @@ identities distinct. Strict new-project qualification reaches every required
 station and rejects every observed undeclared station. Gradual existing-project
 adoption freezes old gaps; new or changed stations remain strict.
 
-When adding a command or behavior branch, update code, catalogue, discovery, and
-public process expectations in the same change.
-
 ## Diagnostics
 
-Add LogTape `2.3.1` only for multi-step or asynchronous ordering, partial or
-unknown history, structured secret redaction, or material cross-step correlation.
-Keep the journal separate.
+Use the [skill's diagnostics decision](../SKILL.md#4-select-diagnostics-when-needed).
+Read [LogTape diagnostics](logtape.md) before selecting sinks, redaction, drain,
+disposal, or file retention. That reference owns the version pin and native API
+defaults.
 
 Private per-run diagnostics use the CLI's XDG state directory, disclose the path,
 and remain bounded by the accepted per-run, aggregate, record, retention, and
@@ -94,12 +90,9 @@ Run:
 
 Use literal expected results independent of the production catalogue. Preserve
 one defect at a time in negative controls, prove its exact finding, then restore
-the same harness to green. Run the complete repository and generated CI sequence
-from a clean checkout. For a new repository, qualify its static policy through
-the skill's `admit:static` route; a changed-files Fallow audit does not replace
-the complete whole-project and production-dependency passes. In an existing
-project, preserve the host policy and use the skill's complete-evidence new-only
-adoption review.
+the same harness to green. Use [Qualification](qualification.md) for
+route-specific static admission, the strict checker, complete repository checks,
+and the clean-checkout CI sequence.
 
 The local `packages/cli-design-exemplar` is the qualified complex reference. A
 repository using `@side-quest/cli-command-facade` keeps that runtime as its
