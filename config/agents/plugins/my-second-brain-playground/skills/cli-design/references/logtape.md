@@ -6,7 +6,24 @@ pins until their own scoped upgrade passes. Keep machine output and recovery
 journals under [Contract Core](contract-core.md); diagnostics explain execution
 without deciding domain truth.
 
-## Select and bound the sink
+## Prefer native admission where it fits
+
+Start with synchronous safe-field projection and redaction, then native sinks.
+Choose the smallest adapter that meets the accepted limits:
+
+- For ordered asynchronous output, use a finite `fromAsyncSink()` queue.
+- For failure-only job context, add a bounded `fingersCrossed()` wrapper.
+- For job completion, drain the retained output handle and keep it open.
+- For exact byte admission, private files, or complete loss counts, retain the
+  application's queue and custody owner. The complex exemplar needs those bounds.
+
+Apply this reference's pin through the selected package and lock owner before
+using these APIs. The admitted template and composer have separate pins.
+Requalify a generated project after changing them; starter admission does not
+transfer automatically to the changed dependencies. If admission rejects the
+newer pin, report that route incomplete and hand the pin migration to the
+canonical template owner.
+
 
 - For `fromAsyncSink()`, set a finite `maxQueueSize`; its default is unbounded.
   The limit counts waiting records, excluding the active operation. Prefer
@@ -36,6 +53,70 @@ notifications do not count every kind of loss.
 
 Behavior owner: [2.4.2 sink manual](https://github.com/dahlia/logtape/blob/2.4.2/docs/manual/sinks.md#loss-notifications).
 
+## Retain failure context per job
+
+For failure-only diagnostics, use `fingersCrossed()` with finite `maxBufferSize`
+and `afterTrigger: "buffer"`. Bound `maxContexts` when isolating concurrent jobs.
+Use `bufferAction` to flush failed jobs and discard successful jobs. Alternatively,
+call `flush()` or `discard()` at the explicit job boundary.
+
+Use `snapshot` to copy retained messages and properties before caller mutation.
+Project and redact before wrapper intake, because trigger and pass-through
+records bypass `snapshot`. Capacity and context evictions have no `onDrop`
+callback. Keep an application owner when every withheld record needs accounting.
+
+The [2.4.2 fingers-crossed API](https://github.com/dahlia/logtape/blob/2.4.2/packages/logtape/src/sink.ts)
+owns those options. Run this sequential-job example with the pinned packages.
+The fixed-size synthetic records demonstrate composition, not private-file
+custody, writer deadlines, or total byte bounds.
+
+```typescript
+import assert from "node:assert/strict";
+import { fingersCrossed, fromAsyncSink, type LogRecord } from "@logtape/logtape";
+import { redactByField } from "@logtape/redaction";
+
+const record = (n: 1 | 2 | 3, end?: "ok" | "failed"): LogRecord => ({
+	category: ["probe"], level: "debug", timestamp: 0,
+	rawMessage: "step", message: ["step"], properties: { n, end },
+});
+const written: number[] = [];
+let dropped = 0;
+const output = fromAsyncSink(async (entry) => {
+	written.push(Number(entry.properties.n));
+}, {
+	maxQueueSize: 2, overflow: "drop-newest",
+	onDrop: ({ count }) => { dropped += count; },
+});
+const context = fingersCrossed(output, {
+	maxBufferSize: 2, afterTrigger: "buffer",
+	snapshot: ({ message, properties, ...metadata }) => ({
+		...metadata, ...structuredClone({ message, properties }),
+	}),
+	bufferAction: ({ properties }) => properties.end === "failed" ? "flush"
+		: properties.end === "ok" ? "discard" : undefined,
+});
+const intake = redactByField(context, {
+	fieldPatterns: ["password"], maxDepth: 4, maxProperties: 16,
+});
+intake(record(1));
+await context.drain();
+assert.deepEqual(written, []);
+intake(record(2, "failed"));
+await context.drain();
+assert.deepEqual(written, [1, 2]);
+intake(record(3));
+intake(record(3, "ok"));
+context.flush();
+await context.drain();
+await context[Symbol.asyncDispose]();
+assert.deepEqual(written, [1, 2]);
+assert.equal(dropped, 0);
+console.log(JSON.stringify({ written, dropped }));
+```
+
+Expected output is `{"written":[1,2],"dropped":0}`. The successful job contributes
+no output. Add overflow and sink-failure cases when adapting this recipe.
+
 ## Drain and finish
 
 Use a drainable sink's `drain()` for a job boundary that keeps the sink open.
@@ -57,16 +138,18 @@ and [drain semantics](https://github.com/dahlia/logtape/blob/2.4.2/docs/manual/s
 
 ## Redact before retention
 
-Project safe fields before buffering. Use `redactByField()` for structured
-secrets and `redactByPattern()` around the formatter for free text. Bound
+Project safe fields before buffering. Default to synchronous `redactByField()`
+for structured secrets and `redactByPattern()` around the formatter for free text. Bound
 traversal with `maxDepth` and `maxProperties`; defaults are 20 levels and 1,000
 entries per object. Test nested fields, interpolated messages, and truncation.
 
 Field wrappers preserve disposal hooks, but do not forward `Drainable` in this
 tag. Retain the underlying drainable sink for synchronous field redaction;
 dispose the outer `redactByFieldAsync()` wrapper to await pending redaction and
-wrapped cleanup. Qualify the composed chain rather than assuming global drain
-covers it.
+wrapped cleanup. Async redaction starts work on every intake without a finite
+admission queue. A bounded inner sink does not bound that work or retained raw
+records. Use async redaction only with application-owned admission and operation
+deadlines. Qualify the composed chain rather than assuming global drain covers it.
 
 Owners: [redaction manual](https://github.com/dahlia/logtape/blob/2.4.2/docs/manual/redaction.md)
 and [field wrapper source](https://github.com/dahlia/logtape/blob/2.4.2/packages/redaction/src/field.ts).

@@ -1,229 +1,170 @@
 ---
 name: cli-design
-description: Build, maintain, or extend a Bun and TypeScript CLI for humans and agents. Use for a new read-only CLI, a state-changing CLI, adding a CLI to an existing Bun project, choosing simple versus complex structure, adding commands or Branch Stations, changing behavior, fixing a CLI bug, or proving Contract Core 2.0 behavior with the checker.
+description: Build, maintain, debug, or verify a Bun and TypeScript CLI for humans and agents. Use for new or existing CLIs, profile selection, commands and Branch Stations, behavior changes, and Contract Core 2.0 qualification.
 ---
 
-# CLI Design
+# CLI design
 
-Build one human-first and agent-native CLI around Contract Core 2.0. Use the
-canonical Bun template for starters and keep each generated project independent
-of the template and plugin at runtime.
+Build a human-first, agent-native CLI around Contract Core 2.0. Use the canonical
+Bun template for starters. Keep each generated project independent of the
+template and plugin at runtime.
 
-## Capture the job
+## 1. Define the job
 
-Record:
+In the owning task brief, record:
 
-- CLI name and one-sentence purpose.
-- Human, script, and agent users.
-- Each command, input, and public result.
-- Effect class per command: `inspect`, `repository-local`, or `external`.
-- Existing-project or new-repository route.
-- Smoke command.
+- The CLI name, purpose, users, and smoke command.
+- Each command's input and observable result.
+- Each command's effect class, `inspect`, `repository-local`, or `external`.
+- The route, new repository, existing-project composition, or maintenance.
 
-Completion criterion: every command has an effect class and observable result.
+For an existing CLI, inspect its public help, command contract, profile, typed
+catalogue, and process tests. Preserve its adopted contract owner, including
+`@side-quest/cli-command-facade` where present.
 
-## Choose the route
+Completion criterion: the brief names the purpose, users, route, smoke command,
+and each in-scope command's inputs, effect class, and observable result.
 
-Set `SKILL_DIR` to this `SKILL.md`'s directory, then derive the plugin root
-once:
+## 2. Select the profile before writing
+
+Use simple only when every command is read-only and no complex trigger applies.
+Select complex for any of these triggers:
+
+- Changes to user data or configuration, including one deterministic local file.
+- Identity, authentication, approval, or handoff.
+- Ordered effects, recovery, or partial or unknown state.
+- Durable diagnostics or diagnostic history needed across steps.
+
+Read [Simple profile](references/simple-profile.md) or
+[Complex profile](references/complex-profile.md). Complex does not imply a
+monorepo. Keep the current profile during maintenance unless a new behavior
+crosses a complex trigger. Add LogTape only when its diagnostic triggers apply.
+
+Completion criterion: the brief names the profile and its selecting trigger.
+
+## 3. Prepare the selected route
+
+Set `SKILL_DIR` to this `SKILL.md`'s directory. Derive the plugin root once:
 
 ```bash
 SKILL_DIR=/absolute/path/to/skills/cli-design
 PLUGIN_ROOT=$(cd -- "$SKILL_DIR/../.." && pwd -P)
 ```
 
-`--source-packet PATH_OR_URL` names the project's vault packet as an absolute
-path or HTTP(S) URL. HTTP(S) URLs must contain no username, password, or query.
-The bootstrap also refuses newline, carriage-return, and backtick characters.
-Both record accepted values verbatim in the generated `README.md` or
-`.cli-design-template.json`; neither reads the packet. Packet placement: dotfiles
-`docs/agents/work-placement.md`.
+Before either existing-project composition or maintenance, confirm the host
+supplies `node_modules/.bin/fallow`. If absent, stop and add it through the
+host's dependency owner before implementation. This prerequisite supports the
+required existing-project qualification.
 
 ### New repository
 
-Run the canonical `bun-typescript-template` public bootstrap from that
-repository's root:
+Read the canonical `bun-typescript-template` README and public bootstrap help
+before generation. From that repository's root, run the selected profile:
 
 ```bash
 bun run bootstrap --profile durable --starter simple --destination PATH --source-packet PATH_OR_URL
 bun run bootstrap --profile durable --starter complex --destination PATH --source-packet PATH_OR_URL
 ```
 
-Use an empty destination. Add `--name NAME` to replace the name derived from
-the destination and `--json` for the machine result. Generated projects own
-their dependencies, lockfile, checks, tests, and CI.
+Use an empty destination. Add `--name NAME` to replace its derived name and
+`--json` for the machine result. The generated project owns its dependencies,
+lockfile, checks, tests, and CI.
 
 ### Existing Bun project
 
-Run the plugin's preservation-safe composer from `PLUGIN_ROOT`:
+Read `bin/cli-design --help` from `PLUGIN_ROOT`, then run the selected profile:
 
 ```bash
 bun run --cwd "$PLUGIN_ROOT" cli-design compose-existing --project-root PATH --package PATH --starter simple --source-packet PATH_OR_URL
 bun run --cwd "$PLUGIN_ROOT" cli-design compose-existing --project-root PATH --package PATH --starter complex --source-packet PATH_OR_URL
 ```
 
-Pass an absolute `--project-root` and select the package explicitly; add
-`--json` for the machine result. Resolve ownership conflicts instead of
-replacing current source, scripts, dependencies, tests, lockfile, or quality
-configuration.
+Use an absolute `--project-root`. Set `--package` relative to that root, either
+`.` or a declared workspace member. Add `--json` for the machine result. Resolve
+ownership conflicts before replacing source, scripts, dependencies, tests,
+lockfiles, or quality configuration.
 
 ### Maintain or extend
 
-Inspect the existing command contract, profile, typed catalogue, process tests,
-and public help before editing. Keep the current profile unless a new command
-crosses a complex trigger. Change code, catalogue declarations, help, and tests
-as one unit when behavior changes.
+Work through the existing owners. Preserve host tooling, source, and reviewed
+baseline gaps. Change only the selected commands and their necessary contracts,
+catalogue declarations, help, and process tests.
 
-Completion criterion: one route is selected and its public help confirms the
-exact invocation.
+For generation and composition, `--source-packet PATH_OR_URL` records an absolute
+vault-packet path or HTTP(S) URL verbatim in the generated README or
+`.cli-design-template.json`. Neither command reads the packet. URLs admit no
+username, password, or query. The bootstrap also rejects newline,
+carriage-return, and backtick characters. Dotfiles `docs/agents/work-placement.md` owns packet placement.
 
-## Choose the profile
+Completion criterion: the selected route's public help confirms the invocation,
+prerequisites pass, and the resulting diff preserves existing owners.
 
-| Signal | Profile |
-| --- | --- |
-| Every command is read-only and no complex trigger applies. | simple |
-| Any command changes user data or configuration, including one deterministic local file. | complex |
-| Identity, authentication, approval, handoff, partial or unknown effects, recovery, or multiple ordered effects. | complex |
+## 4. Select diagnostics when needed
 
-Read [Simple profile](references/simple-profile.md) or
-[Complex profile](references/complex-profile.md). Keep structure proportionate;
-complex does not imply a monorepo. Add LogTape only for the diagnostics triggers
-in the complex reference.
+For multi-step or asynchronous ordering, partial or unknown history, structured
+secret redaction, or material cross-step correlation, read
+[LogTape diagnostics](references/logtape.md) before choosing an adapter.
 
-Completion criterion: the brief names the profile and the trigger that selected
-it.
+Prefer LogTape's bounded async admission, loss notifications, job drains, and
+fingers-crossed job buffers where their guarantees fit. Keep application-owned
+byte limits, file custody, retention, and shutdown deadlines. Keep the recovery
+journal authoritative and separate from diagnostics.
 
-## Apply Contract Core 2.0
+The admitted template and composer retain their own dependency pins. A new or
+scoped diagnostics integration applies the reference's pin through its package
+owner and reruns the affected checks. This skill revision does not upgrade or
+requalify the canonical starter.
+
+Completion criterion: the brief names the selected APIs, limits, loss reporting,
+cleanup boundary, and any application-owned guarantees they cannot supply.
+
+## 5. Implement commands and their contract
 
 Read [Contract Core](references/contract-core.md). Keep one typed owner for
-command identities, routes, causes, exit meanings, result correlations, and
-serialization. Validate external input as unknown and validate the final
-machine envelope before writing it.
+identities, routes, causes, exit meanings, result correlations, and serialization.
+Validate external input as unknown. Validate the final machine envelope before
+writing it. Keep human output concise and non-TTY stdin non-interactive.
 
-Human output stays concise. Machine completion and lifecycle exceptions follow
-the linked Contract Core: ordinary completion emits one validated 2.0 envelope
-with empty stderr; uncaught crashes and pre-drain EPIPE/transport failures may
-end without one; SIGINT and SIGTERM use the accepted bounded-stop lifecycle.
-Non-TTY stdin never prompts. Unknown effects are transaction state, never an
-outcome, and never authorize automatic replay.
+For each new or changed command:
 
-Completion criterion: every public path returns through the typed result and
-validated serializer.
+1. Update its canonical identity, route, effect class, and help.
+2. Implement the behavior and public-process expectations together.
+3. For complex, declare each Branch Station's outcome, cause, effect state,
+   retry policy, reachability, and recovery guidance.
+4. Exercise `--discover-command COMMAND_IDENTITY --json` against the same typed
+   catalogue used by tests.
+5. Reject observed undeclared stations and unreachable required stations.
 
-## Qualify the static policy
+New CLIs use strict catalogue enforcement. Existing CLIs may preserve a reviewed
+baseline of old gaps. New or changed stations remain strict.
 
-### New repository
+Completion criterion: implementation, help, discovery, catalogue, and process
+expectations agree for each changed command. Every ordinary application-controlled
+machine completion emits one validated 2.0 envelope and empty stderr. Preserve
+and separately prove Contract Core's signal, crash, and transport exceptions.
 
-From the canonical `bun-typescript-template` root, admit the materialized CLI
-and store receipts outside the generated project:
+## 6. Qualify and hand back
 
-```bash
-bun run admit:static /absolute/project/path simple /absolute/evidence/path
-bun run admit:static /absolute/project/path complex /absolute/evidence/path
-```
+Read [Qualification](references/qualification.md) after implementation. Run the
+selected route's static-policy admission, profile process tests, applicable
+strict-checker rows, and repository checks. Keep independent literal oracles and
+explain every skipped scenario. Checker success alone does not qualify
+command-scoped discovery, recovery, or lifecycle behavior.
 
-Choose the command matching the selected profile. The admission interface
-checks the resolved pins, authored-file inventory, Biome, TypeScript, tests, and
-both Fallow passes. `quality:fallow` must cover the whole project, including
-tests, with complete required semantic evidence. The separate production
-dependency pass must also succeed. A changed-files or `new-only` audit is useful
-review evidence, but cannot qualify a new starter or hide an inherited finding.
-Stop when a required semantic query is unavailable or incomplete; distinguish
-that failure from a run that proves no semantic query was necessary.
+Report the candidate, route, profile, observed results, retained evidence, and
+remaining gaps. Distinguish source checks, packaged execution, installation,
+and activation. A passing source check proves no later state.
 
-Keep the focused Fallow policy enabled for unused files, exports and types;
-unused, unlisted, unresolved and misclassified dependencies; circular imports
-and re-export cycles; declared module-boundary violations with complete file
-coverage; and unexplained or stale Fallow suppressions. Keep Biome responsible
-for stray console output, explicit `any`, non-null assertions, and the scoped
-restricted imports defined by the canonical profile.
+Completion criterion: every applicable check passes and each proof limit is
+explicit. Stop on incomplete required evidence rather than treating it as clean.
 
-Completion criterion: the profile's static-admission result is `admitted`, both
-whole-project Fallow passes have complete evidence, and the generated
-repository's own `bun run check` passes.
+## Owners
 
-### Existing Bun project
+Contract and generation convention are `2.0.0`. The product supports only 2.0.
+A 1.0 specimen is historical or an unsupported-format refusal.
 
-Preserve the host's TypeScript, Biome, Fallow, package, lockfile, script, test,
-and source owners. Review only an explicit scoped policy delta for the added CLI
-paths. The composer adds no Fallow dependency: the host must already provide
-`node_modules/.bin/fallow`. Confirm it exists before composing; when absent,
-stop and add Fallow through the host's own dependency owner first. Then run the
-accepted gradual-adoption review from the host root:
-
-```bash
-node_modules/.bin/fallow audit --format json --quiet --gate new-only --type-aware --type-aware-require complete
-```
-
-Keep the host's existing quality commands visible and run them. This review
-must fail when required semantic evidence is missing, but it does not qualify
-inherited findings away or claim that the whole existing project is clean.
-
-Completion criterion: the preservation diff contains only the selected owner
-paths and reviewed additive deltas, host checks pass, and the new-only review
-passes with complete required evidence for the changed CLI paths.
-
-## Change commands and stations
-
-For a new or changed command:
-
-1. Add its canonical identity, route, effect class, and help.
-2. Add implementation and public process tests.
-3. For a complex CLI, add every possible station with its outcome, cause,
-   effect state, retry policy, and recovery guidance.
-4. Exercise the target CLI's `--discover-command COMMAND_IDENTITY --json` and
-   compare it with the same typed catalogue used by tests.
-5. Reject a new observed station that is undeclared or a declared required
-   station that is never reached.
-
-New CLIs use strict catalogue enforcement. Existing CLIs may retain a reviewed
-baseline of old gaps; every new or changed station needs matching code,
-catalogue, and tests.
-
-Completion criterion: code, help, discovery, catalogue, and process tests agree
-for every changed route.
-
-## Prove the result
-
-Read public help first. Human help prints `[options]` only; JSON help lists
-every option with its value name:
-
-```bash
-"${PLUGIN_ROOT}/bin/cli-design-check" --help --json
-```
-
-Run the strict checker with its required 2.0 rows:
-
-```bash
-"${PLUGIN_ROOT}/bin/cli-design-check" --cwd DIR --command "ARGV WORDS" --success-args "ARGS" --missing-args "ARGS" --internal-args "ARGS" --schema-args "ARGS" --transient-args "ARGS" --json
-```
-
-Add each optional row the CLI supports: `--effect-args "ARGS"` (authority
-refusal), `--secret-args "ARGS"` with `--secret-marker STRING` (redaction;
-supplied together), `--malformed-args "ARGS"` (malformed value), and
-`--large-args "ARGS"` (large envelope). `--timeout-ms N` bounds every spawned
-scenario and `--retain-streams-dir ABSOLUTE_DIR` retains raw streams; both are
-options, not rows. The matrix covers help, `--discover`, refusal, success,
-missing-input, and failure-class rows on the target; it has no
-`--discover-command` row and rejects that flag on itself, so the project's own
-catalogue and process tests prove command-scoped discovery (reference:
-`packages/cli-design-exemplar/tests/catalog/command-discovery.test.ts`). Run
-the generated or host repository's complete checks. For complex CLIs, run unit,
-integration, catalogue, recovery, and lifecycle process tests.
-
-Completion criterion: every applicable checker row and repository check passes;
-the proof report names why each `skippedRows` entry is unavailable, because the
-checker records skipped scenario names only.
-
-## Version and owners
-
-Contract and generation convention are `2.0.0`. The product supports the 2.0
-format only. A 1.0 specimen is historical or an unsupported-format refusal, not
-a compatibility obligation.
-
-- Canonical starter source: `bun-typescript-template`.
-- Existing-project composition: `bin/cli-design`.
-- Contract checker: `bin/cli-design-check`.
-- Local complex reference implementation: `packages/cli-design-exemplar`.
-- Skill references: `references/contract-core.md`,
-  `references/simple-profile.md`, and `references/complex-profile.md`.
+- `bun-typescript-template` owns canonical starters and new-project admission.
+- `bin/cli-design` owns preservation-safe composition.
+- `bin/cli-design-check` owns the strict process-checker interface.
+- `packages/cli-design-exemplar` owns the local complex reference implementation.
+- [Contract Core](references/contract-core.md) owns portable result invariants.

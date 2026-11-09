@@ -1,8 +1,8 @@
 # Simple profile
 
-Use simple only when every command is read-only and no complex trigger applies.
-The canonical starter lives in `bun-typescript-template/starters/simple`; consume
-it through the public bootstrap or preservation-safe composer.
+Use the [skill's profile decision](../SKILL.md#2-select-the-profile-before-writing).
+The canonical starter lives in `bun-typescript-template/starters/simple`.
+Consume it through the public bootstrap or preservation-safe composer.
 
 ## Layout
 
@@ -22,27 +22,12 @@ Keep the behavioral entry point cohesive while it remains small. Split a module
 only when one concern gains an independent contract or test seam. The simple
 starter has no runtime dependency and no LogTape.
 
-## Contract behavior
+## Apply the read-only boundary
 
-- Every product command has `effectClass: inspect` and
-  `transactionState: unchanged`.
-- Human help names supported commands and examples.
-- `--discover --json` reports Contract Core 2.0 and the simple profile.
-- `--discover-command COMMAND_IDENTITY --json` reports the selected read-only
-  command's possible stations.
-- Machine success, refusal, and internal failure use the strict 2.0 envelope.
-- Non-TTY stdin never prompts.
-
-A command that changes user data or configuration moves the CLI to complex.
-Keep the repository layout proportionate after that move; complex does not imply
-a workspace or monorepo.
-
-## Maintenance and extension
-
-For a read-only command, update its identity, route, help, implementation,
-selected-command discovery, and process tests together. If the new behavior
-introduces mutation, authority, recovery, partial state, or diagnostics history,
-change the profile before implementing it.
+Keep every command at `effectClass: inspect` and `transactionState: unchanged`.
+Use [Contract Core](contract-core.md) for help, discovery, machine output, input,
+and lifecycle behavior. Change the profile before adding a complex trigger.
+Use the skill's command checklist when extending the CLI.
 
 ## Tests
 
@@ -59,9 +44,6 @@ state, effect inventory, retry policy, and guidance. Exercise:
 - closed and held-open non-TTY stdin; and
 - every applicable strict checker row.
 
-Run the generated CI sequence from a clean fresh checkout. The generated project
-passes with its own lockfile and has no template or plugin runtime dependency.
-For a new repository, qualify its static policy through the skill's
-`admit:static` route; a changed-files Fallow audit does not replace the complete
-whole-project and production-dependency passes. In an existing project, preserve
-the host policy and use the skill's complete-evidence new-only adoption review.
+Run [Qualification](qualification.md) for static admission, the strict checker,
+and the clean-checkout CI sequence. Keep the generated project independent of
+template and plugin runtime dependencies.
