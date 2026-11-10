@@ -180,3 +180,9 @@ config/monash-tools/
 # Machine-local browser credential-provider configuration and run output.
 /config/agent-browser/one-password.json
 /.playwright-cli/
+
+# Bunnings work config lives in the private bunnings-dotfiles repo; these are symlinks or caches
+config/teams
+config/certs
+config/colima/
+config/uv/
