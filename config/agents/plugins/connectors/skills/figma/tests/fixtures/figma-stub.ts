@@ -31,7 +31,7 @@ export interface FigmaStub {
 	// A Weave recipe's quoted cost; 0 runs at once without a quote.
 	weaveCost: number;
 	requireSession: boolean;
-	rejectNext: { tool: string; message: string } | null;
+	rejectNext: { tool: string; message: string; code?: number } | null;
 	// The next use_figma reply succeeds but takes no visible effect.
 	silentUseFigma: boolean;
 	// Every upload POST the stub accepted, in order.
@@ -178,7 +178,7 @@ export function startFigmaStub(): FigmaStub {
 			if (url.pathname.startsWith("/upload/")) return upload(url, request);
 			const message = (await request.json()) as { id?: number; method: string; params?: { protocolVersion?: string; name?: string; arguments?: Args; uri?: string } };
 			if (message.id === undefined) return new Response(null, { status: 202 });
-			const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: message.id, result });
+			const reply = (result: unknown, error?: { code: number; message: string }) => Response.json({ jsonrpc: "2.0", id: message.id, ...(error ? { error } : { result }) });
 			if (message.method === "initialize") return reply({ protocolVersion: message.params?.protocolVersion, capabilities: { tools: {}, resources: {} }, serverInfo: { name: "figma-stub", version: "1" } });
 			if (message.method === "resources/read") {
 				const uri = message.params?.uri;
@@ -194,11 +194,12 @@ export function startFigmaStub(): FigmaStub {
 		return `http://127.0.0.1:${server.port}`;
 	}
 	// Tool semantics are separate from HTTP and MCP handshake dispatch.
-	function callTool(tool: string, args: Args, reply: (result: unknown) => Response): Response {
+	function callTool(tool: string, args: Args, reply: (result: unknown, error?: { code: number; message: string }) => Response): Response {
 		stub.calls.push({ tool, args });
 		if (stub.rejectNext?.tool === tool) {
 			const rejection = stub.rejectNext;
 			stub.rejectNext = null;
+			if (rejection.code !== undefined) return reply(null, { code: rejection.code, message: rejection.message });
 			return reply({ isError: true, content: [{ type: "text", text: rejection.message }] });
 		}
 		if (stub.requireSession && tool !== "create_session" && args.fileKey && !sessions.has(args.sessionId)) return reply({ isError: true, content: [{ type: "text", text: "Session id is required; call create_session first" }] });

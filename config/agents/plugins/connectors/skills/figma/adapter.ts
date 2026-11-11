@@ -33,6 +33,7 @@ const REPAIR: Readonly<Record<RefusalKind, string>> = {
 };
 const WRITE_PHASE_REPAIR = "A Figma write needs --preview first, then --apply <previewId> with the identical --input";
 const READ_PHASE_REPAIR = "A Figma read takes neither --preview nor --apply; run it without them";
+const SESSION_FAILURE_REPAIR = "Figma create_session failed. The underlying Provider cause is unknown. Open the target file with the intended Figma account. If access is pending or denied, ask the file owner to grant access and wait for approval. Once the file opens, create a new task session. If setup still fails, give this result's runId to the connector maintainer. Do not call dependent file tools until setup returns a valid session UUID.";
 const ENTRY_KEYS = "allowedTools,auth,baseUrl,clientName,description";
 const AUTH_VERBS = new Set(["status", "login"]);
 const VAULT_REPAIR = "Figma's MCPorter vault root under Connectors state is not a private owned directory; make it an owner-only (0700) directory this user owns, then retry";
@@ -108,7 +109,8 @@ function prepareRun(request: AdapterRequest, operation: string, input: Readonly<
 	if (repair !== null) return refused("schema", "input-invalid", repair);
 	if (operation === "get_figma_skill") return transport(request, [], "read", { operation, resourceMethod: "resources/read" }, input?.uri as string);
 	const flags = input === null ? [] : ["--args", JSON.stringify(input)];
-	return transport(request, ["call", operation, ...flags, "--output", "json"], "read", { operation });
+	const plan = transport(request, ["call", operation, ...flags, "--output", "json"], "read", { operation });
+	return plan.kind === "transport" && operation === "create_session" ? { ...plan, unclassifiedReadRepair: SESSION_FAILURE_REPAIR } : plan;
 }
 
 function journaled(request: SchemaRequest, step: (journal: Journal | null, caller: ReturnType<typeof figmaCaller>) => Promise<Executed>, taskSessionId?: string): Prepared {

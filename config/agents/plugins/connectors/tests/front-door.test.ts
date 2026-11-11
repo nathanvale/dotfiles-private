@@ -455,7 +455,10 @@ describe("compiled front door: run through the packaged fixture adapter (public 
 				// The real MCPorter reached the stub once per run.
 				expect({ index, calls: fixture.stub.calls }).toEqual({ index, calls: index + 1 });
 				if (failWith === null) expect(envelope.result.data).toEqual({ connector: CONNECTOR, operation: "probe", result: { content: [{ type: "text", text: "probe-ok" }] } });
-				else expect(envelope.result.data).toBeNull();
+				else {
+					expect(envelope.result.data).toBeNull();
+					expect(envelope.result.nextAction).toBe("connectors.auth");
+				}
 				expect(result.stdout).not.toContain(PROVIDER_SENTINEL);
 			}
 			expect(existsSync(path.join(fixture.bundle.root, "mcporter.json"))).toBe(false);
