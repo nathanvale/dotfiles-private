@@ -41,7 +41,7 @@ unless the user requests a different certificate date.
    with the available PDF tools and inspect it before returning the PDF.
 
 The fixed honours wording is `with high distinction` followed by
-`and with first class honours`. Only `high distinction` and `first class honours`
+`and first class honours`. Only `high distinction` and `first class honours`
 are bold italic; their prefixes are regular italic. The remaining wording,
 artwork and positions come from [assets/layout.json](assets/layout.json).
 

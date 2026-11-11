@@ -10,6 +10,10 @@ Their hashes and measured bounds are in `../assets/layout.json`. Text baselines
 and font sizes preserve the approved generator's layout. Runtime generation
 reads only the packaged layout/artwork and installed font faces.
 
+The final honours prefix is `and `, following the user's later wording change.
+The original reference contains the earlier prefix; account for that intended
+difference when comparing renders.
+
 For a layout change, render the reference and candidate at the same resolution,
 compare their pixels, inspect the full page, and retain differences. An exact
 comparison uses identical recipient, degree and date inputs; keep those private.

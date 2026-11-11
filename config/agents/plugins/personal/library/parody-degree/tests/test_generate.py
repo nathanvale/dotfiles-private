@@ -45,10 +45,10 @@ class CopiedCertificateTests(unittest.TestCase):
             lines = {line["text"]: line for line in page.extract_text_lines()}
             for expected in ["Alex Morgan", "Masters of Applied Patience",
                              "on the eleventh day of November 2026",
-                             "with high distinction", "and with first class honours"]:
+                             "with high distinction", "and first class honours"]:
                 self.assertIn(expected, lines)
             for wording, prefix in [("with high distinction", "with "),
-                                    ("and with first class honours", "and with ")]:
+                                    ("and first class honours", "and ")]:
                 chars = lines[wording]["chars"]
                 self.assertTrue(all("ItalicMT" in char["fontname"] and "Bold" not in char["fontname"]
                                     for char in chars[:len(prefix.replace(" ", ""))]))
