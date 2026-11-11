@@ -11,7 +11,7 @@ const codexNames = [
 	"classic-cinema", "codex-code-review", "context-advisor", "context-unhobble-audit", "credential-custody",
 	"design-parity-session", "draft-message", "figma", "gh-account-switch", "heal-skill", "home-assistant-use",
 	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "mcp-doctor", "notion", "one-password",
-	"pattern-referee", "peekaboo", "resume-handoff", "retro-scrum-master", "session-picker",
+	"parody-degree", "pattern-referee", "peekaboo", "resume-handoff", "retro-scrum-master", "session-picker",
 	"session-recovery", "storybook-matrix", "stream-deck-author", "stream-deck-use", "summarize",
 	"teams", "test-design", "test-runner", "timesheets", "verify-credentials", "vocab-refresh", "work-music", "worktree",
 	"xero", "xero-cash-coding",
@@ -19,7 +19,7 @@ const codexNames = [
 const claudeNames = [
 	"bestie", "bestie-chapter-design", "ci-reproduce", "ci-testbed", "classic-cinema", "codex-code-review", "context-advisor", "credential-custody",
 	"design-parity-session", "draft-message", "fix-microphone", "gh-account-switch", "home-assistant-use",
-	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "one-password", "pattern-referee",
+	"imazing-archive", "imessage-reader", "kate-berry-creative-director", "last30days", "one-password", "parody-degree", "pattern-referee",
 	"peekaboo", "resume-handoff", "session-picker", "storybook-matrix", "summarize",
 	"test-design", "test-runner", "timesheets", "verify-credentials", "work-music", "worktree", "xero", "xero-cash-coding",
 ];

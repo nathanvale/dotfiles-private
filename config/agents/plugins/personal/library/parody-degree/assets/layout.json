@@ -1,0 +1,172 @@
+{
+  "page_mm": [
+    297,
+    420
+  ],
+  "background": "#FFFFFF",
+  "source_size_pt": [
+    841.92,
+    1191.12
+  ],
+  "body_size_pt": 28.057498830937448,
+  "label_size_pt": 16.034998581875044,
+  "artwork": [
+    {
+      "role": "wordmark",
+      "file": "wordmark.jpg",
+      "percent_bounds": [
+        6.665755,
+        4.396458,
+        84.246066,
+        2.748335
+      ],
+      "sha256": "ec80c0ad19af53446b9ce074143cb7417b463452ff2a7255db6d1eba61d7d5db"
+    },
+    {
+      "role": "crest",
+      "file": "crest.jpg",
+      "percent_bounds": [
+        40.71361,
+        10.033954,
+        16.426882,
+        10.459525
+      ],
+      "sha256": "228d21771bc693f7f1d0c17e26815669bb892c0a9f94f7d0e99f1f6dfe67f6ca"
+    },
+    {
+      "role": "signature-left",
+      "file": "signature-left.png",
+      "percent_bounds": [
+        9.523227,
+        78.528412,
+        27.576945,
+        8.04529
+      ],
+      "sha256": "e0192db2810042d589e2361b7d814d271957c3143de7498f14fdba5662af95ac"
+    },
+    {
+      "role": "seal",
+      "file": "seal.jpg",
+      "percent_bounds": [
+        37.45292,
+        73.93757,
+        23.753508,
+        15.976465
+      ],
+      "sha256": "21b24cd748c79aed014d8955da01a38ce29624da5ce9e93e4148d580dee3d8ba"
+    },
+    {
+      "role": "signature-right",
+      "file": "signature-right.jpg",
+      "percent_bounds": [
+        62.380734,
+        77.396787,
+        26.686592,
+        8.375758
+      ],
+      "sha256": "2b51475ee179d645200b52240ccba49122fa84ebb6c632fc5b22a1e5d8bb9f94"
+    }
+  ],
+  "text": [
+    {
+      "text": "In the name and by the authority of the Council",
+      "baseline": 889.6200125624998,
+      "centre": 0.49966982
+    },
+    {
+      "text": "be it known that",
+      "baseline": 857.3700139062498,
+      "centre": 0.49966982
+    },
+    {
+      "field": "name",
+      "baseline": 794.3700165312499,
+      "centre": 0.5000478749999999,
+      "style": "bold",
+      "max_width": 0.80952381
+    },
+    {
+      "text": "having fulfilled all the requirements and",
+      "baseline": 723.8700194687499,
+      "centre": 0.49992863
+    },
+    {
+      "text": "having passed all the prescribed assessments has",
+      "baseline": 690.1200208749999,
+      "centre": 0.49992863
+    },
+    {
+      "field": "date",
+      "baseline": 656.3700222812499,
+      "centre": 0.49992863
+    },
+    {
+      "text": "been admitted to the degree of",
+      "baseline": 623.3700236562499,
+      "centre": 0.49992863
+    },
+    {
+      "field": "degree",
+      "baseline": 570.8700258437499,
+      "centre": 0.4991976571682992,
+      "style": "bold",
+      "max_width": 0.83
+    },
+    {
+      "runs": [
+        [
+          "with ",
+          "italic"
+        ],
+        [
+          "high distinction",
+          "bold"
+        ]
+      ],
+      "baseline": 537.8700272187499,
+      "centre": 0.5
+    },
+    {
+      "runs": [
+        [
+          "and with ",
+          "italic"
+        ],
+        [
+          "first class honours",
+          "bold"
+        ]
+      ],
+      "baseline": 504.8700272187499,
+      "centre": 0.5
+    },
+    {
+      "text": "in token whereof the Council has authorized the",
+      "baseline": 381.87003371874994,
+      "centre": 0.498740365
+    },
+    {
+      "text": "Common Seal of the University to be hereto affixed.",
+      "baseline": 348.12003512499996,
+      "centre": 0.498740365
+    },
+    {
+      "text": "Chancellor",
+      "baseline": 168.12004262499988,
+      "centre": 0.22652982,
+      "style": "label"
+    },
+    {
+      "text": "Vice-Chancellor",
+      "baseline": 174.1200423749999,
+      "centre": 0.766052015,
+      "style": "label"
+    },
+    {
+      "text": "and President",
+      "baseline": 155.37004315624995,
+      "centre": 0.7664791999999999,
+      "style": "label"
+    }
+  ]
+}

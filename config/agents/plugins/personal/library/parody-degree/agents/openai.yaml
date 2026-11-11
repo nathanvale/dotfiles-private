@@ -1,0 +1,4 @@
+interface:
+  display_name: "Parody Degree"
+  short_description: "Create personalised A3 parody degree PDFs"
+  default_prompt: "Use $parody-degree to create an A3 parody certificate from my name and degree title."
