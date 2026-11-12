@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Parody degree Handlebars fields",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["student_name", "award_title_line1"],
+  "properties": {
+    "student_name": { "type": "string", "minLength": 1 },
+    "conferral_date": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Complete date line. Omit for the generation date in Melbourne, written in English."
+    },
+    "award_text": {
+      "type": "string",
+      "minLength": 1,
+      "default": "been admitted to the degree of"
+    },
+    "award_title_line1": { "type": "string", "minLength": 1 },
+    "award_title_line2": { "type": "string", "default": "" },
+    "specialisation_major_title": { "type": "string", "default": "" },
+    "award_with_distinction": { "type": "string", "default": "" }
+  }
+}

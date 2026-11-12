@@ -79,7 +79,7 @@
       "centre": 0.49966982
     },
     {
-      "field": "name",
+      "field": "student_name",
       "baseline": 794.3700165312499,
       "centre": 0.5000478749999999,
       "style": "bold",
@@ -96,49 +96,40 @@
       "centre": 0.49992863
     },
     {
-      "field": "date",
+      "field": "conferral_date",
       "baseline": 656.3700222812499,
       "centre": 0.49992863
     },
     {
-      "text": "been admitted to the degree of",
       "baseline": 623.3700236562499,
-      "centre": 0.49992863
+      "centre": 0.49992863,
+      "field": "award_text"
     },
     {
-      "field": "degree",
-      "baseline": 570.8700258437499,
+      "field": "award_title_line1",
+      "flow": "awards",
       "centre": 0.4991976571682992,
       "style": "bold",
       "max_width": 0.83
     },
     {
-      "runs": [
-        [
-          "with ",
-          "italic"
-        ],
-        [
-          "high distinction",
-          "bold"
-        ]
-      ],
-      "baseline": 537.8700272187499,
-      "centre": 0.5
+      "field": "award_title_line2",
+      "flow": "awards",
+      "centre": 0.4991976571682992,
+      "style": "bold",
+      "max_width": 0.83
     },
     {
-      "runs": [
-        [
-          "and ",
-          "italic"
-        ],
-        [
-          "first class honours",
-          "bold"
-        ]
-      ],
-      "baseline": 504.8700272187499,
-      "centre": 0.5
+      "field": "specialisation_major_title",
+      "flow": "awards",
+      "centre": 0.5,
+      "max_width": 0.83
+    },
+    {
+      "field": "award_with_distinction",
+      "flow": "awards",
+      "centre": 0.5,
+      "max_width": 0.83
     },
     {
       "text": "in token whereof the Council has authorized the",
@@ -168,5 +159,7 @@
       "centre": 0.7664791999999999,
       "style": "label"
     }
-  ]
+  ],
+  "award_baseline_pt": 570.8700258437499,
+  "award_line_step_pt": 33.000001375
 }
