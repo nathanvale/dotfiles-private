@@ -37,13 +37,17 @@ Codex re-approval step, not a file change.
 - One `settings.json` key trades every hook for its tokens: every configured
   hook event, plus the custom status line and any custom file-suggestion
   command.
-- Nothing reports the loss. Silence is the failure mode here too.
+- The policy declares it `false`, so `verify_install.sh` reports it in user
+  settings. Nothing reports it from a project or flag scope.
 - Trim hooks one declaration at a time.
 
 ## Owner
 
 - Existing non-plugin hook scripts: `config/agents/claude/hooks/`.
-- Hook declarations: Claude gates live in `config/agents/claude/settings.json`; reserve `config/agents/claude/hooks.json` for `InstructionsLoaded`; Codex uses `config/agents/codex/hooks.json`.
+- Hook declarations: Claude gates live in `config/agents/claude/settings.json`;
+  setup merges it into the machine-owned `~/.claude/settings.json`. Reserve
+  `config/agents/claude/hooks.json` for `InstructionsLoaded`; Codex uses
+  `config/agents/codex/hooks.json`.
 - Biome and TypeScript quality gates come from
   `config/agents/plugins/proof/hooks/`, with separate Claude and Codex declarations.
   Refresh the native plugin after a source release and verify it in a fresh session.
@@ -51,8 +55,10 @@ Codex re-approval step, not a file change.
   `hooks install --target agent --agent claude --user` and equivalent `codex`
   command. Preview with `--dry-run`; preserve unrelated hook declarations.
   Dotfiles maps both native script paths to the unchanged shared generated source.
-  Run `./setup.sh symlinks` after updating it. Follow repository policy for the
-  comparison base. Native warnings remain advisory. Native runtime/setup errors
+  Run `./setup.sh symlinks` after updating it. A Claude `--user` install writes
+  only the machine file, and setup keeps it there; copy its `hooks` change into
+  the tracked settings to share it with other hosts.
+  Follow repository policy for the comparison base. Native warnings remain advisory. Native runtime/setup errors
   print a notice and allow the command; CI remains the required quality gate.
 - Codex hook installation does not prove trust or activation. Review the hook in
   `/hooks` and verify a fresh-session canary before claiming it is active.

@@ -159,6 +159,7 @@
   "worktree": {
     "baseRef": "fresh"
   },
+  "disableAllHooks": false,
   "disableRemoteControl": true,
   "disableWorkflows": false,
   "statusLine": {

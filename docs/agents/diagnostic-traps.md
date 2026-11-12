@@ -35,25 +35,56 @@ done
   before judging a link broken.
 - Exclude `.worktrees` when scanning a repository. Its links are disposable.
 
-## The `/plugin` UI drops `skillOverrides`
+## Claude rewrites its user settings file
 
-`/plugin` rewrites `~/.claude/settings.json` wholesale rather than merging.
-A session removing marketplaces on 2026-08-19 also removed the entire
-`skillOverrides` block, 73 entries, reported only as `✔ Removed 1
-marketplace`. The diff was 16 insertions, 91 deletions.
+Claude Code rewrites `~/.claude/settings.json` wholesale on user-scope
+settings writes. Plugin install, enable, disable and marketplace add were
+proven on 2.1.311. On a HOME without its one-time migration flags in
+`~/.claude.json`, even `claude plugin list` rewrites it (2.1.311 changed
+`model` to `opus[1m]` and dropped `skipAutoPermissionPrompt`).
 
-The file has two writers that do not know about each other: dotfiles owns it
-as tracked config at `config/agents/claude/settings.json`; the harness owns it
-as runtime state. Unrecognised keys do not survive the harness write.
+While that path was a symlink into dotfiles, each write dirtied the tracked
+file and blocked Herdr Projects merges with "Merge needs a clean checkout"
+(FLS-3 and FLS-4, 27 October 2026). A 2026-08-19 `/plugin` session also lost
+the whole `skillOverrides` block, 73 entries.
 
-Observed, not isolated: several removals happened in one session, so the
-triggering action is unconfirmed. Treat any `/plugin` use as able to destroy
-the block.
+- Policy source: `config/agents/claude/settings.json`. Edit it there and run
+  `./setup.sh symlinks`; `bin/dotfiles/claude-settings.py` merges it into the
+  real machine-owned `~/.claude/settings.json`.
+- Machine choices stay out of Git: `model`, `effortLevel`, `modelSettings`
+  and `theme` are seeded only into a new file.
+- Existing host still on the symlink: break it before cleaning or updating the
+  checkout, or its machine writes are lost with the tracked diff. Confirm the
+  last command prints `file`:
 
-- Commit a `skillOverrides` change before other work. Recovery is then
-  `git show <sha>:config/agents/claude/settings.json`.
-- After any `/plugin` use, run `git status` in dotfiles and confirm the block
-  is present with an unchanged entry count.
+  ```sh
+  cp ~/.claude/settings.json ~/.claude/settings.json.real && mv ~/.claude/settings.json.real ~/.claude/settings.json
+  test -L ~/.claude/settings.json && echo symlink || echo file
+  ```
+- Hooks, permissions, `enabledPlugins`, `extraKnownMarketplaces` and
+  `statusLine` merge three ways against
+  `~/.claude/settings.dotfiles-policy.json`, the last-applied policy. Policy
+  edits and retirements apply, and a host's own hooks, rules, plugin choices
+  and host-correct paths stay. A missing policy hook or permission rule is
+  restored; a plugin, marketplace or status line the host removed (such as
+  `claude plugin uninstall`) stays removed until the policy changes it, and
+  then returns as the whole policy declaration.
+- Setup records only a policy file that matches its committed `HEAD`, so a
+  dirty tracked file (such as one a legacy symlink wrote into) never becomes
+  the baseline. Without a record, every existing host value stays. A host rule
+  the policy later adopts and then retires goes with it.
+- `./verify_install.sh` fails on unapplied or missing policy and warns when a
+  host keeps a security value that differs from it. `claude-settings.py
+  --check` prints each `Host keeps …` value; port an intended one to the
+  tracked file or change it on the host.
+- A host's in-place edit of a policy hook group leaves both groups after setup;
+  `--check` names `hooks` first.
+- `~/.claude/settings.local.json` is HOME's project-local file: it applies
+  only when Claude runs from HOME, so it cannot hold user-level settings.
+- Managed settings (`/Library/Application Support/ClaudeCode/` on macOS, a
+  fixed path with no environment override) outrank the machine file: a
+  managed deny, plugin disable or `allowManagedHooksOnly` wins over user
+  values, and setup neither writes nor reports that scope.
 - Plugin state also lives in untracked runtime files
   (`~/.claude/plugins/known_marketplaces.json`, `installed_plugins.json`).
   An `enabledPlugins` key with no matching install is inert: a session starts
