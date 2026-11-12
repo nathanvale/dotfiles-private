@@ -265,6 +265,9 @@ export function editorEnvironment(base: Record<string, string | undefined>): Rec
 }
 
 const SECRET_PATTERNS: [RegExp, string][] = [
+  // A credential header's value runs to the end of its line, so every cookie
+  // pair after the first semicolon is redacted too.
+  [/\b((?:set-)?cookie|(?:proxy-)?authorization)(["']?[ \t]*:[ \t]*).*/gi, "$1$2[REDACTED]"],
   [/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]*@/g, "$1[REDACTED]@"],
   [/(https?:\/\/[^\s?#]+)\?[^\s]*/g, "$1?[REDACTED]"],
   [/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [REDACTED]"],

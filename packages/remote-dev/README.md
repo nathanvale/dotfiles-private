@@ -53,45 +53,138 @@ pilot's private board URL only in your local copy.
 
 ## Adoption (not yet done)
 
-Each step needs separate approval. None is performed by this package.
+None of this has been run. Each block needs its own approval and is run by
+hand; this package performs none of it.
 
-1. Copy `examples/targets.json` to `~/.config/remote-dev/targets.json`, then
-   add the board URL locally.
-2. Link the CLI. `ln -s` refuses if anything already exists there. Record the
-   exact link target for rollback:
-   `ln -s "$HOME/code/dotfiles/packages/remote-dev/bin/remote-dev" "$HOME/.local/bin/remote-dev" && readlink "$HOME/.local/bin/remote-dev" > ~/.local/state/remote-dev-adoption.link`.
-3. Copy `desktop/Remote Development.command` to `~/Desktop/`, keeping it executable.
-4. Place `guide/START-HERE.md` at `/workspace/START-HERE.md` in the pilot.
-   This writes into the container, so it needs its own approval.
-5. Record a checksum of each added file for rollback:
-   `shasum -a 256 ~/.config/remote-dev/targets.json "$HOME/Desktop/Remote Development.command" > ~/.local/state/remote-dev-adoption.sha256`.
+- **Adopt** refuses before writing anything if a destination already exists,
+  including a broken symlink. It records each addition just before making it.
+- **Roll back** removes an addition only while it still matches its record. It
+  keeps and names anything changed since, and leaves every other file alone.
+  After you review what it kept, run it again.
+- **A partial adoption** is undone by the same rollback.
 
-## Rollback
+### Adopt on the Mac
 
-Remove only the additions above, and only if they are unchanged since adoption:
+Adds `targets.json` (and its `remote-dev` folder if absent), the desktop item
+and the `remote-dev` link. Records go in `~/.local/state/remote-dev-adoption/`.
 
 ```sh
-state="$HOME/.local/state"
-if shasum -a 256 -c "$state/remote-dev-adoption.sha256"; then
-  rm ~/.config/remote-dev/targets.json "$HOME/Desktop/Remote Development.command" \
-    && rm "$state/remote-dev-adoption.sha256"
-else
-  echo "A remote-dev file changed since adoption; left untouched." >&2
-fi
+( set -eu
+src="$HOME/code/dotfiles/packages/remote-dev"
+state="$HOME/.local/state/remote-dev-adoption"
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/remote-dev"
+desk="$HOME/Desktop/Remote Development.command"
 link="$HOME/.local/bin/remote-dev"
-if [ -L "$link" ] && [ -f "$state/remote-dev-adoption.link" ] \
-  && [ "$(readlink "$link")" = "$(cat "$state/remote-dev-adoption.link")" ]; then
-  rm "$link" && rm "$state/remote-dev-adoption.link"
-else
-  echo "The remote-dev link is absent or now points elsewhere; left untouched." >&2
+for f in examples/targets.json "desktop/Remote Development.command" bin/remote-dev; do
+  [ -f "$src/$f" ] || { echo "Missing source, nothing adopted: $src/$f" >&2; exit 1; }
+done
+for p in "$state" "$conf/targets.json" "$desk" "$link"; do
+  if [ -e "$p" ] || [ -L "$p" ]; then echo "Occupied, nothing adopted: $p" >&2; exit 1; fi
+done
+if { [ -e "$conf" ] || [ -L "$conf" ]; } && [ ! -d "$conf" ]; then
+  echo "Occupied, nothing adopted: $conf" >&2; exit 1
 fi
+set -C
+mkdir -p "$state" "$HOME/.local/bin"
+if [ ! -d "$conf" ]; then
+  printf '%s\n' "$conf" > "$state/dir"
+  mkdir -p "$conf"
+fi
+printf '%s\n%s\n' "$conf/targets.json" "$(shasum -a 256 < "$src/examples/targets.json")" > "$state/targets"
+cat "$src/examples/targets.json" > "$conf/targets.json"
+printf '%s\n%s\n' "$desk" "$(shasum -a 256 < "$src/desktop/Remote Development.command")" > "$state/desktop"
+cat "$src/desktop/Remote Development.command" > "$desk"
+chmod 755 "$desk"
+printf '%s\n%s\n' "$link" "$src/bin/remote-dev" > "$state/link"
+ln -s "$src/bin/remote-dev" "$link"
+echo "remote-dev adopted. Records: $state"
+)
 ```
 
-If a check fails, something was changed after adoption: a file was edited, or
-the link was removed, replaced or repointed. Stop and review it rather than
-deleting it. The isolated editor directories, the pilot container and its
-README are not owned by this package. Leave them alone. Restoring
-`START-HERE.md` in the pilot needs its own approval.
+Adding the private board URL to `targets.json` afterwards is your edit, so
+rollback keeps that file for you to review and remove.
+
+### Roll back on the Mac
+
+```sh
+( state="$HOME/.local/state/remote-dev-adoption"
+[ -d "$state" ] || { echo "No remote-dev adoption record; nothing removed." >&2; exit 1; }
+kept=0
+release() { # $1 names a record: line 1 is the path, line 2 what was added there
+  record="$state/$1"
+  [ -f "$record" ] || return 0
+  path="$(sed -n 1p "$record")"
+  added="$(sed -n 2p "$record")"
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    rm "$record"
+  elif [ "$1" = link ] && [ -L "$path" ] && [ "$(readlink "$path")" = "$added" ]; then
+    rm "$path" "$record"
+  elif [ "$1" = dir ] && [ -d "$path" ] && [ ! -L "$path" ] && rmdir "$path" 2>/dev/null; then
+    rm "$record"
+  elif [ "$1" != link ] && [ "$1" != dir ] && [ -f "$path" ] && [ ! -L "$path" ] \
+    && [ "$(shasum -a 256 < "$path")" = "$added" ]; then
+    rm "$path" "$record"
+  else
+    echo "Kept, changed since adoption: $path" >&2
+    kept=1
+  fi
+}
+release link
+release desktop
+release targets
+release dir
+if [ "$kept" = 0 ]; then
+  rmdir "$state" && echo "remote-dev adoption removed."
+else
+  echo "Review the kept paths, then run this again." >&2; exit 1
+fi
+)
+```
+
+### Place the guide in the pilot
+
+This writes into the container, so it needs its own approval. In a terminal of
+the pilot VS Code window (it runs inside the container), run `cd /workspace`,
+then the block below. It needs a dotfiles checkout at `/workspace/dotfiles` that
+contains this package. It adds only `/workspace/START-HERE.md` and its record,
+`~/.local/state/remote-dev-guide`, inside the container.
+
+```sh
+( set -eu
+guide=dotfiles/packages/remote-dev/guide/START-HERE.md
+record="$HOME/.local/state/remote-dev-guide"
+[ -f "$guide" ] || { echo "Missing source, nothing placed: $guide" >&2; exit 1; }
+for p in START-HERE.md "$record"; do
+  if [ -e "$p" ] || [ -L "$p" ]; then echo "Occupied, nothing placed: $p" >&2; exit 1; fi
+done
+set -C
+mkdir -p "$HOME/.local/state"
+printf '%s\n%s\n' "$PWD/START-HERE.md" "$(sha256sum < "$guide")" > "$record"
+cat "$guide" > START-HERE.md
+echo "Guide placed. Record: $record"
+)
+```
+
+### Remove the guide from the pilot
+
+Run in a terminal of the pilot window, from any folder:
+
+```sh
+( record="$HOME/.local/state/remote-dev-guide"
+[ -f "$record" ] || { echo "No guide record; nothing removed." >&2; exit 1; }
+path="$(sed -n 1p "$record")"
+if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+  rm "$record"
+elif [ -f "$path" ] && [ ! -L "$path" ] && [ "$(sha256sum < "$path")" = "$(sed -n 2p "$record")" ]; then
+  rm "$path" "$record" && echo "Guide removed."
+else
+  echo "Kept, changed since placement: $path" >&2; exit 1
+fi
+)
+```
+
+The isolated editor directories, the pilot container and its existing
+`README.md` are not owned by this package. Leave them alone.
 
 ## Tests
 
@@ -101,7 +194,9 @@ bun run typecheck
 ```
 
 The tests launch the real CLI, the chooser on a real pseudo-terminal, and the
-desktop script. External tools are faked through the targets file.
+desktop script. External tools are faked through the targets file. The
+adoption, rollback and guide blocks above are run as written with `/bin/sh`
+against throwaway folders.
 
 They do not prove any of these:
 
@@ -111,3 +206,4 @@ They do not prove any of these:
 - real fzf rendering
 - that the board is available
 - reconnection
+- adoption on the real Mac, or guide placement in the real pilot

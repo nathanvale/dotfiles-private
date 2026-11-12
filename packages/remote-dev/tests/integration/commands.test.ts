@@ -329,6 +329,9 @@ test("logs reads the native service log by container ID and redacts secrets and 
     "auth token=abc123456789secret",
     "callback https://board.example.test/cb?code=xyz&state=1",
     "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload",
+    "Cookie: a=first; sid=secondCredentialValue",
+    "Set-Cookie: sid=secondCredentialValue; Path=/; HttpOnly",
+    '{"cookie": "a=first; sid=secondCredentialValue"}',
     "remote https://user:hunter2@example.test/repo.git",
     "\u001b[31mred\u001b[0m and \u001b]0;title\u0007 done",
     "",
@@ -336,6 +339,17 @@ test("logs reads the native service log by container ID and redacts secrets and 
   const world = await makeWorld({ ssh: { logs: log, ps: [RUNNING] } });
   const output = run(world, ["logs", "pilot", "--lines", "50", "--json"]);
   expect(output.exitCode).toBe(0);
+  const human = run(world, ["logs", "pilot"]);
+  expect(human.stdout).toContain("native service log (secrets redacted)");
+  const leaks = ["hunter2", "secondCredentialValue"].flatMap((secret) =>
+    [
+      ["human", human.stdout],
+      ["json", output.stdout],
+    ]
+      .filter(([, stream]) => stream?.includes(secret))
+      .map(([name]) => `${name}:${secret}`),
+  );
+  expect(leaks).toEqual([]);
   const data = envelopeOf(output).result.data as Record<string, unknown>;
   expect(data.source).toBe("native-service-log");
   expect(data.text).toBe(
@@ -344,20 +358,24 @@ test("logs reads the native service log by container ID and redacts secrets and 
       "auth token=[REDACTED]",
       "callback https://board.example.test/cb?[REDACTED]",
       "Authorization: [REDACTED]",
+      "Cookie: [REDACTED]",
+      "Set-Cookie: [REDACTED]",
+      '{"cookie": [REDACTED]',
       "remote https://[REDACTED]@example.test/repo.git",
       "red and  done",
       "",
     ].join("\n"),
   );
+  const tail = (lines: number) =>
+    `'/opt/homebrew/bin/docker' '--host' 'unix:///Users/server/.orbstack/run/docker.sock' 'exec' '${PILOT_ID}' 'tail' '-n' '${lines}' '/home/agent/.local/state/pilot-runtime/main-d57a0261/service.log'`;
   const ssh = await calls(world, "ssh");
   expect(ssh.map((call) => call.argv.at(-1))).toEqual([
     INVENTORY_SSH_ARGV.at(-1),
-    `'/opt/homebrew/bin/docker' '--host' 'unix:///Users/server/.orbstack/run/docker.sock' 'exec' '${PILOT_ID}' 'tail' '-n' '50' '/home/agent/.local/state/pilot-runtime/main-d57a0261/service.log'`,
+    tail(50),
+    INVENTORY_SSH_ARGV.at(-1),
+    tail(200),
   ]);
   await assertNoLifecycleCommands(world);
-  const human = run(world, ["logs", "pilot"]);
-  expect(human.stdout).toContain("native service log (secrets redacted)");
-  expect(human.stdout).not.toContain("hunter2");
 });
 
 test("logs and board explain unconfigured resources and reject bad line counts", async () => {
