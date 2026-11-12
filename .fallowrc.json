@@ -78,6 +78,7 @@
     "config/agents/plugins/personal/library/xero-cash-coding/helper/src/cli.ts",
     "config/agents/plugins/personal/library/imazing-archive/helper/src/cli.ts",
     "config/agents/plugins/personal/library/bestie-chapter-design/helper/src/cli.ts",
+    "packages/remote-dev/tests/support/fake-tool.ts",
     "config/agents/plugins/**/tests/**/*.{js,mjs,cjs,ts}",
     "**/test-fixtures/**/*.{js,mjs,cjs,ts}",
     "config/crossnote/**/*.{js,less}",

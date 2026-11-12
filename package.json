@@ -21,7 +21,8 @@
 		"config/agents/plugins/personal/library/imazing-archive/helper",
 		"config/agents/plugins/personal/library/bestie-chapter-design/helper",
 		"config/agents/plugins/proof",
-		"apps/vscode/*"
+		"apps/vscode/*",
+    "packages/remote-dev"
 	],
 	"catalog": {
 		"@types/bun": "1.4.4",

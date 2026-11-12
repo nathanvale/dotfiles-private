@@ -1,0 +1,261 @@
+import type { Reason } from "./branch-station-catalog.ts";
+import type {
+  ConfiguredHost,
+  ConfiguredTarget,
+  RemoteDevConfig,
+} from "./command-contract.ts";
+import {
+  buildRows,
+  editorEnvironment,
+  editorLaunch,
+  inventoryCommand,
+  logTailCommand,
+  parseInventory,
+  redactLog,
+  resultFor,
+  STATE_REASON,
+  sshArguments,
+} from "./engine.ts";
+import type { ObservedContainer, OperationResult } from "./model.ts";
+import {
+  configPath,
+  directoriesExist,
+  homeOf,
+  loadConfig,
+  runProgram,
+} from "./runtime.ts";
+
+const DEFAULT_TOOLS = {
+  code: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+  fzf: "fzf",
+  opener: "/usr/bin/open",
+  ssh: "/usr/bin/ssh",
+};
+const REMOTE_TIMEOUT_MS = 30_000;
+const LAUNCH_TIMEOUT_MS = 60_000;
+
+export type Environment = Record<string, string | undefined>;
+
+export function toolPath(config: RemoteDevConfig, tool: keyof typeof DEFAULT_TOOLS, home: string): string {
+  const configured = config.tools?.[tool];
+  if (configured === undefined) return DEFAULT_TOOLS[tool];
+  return configured.startsWith("~/") ? `${home}/${configured.slice(2)}` : configured;
+}
+
+export type Step<T> = { reason: Reason; ok: false } | { ok: true; value: T };
+
+export async function readConfig(environment: Environment): Promise<Step<RemoteDevConfig>> {
+  const loaded = await loadConfig(configPath(environment));
+  if (loaded.kind === "missing") return { reason: "config-missing", ok: false };
+  if (loaded.kind === "invalid") return { reason: "config-invalid", ok: false };
+  return { ok: true, value: loaded.config };
+}
+
+async function remote(
+  config: RemoteDevConfig,
+  host: ConfiguredHost,
+  command: string,
+  environment: Environment,
+): Promise<Step<string>> {
+  const result = await runProgram(toolPath(config, "ssh", homeOf(environment)), sshArguments(host, command), {
+    environment: { ...stringEnvironment(environment), SSH_AUTH_SOCK: "" },
+    timeoutMs: REMOTE_TIMEOUT_MS,
+  });
+  if (result.kind === "missing") return { reason: "tool-unavailable", ok: false };
+  if (result.kind === "timeout" || result.exitCode === 255) {
+    return { reason: "host-unreachable", ok: false };
+  }
+  if (result.exitCode !== 0) return { reason: "host-command-failed", ok: false };
+  return { ok: true, value: result.stdout };
+}
+
+function stringEnvironment(environment: Environment): Record<string, string> {
+  const copy: Record<string, string> = {};
+  for (const [key, value] of Object.entries(environment)) {
+    if (value !== undefined) copy[key] = value;
+  }
+  return copy;
+}
+
+async function observeHost(
+  config: RemoteDevConfig,
+  host: ConfiguredHost,
+  environment: Environment,
+): Promise<Step<{ containers: ObservedContainer[]; rejected: number }>> {
+  const output = await remote(config, host, inventoryCommand(host), environment);
+  if (!output.ok) return output;
+  return { ok: true, value: parseInventory(output.value) };
+}
+
+export interface Inventory {
+  data: {
+    hosts: { id: string; label: string }[];
+    rejectedRows: number;
+    rows: ReturnType<typeof buildRows>;
+    view: "all" | "known";
+  };
+}
+
+export async function inventory(
+  config: RemoteDevConfig,
+  all: boolean,
+  environment: Environment,
+): Promise<Step<Inventory>> {
+  const observed = new Map<string, ObservedContainer[]>();
+  let rejected = 0;
+  for (const host of config.hosts) {
+    const step = await observeHost(config, host, environment);
+    if (!step.ok) return step;
+    observed.set(host.id, step.value.containers);
+    rejected += step.value.rejected;
+  }
+  return {
+    ok: true,
+    value: {
+      data: {
+        hosts: config.hosts.map((host) => ({ id: host.id, label: host.label })),
+        rejectedRows: rejected,
+        rows: buildRows(config, observed, all),
+        view: all ? "all" : "known",
+      },
+    },
+  };
+}
+
+interface Resolved {
+  container: ObservedContainer;
+  host: ConfiguredHost;
+  target: ConfiguredTarget;
+}
+
+/**
+ * Point-in-time guard: rediscover the host and require the configured
+ * container identity to be present and running immediately before dispatch.
+ */
+async function recheck(
+  config: RemoteDevConfig,
+  targetId: string,
+  environment: Environment,
+): Promise<Step<Resolved>> {
+  const target = config.targets.find((candidate) => candidate.id === targetId);
+  const host = config.hosts.find((candidate) => candidate.id === target?.host);
+  if (target === undefined || host === undefined) return { reason: "target-unknown", ok: false };
+  const observed = await observeHost(config, host, environment);
+  if (!observed.ok) return observed;
+  const [row] = buildRows(
+    { ...config, targets: [target] },
+    new Map([[host.id, observed.value.containers]]),
+    false,
+  );
+  const container = observed.value.containers.find((candidate) => candidate.id === target.containerId);
+  if (row === undefined || row.state !== "running" || container === undefined) {
+    const state = row?.state ?? "missing";
+    return { reason: state === "running" ? "target-missing" : STATE_REASON[state], ok: false };
+  }
+  return { ok: true, value: { container, host, target } };
+}
+
+function describe(resolved: Resolved) {
+  return {
+    container: resolved.target.container,
+    containerId: resolved.container.id,
+    host: resolved.host.id,
+    role: resolved.target.role,
+    target: resolved.target.id,
+  };
+}
+
+async function launch(
+  command: string,
+  program: string,
+  args: string[],
+  environment: Record<string, string>,
+  effect: string,
+): Promise<OperationResult | null> {
+  const launched = await runProgram(program, args, { environment, timeoutMs: LAUNCH_TIMEOUT_MS });
+  if (launched.kind === "missing") return resultFor(command, "tool-unavailable");
+  if (launched.kind === "timeout" || launched.exitCode !== 0) {
+    return resultFor(command, "launch-unconfirmed", { effect });
+  }
+  return null;
+}
+
+export async function openTarget(
+  command: string,
+  config: RemoteDevConfig,
+  targetId: string,
+  environment: Environment,
+): Promise<OperationResult> {
+  const resolved = await recheck(config, targetId, environment);
+  if (!resolved.ok) return resultFor(command, resolved.reason, { resource: targetId });
+  const home = homeOf(environment);
+  const plan = editorLaunch(config, resolved.value.host, resolved.value.target, home);
+  if (!(await directoriesExist(plan.requiredDirectories))) {
+    return resultFor(command, "editor-profile-missing");
+  }
+  const effect = `editor-window:${targetId}`;
+  const failure = await launch(
+    command,
+    toolPath(config, "code", home),
+    plan.args,
+    editorEnvironment(environment),
+    effect,
+  );
+  if (failure !== null) return failure;
+  return resultFor(command, "launched", {
+    data: { ...describe(resolved.value), editor: "isolated-vscode" },
+    effect,
+    message: `Opened ${targetId} in the isolated VS Code environment. Closing VS Code leaves the container running.`,
+  });
+}
+
+export async function readLogs(
+  command: string,
+  config: RemoteDevConfig,
+  targetId: string,
+  lines: number,
+  environment: Environment,
+): Promise<OperationResult> {
+  const resolved = await recheck(config, targetId, environment);
+  if (!resolved.ok) return resultFor(command, resolved.reason, { resource: targetId });
+  const { host, target, container } = resolved.value;
+  if (target.serviceLog === undefined) return resultFor(command, "action-unconfigured");
+  const output = await remote(config, host, logTailCommand(host, container.id, target.serviceLog, lines), environment);
+  if (!output.ok) return resultFor(command, output.reason);
+  return resultFor(command, "inspected", {
+    data: {
+      ...describe(resolved.value),
+      lines,
+      path: target.serviceLog,
+      source: "native-service-log",
+      text: redactLog(output.value),
+    },
+    message: `Last ${lines} lines of the ${targetId} native service log (secrets redacted).`,
+  });
+}
+
+export async function openBoard(
+  command: string,
+  config: RemoteDevConfig,
+  targetId: string,
+  environment: Environment,
+): Promise<OperationResult> {
+  const resolved = await recheck(config, targetId, environment);
+  if (!resolved.ok) return resultFor(command, resolved.reason, { resource: targetId });
+  const board = resolved.value.target.board;
+  if (board === undefined) return resultFor(command, "action-unconfigured");
+  const effect = `browser-window:${targetId}`;
+  const failure = await launch(
+    command,
+    toolPath(config, "opener", homeOf(environment)),
+    [board],
+    stringEnvironment(environment),
+    effect,
+  );
+  if (failure !== null) return failure;
+  return resultFor(command, "launched", {
+    data: { ...describe(resolved.value), url: board },
+    effect,
+    message: `Opened the ${targetId} task board. Its availability was not checked; a running page does not prove an agent is running.`,
+  });
+}

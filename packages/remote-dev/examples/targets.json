@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "editor": {
+    "userDataDir": "~/.local/state/remote-devcontainer-isolation/trial-01/user-data",
+    "extensionsDir": "~/.local/state/remote-devcontainer-isolation/trial-01/extensions"
+  },
+  "hosts": [
+    {
+      "id": "mini",
+      "label": "Mac mini (OrbStack)",
+      "sshAlias": "mac-mini",
+      "dockerPath": "/opt/homebrew/bin/docker",
+      "dockerHost": "unix:///Users/server/.orbstack/run/docker.sock"
+    }
+  ],
+  "targets": [
+    {
+      "id": "pilot",
+      "label": "Shepherdr consolidated pilot",
+      "role": "ui-pilot",
+      "host": "mini",
+      "container": "shepherdr-consolidated-20261112-01-agent-1",
+      "containerId": "393c8a52cb8a957946e34f63fd7975ddb02b50c371785f61e45ccedd600cd117",
+      "workspaceFolder": "/workspace",
+      "guide": "/workspace/START-HERE.md",
+      "serviceLog": "/home/agent/.local/state/pilot-runtime/consolidated-20261112-01/service.log"
+    }
+  ]
+}
