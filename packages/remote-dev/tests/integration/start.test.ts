@@ -131,7 +131,7 @@ test("start preserves confirmed start as partial if the editor recheck refuses",
 
 test("chooser offers start for an opted-in stopped target and uses the same transition", async () => {
   const world = await makeWorld({ fzf: { picks: [{ match: "\tpilot\t" }, { match: "start\t" }] }, ssh: { ps: [STOPPED, STOPPED, RUNNING] } }, optIn);
-  const output = await runPty(world, ["--json"]);
+  const output = await runPty(world, ["choose", "--json"]);
   expect(output.exitCode).toBe(0);
   expect((await calls(world, "fzf"))[1]?.stdin).toBe("start\tStart and open VS Code\n");
   expect((await calls(world, "ssh")).filter((call) => call.argv.at(-1) === START)).toHaveLength(1);
@@ -139,7 +139,7 @@ test("chooser offers start for an opted-in stopped target and uses the same tran
 
 test("chooser cancellation on the start menu never mutates", async () => {
   const world = await makeWorld({ fzf: { picks: [{ match: "\tpilot\t" }, { exit: 130 }] }, ssh: { ps: [STOPPED] } }, optIn);
-  const output = await runPty(world, ["--json"]);
+  const output = await runPty(world, ["choose", "--json"]);
   expect(output.exitCode).toBe(0);
   expect(output.output).toContain("Cancelled. Nothing was launched or started.");
   expect((await calls(world)).map((call) => call.tool)).toEqual(["ssh", "fzf", "fzf"]);

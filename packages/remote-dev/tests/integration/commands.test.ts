@@ -67,7 +67,9 @@ test("human help names every public command, option, and the explicit start boun
   for (const fragment of ["choose", "list [--all]", "open TARGET", "start TARGET", "logs TARGET", "board TARGET", "--lines N", "--json", "Other actions never start containers.", "No command creates, restarts"]) {
     expect(help.stdout).toContain(fragment);
   }
-  const machine = envelopeOf(run(world, ["--help", "--json"]));
+  const noArgs = run(world, []);
+  expect(noArgs).toMatchObject({ exitCode: 0, stderr: "", stdout: help.stdout });
+  const machine = envelopeOf(run(world, ["--json"]));
   expect(machine.result).toMatchObject({ causeCode: "SUCCESS_UNCHANGED", commandIdentity: "remote-dev.help" });
   expect((machine.result.data as { options: unknown }).options).toEqual([
     { name: "--all", value: null },
@@ -462,7 +464,7 @@ test("board opens only the configured https board through the opener", async () 
 
 test("non-TTY invocation refuses the chooser immediately even with stdin held open", async () => {
   const world = await makeWorld({ ssh: { ps: [RUNNING] } });
-  for (const args of [[], ["choose"], ["--json"]]) {
+  for (const args of [["choose"], ["choose", "--json"]]) {
     const child = Bun.spawn([process.execPath, "run", "src/cli.ts", ...args], {
       cwd: join(import.meta.dir, "../.."),
       env: world.env,
@@ -511,7 +513,7 @@ test("chooser: type-to-select the pilot, choose Open VS Code, and dispatch throu
     fzf: { picks: [{ match: PILOT_ROW }, { match: "open\t" }] },
     ssh: { ps: [RUNNING] },
   });
-  const { exitCode, output } = await runPty(world, ["--json"]);
+  const { exitCode, output } = await runPty(world, ["choose", "--json"]);
   expect(exitCode).toBe(0);
   expect(lastEnvelope(output).result).toMatchObject({
     causeCode: "SUCCESS_COMPLETED",
@@ -534,7 +536,7 @@ test.each([
   ["the action menu", [{ match: PILOT_ROW }, { exit: 130 }], ["ssh", "fzf", "fzf"]],
 ] as const)("chooser: Escape in %s cancels with nothing launched", async (_where, picks, tools) => {
   const world = await makeWorld({ fzf: { picks: [...picks] }, ssh: { ps: [RUNNING] } });
-  const json = await runPty(world, ["--json"]);
+  const json = await runPty(world, ["choose", "--json"]);
   expect(json.exitCode).toBe(0);
   expect(lastEnvelope(json.output)).toMatchObject({
     message: "Cancelled. Nothing was launched or started.",
@@ -552,7 +554,7 @@ test("chooser: human cancellation explains that nothing happened", async () => {
 
 test("chooser: a stopped target is explained and stays stopped", async () => {
   const world = await makeWorld({ fzf: { picks: [{ match: "\tdevbox\t" }] }, ssh: { ps: [RUNNING] } });
-  const { exitCode, output } = await runPty(world, ["--json"]);
+  const { exitCode, output } = await runPty(world, ["choose", "--json"]);
   expect(exitCode).toBe(3);
   expect(lastEnvelope(output)).toMatchObject({
     message: "The target is stopped. Nothing was started.",
@@ -567,7 +569,7 @@ test("chooser: a target replaced after listing is refused at the dispatch rechec
     fzf: { picks: [{ match: PILOT_ROW }, { match: "open\t" }] },
     ssh: { ps: [RUNNING, psOutput(PS.pilotReplaced)] },
   });
-  const { exitCode, output } = await runPty(world, ["--json"]);
+  const { exitCode, output } = await runPty(world, ["choose", "--json"]);
   expect(exitCode).toBe(3);
   expect(reasonOf(lastEnvelope(output))).toEqual(REASON.DOMAIN_TARGET_REPLACED);
   expect(await calls(world, "code")).toEqual([]);
@@ -578,7 +580,7 @@ test("chooser: Ctrl-A shows all containers, and unclassified rows stay inspect-o
     fzf: { picks: [{ key: "ctrl-a", match: PILOT_ROW }, { match: "orb-infra" }] },
     ssh: { ps: [RUNNING] },
   });
-  const { exitCode, output } = await runPty(world, ["--json"]);
+  const { exitCode, output } = await runPty(world, ["choose", "--json"]);
   expect(exitCode).toBe(3);
   expect(reasonOf(lastEnvelope(output))).toEqual([
     "DOMAIN_PRECONDITION_UNMET",
@@ -595,7 +597,7 @@ test("chooser: Read logs dispatches the same redacted log action", async () => {
     fzf: { picks: [{ match: PILOT_ROW }, { match: "logs\t" }] },
     ssh: { logs: "ready password=letmein\n", ps: [RUNNING] },
   });
-  const { exitCode, output } = await runPty(world, []);
+  const { exitCode, output } = await runPty(world, ["choose"]);
   expect(exitCode).toBe(0);
   expect(output).toContain("ready password=[REDACTED]");
   expect(output).not.toContain("letmein");
@@ -609,7 +611,7 @@ test("chooser: unavailable actions are explained instead of offered", async () =
       return config;
     },
   );
-  await runPty(world, ["--json"]);
+  await runPty(world, ["choose", "--json"]);
   const menu = (await calls(world, "fzf"))[1];
   expect(menu?.stdin).toBe("open\tOpen VS Code\nlogs\tRead service log\n");
   expect(menu?.argv).toContain(
@@ -619,7 +621,7 @@ test("chooser: unavailable actions are explained instead of offered", async () =
 
 test("chooser: empty inventory, missing fzf, and missing config end without a launch", async () => {
   const empty = await makeWorld({ ssh: { ps: [""] } }, (config) => ({ ...config, targets: [] }));
-  const emptyRun = await runPty(empty, ["--json"]);
+  const emptyRun = await runPty(empty, ["choose", "--json"]);
   expect(emptyRun.exitCode).toBe(0);
   expect(lastEnvelope(emptyRun.output).message).toContain("No development targets are configured.");
   expect((await calls(empty)).map((call) => call.tool)).toEqual(["ssh"]);
@@ -628,12 +630,12 @@ test("chooser: empty inventory, missing fzf, and missing config end without a la
     config.tools.fzf = "/nonexistent/fzf";
     return config;
   });
-  const noFzfRun = await runPty(noFzf, ["--json"]);
+  const noFzfRun = await runPty(noFzf, ["choose", "--json"]);
   expect(noFzfRun.exitCode).toBe(3);
   expect(reasonOf(lastEnvelope(noFzfRun.output))).toEqual(REASON.DOMAIN_TOOL_UNAVAILABLE);
 
   const noConfig = await makeWorld({}, () => undefined);
-  const noConfigRun = await runPty(noConfig, ["--json"]);
+  const noConfigRun = await runPty(noConfig, ["choose", "--json"]);
   expect(noConfigRun.exitCode).toBe(3);
   expect(lastEnvelope(noConfigRun.output).result.causeCode).toBe("DOMAIN_CONFIG_MISSING");
   expect([...(await calls(noFzf, "code")), ...(await calls(noConfig))]).toEqual([]);
@@ -648,7 +650,7 @@ test("chooser: source failures and an unconfirmed launch are reported, never ret
     [await makeWorld({ code: { exit: 1 }, fzf: pickPilotOpen, ssh: { ps: [RUNNING] } }), REASON.INTERNAL_LAUNCH_UNCONFIRMED, 1],
   ] as const;
   for (const [world, reason, exit] of cases) {
-    const { exitCode, output } = await runPty(world, ["--json"]);
+    const { exitCode, output } = await runPty(world, ["choose", "--json"]);
     expect(exitCode).toBe(exit);
     expect(reasonOf(lastEnvelope(output))).toEqual(reason);
     expect((await calls(world, "code")).length).toBeLessThanOrEqual(1);
@@ -696,7 +698,7 @@ test.each([false, true])("chooser: started container retains its completed effec
     fzf: { picks: [{ match: PILOT_ROW }, { match: "start\t" }] },
     ssh: { ps: [psOutput(PS.pilotStopped), psOutput(PS.pilotStopped), RUNNING, editorDispatched ? RUNNING : psOutput(PS.pilotReplaced)] },
   }, (config) => { config.targets[0]!.allowStart = true; return config; });
-  const output = await runPty(world, ["--json"]);
+  const output = await runPty(world, ["choose", "--json"]);
   expect(output.exitCode).toBe(1);
   expect(lastEnvelope(output.output).result).toMatchObject({
     causeCode: editorDispatched ? "INTERNAL_RESULT_UNKNOWN" : "INTERNAL_RESULT_PARTIAL",

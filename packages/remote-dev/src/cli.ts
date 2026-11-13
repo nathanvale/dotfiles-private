@@ -22,7 +22,8 @@ Only start (or the chooser start action) starts an explicitly opted-in existing 
 Other actions never start containers. No command creates, restarts, rebuilds, stops, or removes containers or services.
 
 Commands:
-  (none), choose  Interactive fuzzy chooser (needs a terminal). Known targets first;
+  (none), --help  Show this help without connecting or starting anything.
+  choose          Interactive fuzzy chooser (needs a terminal). Known targets first;
                   Ctrl-A switches to all containers. Enter selects, Esc cancels.
   list [--all]    List configured targets, or every container with --all.
   open TARGET     Recheck TARGET, then open it in the isolated VS Code environment.
@@ -38,7 +39,7 @@ Options:
   --json          One machine envelope on stdout.
 
 Examples:
-  remote-dev
+  remote-dev choose
   remote-dev list --json
   remote-dev open pilot
 
@@ -227,6 +228,7 @@ async function chooseCommand(args: string[]): Promise<OperationResult> {
 async function main(argv: string[]): Promise<number> {
   const json = hasJson(argv);
   const args = argv.filter((value) => value !== "--json");
+  if (args.length === 0) args.push("--help");
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h") && !json) {
     lifecycle.stdout(HUMAN_HELP);
     return 0;

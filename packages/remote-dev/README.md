@@ -3,7 +3,7 @@
 One way back to remote development from the viewing Mac:
 
 - **Remote Development** desktop item for the existing pilot.
-- **`remote-dev`** terminal chooser and commands for every configured target.
+- **`remote-dev`** help and explicit commands for every configured target.
 
 Both use one rechecking editor policy. The explicit `start` action can start an
 existing, opted-in container before opening VS Code. No command creates, pulls,
@@ -12,7 +12,8 @@ rebuilds, replaces, restarts, stops or removes containers.
 ## Commands
 
 ```text
-remote-dev                    interactive chooser (terminal only)
+remote-dev                    show help, with no connection or startup
+remote-dev choose             interactive chooser (terminal only)
 remote-dev list [--all]       configured targets; --all adds unclassified containers
 remote-dev open TARGET        open the running target in isolated VS Code
 remote-dev start TARGET       start the opted-in target, then open isolated VS Code

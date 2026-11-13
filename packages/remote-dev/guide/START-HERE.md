@@ -23,7 +23,7 @@ Check the native task's actual status before continuing work.
 
 ## Return from your Mac
 
-Run `remote-dev` for the fuzzy chooser. Select **pilot**, then select the action
+Run `remote-dev choose` for the fuzzy chooser. Select **pilot**, then select the action
 that matches its state.
 
 - `remote-dev open pilot` connects to the running container without restoration.

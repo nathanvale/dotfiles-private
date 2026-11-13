@@ -54,7 +54,7 @@ test("a failed editor preserves successful service restoration", async () => {
 
 test("the running pilot chooser uses the restore action", async () => {
   const world = await makeWorld({ ssh: { ps: [RUNNING] }, fzf: { picks: [{ match: "\tpilot\t" }, { match: "start\t" }] } }, admitted);
-  expect((await runPty(world, ["--json"])).exitCode).toBe(0);
+  expect((await runPty(world, ["choose", "--json"])).exitCode).toBe(0);
   expect((await calls(world, "fzf"))[1]?.stdin).toContain("start\tRestore services and open VS Code");
   expect(await calls(world, "pilotRuntime")).toHaveLength(1);
 });
