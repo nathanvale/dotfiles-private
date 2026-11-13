@@ -45,7 +45,7 @@ export const COMMANDS = [
     commandIdentity: "remote-dev.start",
     effectClass: "external",
     route: ["start"],
-    summary: "Start an opted-in existing target by exact identity, then open isolated VS Code.",
+    summary: "Start an opted-in target, restore configured services, then open isolated VS Code.",
   },
   {
     commandIdentity: "remote-dev.logs",
@@ -122,6 +122,11 @@ const Target = z.strictObject({
   host: z.string().regex(SAFE_NAME),
   id: z.string().regex(SAFE_NAME),
   label: z.string().min(1).max(80).regex(NO_CONTROL),
+  restore: z.strictObject({
+    kind: z.literal("shepherdr-pilot"),
+    claudeOAuthRef: z.string().regex(/^op:\/\/[^\r\n\0]+$/),
+    shepherdrVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
+  }).optional(),
   role: z.enum(["development", "ui-pilot"]),
   serviceLog: z.string().regex(SAFE_REMOTE_PATH).optional(),
   workspaceFolder: z.string().regex(SAFE_REMOTE_PATH),
@@ -140,6 +145,7 @@ export const Config = z
         code: z.string().regex(SAFE_LOCAL_PATH).optional(),
         fzf: z.string().regex(SAFE_LOCAL_PATH).optional(),
         opener: z.string().regex(SAFE_LOCAL_PATH).optional(),
+        pilotRuntime: z.string().regex(SAFE_LOCAL_PATH).optional(),
         ssh: z.string().regex(SAFE_LOCAL_PATH).optional(),
       })
       .optional(),
@@ -149,6 +155,9 @@ export const Config = z
     const hostIds = new Set(config.hosts.map((host) => host.id));
     const targetIds = new Set<string>();
     for (const target of config.targets) {
+      if (target.restore !== undefined && (!target.serviceLog?.startsWith("/home/agent/.local/state/pilot-runtime/") || !target.serviceLog.endsWith("/service.log") || target.serviceLog.split("/").includes(".."))) {
+        context.addIssue({ code: "custom", message: "A pilot restore requires its retained native service.log path." });
+      }
       if (!hostIds.has(target.host)) {
         context.addIssue({
           code: "custom",

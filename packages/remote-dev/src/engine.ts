@@ -112,7 +112,9 @@ function actionsFor(target: ConfiguredTarget, eligible: boolean, startable: bool
     reason,
   });
   return [
-    action("open", "Open VS Code", blocked),
+    ...(eligible && target.restore !== undefined && target.allowStart === true
+      ? [action("start", "Restore services and open VS Code", null)]
+      : [action("open", "Open VS Code", blocked)]),
     ...(startable ? [action("start", "Start and open VS Code", null)] : []),
     action("logs", "Read service log", resource(target.serviceLog !== undefined, "No service log is configured.")),
     action("board", "Open task board", resource(target.board !== undefined, "No task board is configured.")),

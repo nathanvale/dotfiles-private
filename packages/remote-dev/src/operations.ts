@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { restoreServices } from "./service-restore.ts";
 import type { Reason } from "./branch-station-catalog.ts";
 import type {
   ConfiguredHost,
@@ -31,6 +33,7 @@ const DEFAULT_TOOLS = {
   code: "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
   fzf: "fzf",
   opener: "/usr/bin/open",
+  pilotRuntime: join(import.meta.dir, "../resources/pilot-runtime.py"),
   ssh: "/usr/bin/ssh",
 };
 const REMOTE_TIMEOUT_MS = 30_000;
@@ -239,6 +242,7 @@ async function ensureRunning(
   const home = homeOf(environment);
   if (!(await directoriesExist(editorLaunch(config, host, target, home).requiredDirectories))) return refuse("editor-profile-missing");
   if (!(await executableExists(toolPath(config, "code", home)))) return refuse("tool-unavailable");
+  if (target.restore !== undefined && !(await executableExists(toolPath(config, "pilotRuntime", home)))) return refuse("tool-unavailable");
   if (container.running) return { ok: true, started: false };
   // A dispatched mutation cannot use remote()'s inspection-only unchanged/retryable failures.
   const started = await runProgram(toolPath(config, "ssh", home), sshArguments(host, startCommand(host, container.id)), {
@@ -261,13 +265,54 @@ export async function startTarget(
 ): Promise<OperationResult> {
   const transition = await ensureRunning(command, config, targetId, environment);
   if (!transition.ok) return transition.result;
+  const completed = transition.started ? [`container-start:${targetId}`] : [];
+  const failure = await restoreTarget(command, config, targetId, environment, completed);
+  if (failure !== null) return failure;
   const opened = await openTarget(command, config, targetId, environment);
-  if (!transition.started) return opened;
-  const completed = [`container-start:${targetId}`, ...opened.effects.completed].sort();
-  if (opened.outcome === "success") return { ...opened, effects: { ...opened.effects, completed } };
+  const result = finishOpen(command, targetId, completed, opened);
+  return result.outcome === "success" && config.targets.some((target) => target.id === targetId && target.restore !== undefined)
+    ? { ...result, message: `Core, Tailscale and Shepherdr are ready. ${result.message}` }
+    : result;
+}
+
+async function restoreTarget(
+  command: string,
+  config: RemoteDevConfig,
+  targetId: string,
+  environment: Environment,
+  completed: string[],
+): Promise<OperationResult | null> {
+  const target = config.targets.find((candidate) => candidate.id === targetId);
+  const host = config.hosts.find((candidate) => candidate.id === target?.host);
+  if (target?.restore === undefined || host === undefined) return null;
+  const home = homeOf(environment);
+  const checked = await recheck(config, targetId, environment);
+  if (!checked.ok) return finishOpen(command, targetId, completed, resultFor(command, checked.reason));
+  const restored = await restoreServices(toolPath(config, "pilotRuntime", home), [
+    "restore", "--service-log", target.serviceLog ?? "", "--ssh", toolPath(config, "ssh", home), "--alias", host.sshAlias,
+    "--docker", host.dockerPath, "--endpoint", host.dockerHost, "--container", target.containerId,
+    "--version", target.restore.shepherdrVersion, "--wrapper", join(home, "code/dotfiles/bin/with-one-password-token"),
+    "--reference", target.restore.claudeOAuthRef,
+  ], { HOME: home, PATH: environment.PATH ?? "/usr/bin:/bin", SSH_AUTH_SOCK: "" });
+  const blockedReason = completed.length > 0 ? "services-incomplete" : "services-blocked";
+  if (!restored.ok) {
+    const runtime = `services-restore:${targetId}`;
+    return resultFor(command, restored.attempted ? "services-unconfirmed" : blockedReason, {
+      effects: { completed, inventoryComplete: true, remaining: [`editor-window:${targetId}`, ...(restored.attempted ? [] : [runtime])].sort(), uncertain: restored.attempted ? [runtime] : [] },
+      resource: targetId,
+    });
+  }
+  if (restored.changed) completed.push(`services-restore:${targetId}`);
+  return null;
+}
+
+function finishOpen(command: string, targetId: string, completed: string[], opened: OperationResult): OperationResult {
+  if (completed.length === 0) return opened;
+  const effects = [...completed, ...opened.effects.completed].sort();
+  if (opened.outcome === "success") return { ...opened, effects: { ...opened.effects, completed: effects } };
   const uncertain = opened.effects.uncertain;
   return resultFor(command, uncertain.length > 0 ? "started-launch-unconfirmed" : "started-open-incomplete", {
-    effects: { completed, inventoryComplete: true, remaining: uncertain.length > 0 ? [] : [`editor-window:${targetId}`], uncertain },
+    effects: { completed: effects, inventoryComplete: true, remaining: uncertain.length > 0 ? [] : [`editor-window:${targetId}`], uncertain },
     resource: targetId,
   });
 }

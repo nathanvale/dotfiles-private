@@ -26,9 +26,12 @@ Check the native task's actual status before continuing work.
 Run `remote-dev` for the fuzzy chooser. Select **pilot**, then select the action
 that matches its state.
 
-- **Open VS Code** connects to the running container.
-- **Start and open VS Code** starts the same stopped container, then opens it.
-  You can also run `remote-dev start pilot` directly.
+- `remote-dev open pilot` connects to the running container without restoration.
+- **Start and open VS Code** starts the same stopped container, restores missing
+  Core, Tailscale and Shepherdr services, then opens the editor.
+- **Restore services and open VS Code** checks the running pilot and restores
+  only missing services. Healthy services and terminals are left alone.
+- Run `remote-dev start pilot` directly for the same startup and restore flow.
 - `remote-dev open pilot` and the desktop item connect only when it is running.
 
 Startup preserves the container's existing HOME, workspace and authentication
@@ -41,10 +44,18 @@ Inspect `remote-dev list` before retrying an uncertain result.
 Closing VS Code leaves the container and its services running. Reopening the
 editor does not restart services or agents.
 
-This container's startup command is `sleep infinity`. Starting the container
-alone does not restore Core, Shepherdr or task terminals after a container stop.
-Use the existing pilot restoration owner for those services. Never start a new
-engineering task just to repair an editor connection.
+Docker starts this container with `sleep infinity`. `remote-dev start pilot`
+then restores Core, Tailscale and Shepherdr through the configured native route.
+It reuses the saved Tailscale login, Shepherdr token and existing auth owner.
+It does not copy credentials or ask you to sign in to a new container.
+
+Agents, tasks and the native browser stay held. Jobs remains off. A stopped
+container cannot preserve live terminal processes. Core retains its native task
+and terminal state and recovers kept shells without resuming an agent.
+
+If retained auth or state is missing, the command stops before opening VS Code.
+Inspect the reported cause. Never start a new task or sign in to another profile
+to repair an editor connection.
 
 If VS Code asks to rebuild, replace, install or sign in, stop at that prompt.
 Those actions are outside the start-and-open command. Existing publication,

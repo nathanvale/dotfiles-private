@@ -50,6 +50,27 @@ const NO_FOLLOW_UP = "No follow-up is required.";
  * Contract Core cause and carries its own message and guidance.
  */
 export const REASONS = {
+  "services-blocked": {
+    cause: "DOMAIN_PRECONDITION_UNMET",
+    guidance: "Inspect retained service state and the existing credential owner. No agent or task will be started.",
+    message: "Pilot restoration is blocked. VS Code was not opened; existing services were left alone.",
+    repairAction: "Inspect retained state and run with-one-password-token check if Core needs authentication.",
+    trigger: "Service restoration refused before a service start attempt.",
+  },
+  "services-incomplete": {
+    cause: "INTERNAL_RESULT_PARTIAL",
+    guidance: "The container was started, but restoration is blocked. Inspect state before continuing; nothing is stopped or retried automatically.",
+    message: "The container started, but services could not be restored. VS Code was not opened.",
+    repairAction: "Inspect retained state and the existing credential owner before another start command.",
+    trigger: "Confirmed container startup was followed by a service precondition refusal.",
+  },
+  "services-unconfirmed": {
+    cause: "INTERNAL_RESULT_UNKNOWN",
+    guidance: "Inspect native Core, Tailscale and Shepherdr status and logs before any retry. Started services are left running.",
+    message: "Pilot service restoration could not be confirmed. VS Code was not opened.",
+    repairAction: "Inspect service status and retained restore logs before deciding whether to retry.",
+    trigger: "A service restore attempt failed or its result could not be verified.",
+  },
   "start-not-allowed": {
     cause: "DOMAIN_AUTHORITY_REQUIRED",
     guidance: "Review this existing target and explicitly set allowStart to true before using remote-dev start.",
@@ -76,17 +97,17 @@ export const REASONS = {
   },
   "started-open-incomplete": {
     cause: "INTERNAL_RESULT_PARTIAL",
-    guidance: "The confirmed container start remains in effect. Inspect the target and isolated editor prerequisites, then use remote-dev open when ready.",
+    guidance: "The confirmed startup remains in effect. Inspect the target and isolated editor prerequisites, then use remote-dev open when ready.",
     inspect: ["remote-dev list", "editor.userDataDir", "editor.extensionsDir", "the configured code executable"],
-    message: "The container start was confirmed, but VS Code was not opened. The container was left running.",
+    message: "Startup was confirmed, but VS Code was not opened. Running services were left alone.",
     repairAction: "Inspect the target and editor prerequisites, then open the running target.",
     trigger: "The start was confirmed, then the editor's prelaunch recheck or prerequisites failed.",
   },
   "started-launch-unconfirmed": {
     cause: "INTERNAL_RESULT_UNKNOWN",
-    guidance: "The confirmed container start remains in effect. Inspect existing VS Code windows before using remote-dev open; remote-dev will not retry or stop the container.",
+    guidance: "The confirmed startup remains in effect. Inspect existing VS Code windows before using remote-dev open; remote-dev will not retry or stop the container.",
     inspect: ["open VS Code windows", "remote-dev list"],
-    message: "The container start was confirmed; the VS Code launch could not be confirmed. The container was left running.",
+    message: "Startup was confirmed; the VS Code launch could not be confirmed. Running services were left alone.",
     repairAction: "Inspect open windows and the target before opening it again.",
     trigger: "The start was confirmed, then the editor launcher exited unsuccessfully or timed out.",
   },
@@ -242,7 +263,7 @@ export function guidanceFor(reason: Reason, resourceId?: string): { handoff: Han
 
 const SOURCE: Reason[] = ["config-invalid", "config-missing", "host-command-failed", "host-unreachable", "tool-unavailable"];
 const TARGET: Reason[] = ["input-invalid", "target-missing", "target-replaced", "target-stopped", "target-unknown"];
-const START: Reason[] = ["start-not-allowed", "start-state-unsupported", "start-unconfirmed", "started-open-incomplete", "started-launch-unconfirmed"];
+const START: Reason[] = ["services-blocked", "services-incomplete", "services-unconfirmed", "start-not-allowed", "start-state-unsupported", "start-unconfirmed", "started-open-incomplete", "started-launch-unconfirmed"];
 
 const COMMAND_REASONS: Record<string, Reason[]> = {
   "remote-dev.board": [...SOURCE, ...TARGET, "action-unconfigured", "launch-unconfirmed", "launched"],

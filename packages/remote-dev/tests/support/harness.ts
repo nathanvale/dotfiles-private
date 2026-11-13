@@ -28,6 +28,7 @@ export interface Scenario {
   code?: { exit?: number };
   fzf?: { picks?: { exit?: number; key?: string; match?: string }[] };
   opener?: { exit?: number };
+  pilotRuntime?: { exit?: number; output?: string };
   ssh?: { exit?: number; logs?: string; ps?: string[]; psExits?: number[]; startExit?: number; unreachableAliases?: string[] };
 }
 
@@ -86,6 +87,7 @@ export function baseConfig(dir: string) {
       code: join(dir, "bin", "code"),
       fzf: join(dir, "bin", "fzf"),
       opener: join(dir, "bin", "opener"),
+      pilotRuntime: join(dir, "bin", "pilotRuntime"),
       ssh: join(dir, "bin", "ssh"),
     } as Record<string, string>,
     version: 1,
@@ -101,9 +103,9 @@ export async function makeWorld(
   await mkdir(join(dir, "bin"));
   await mkdir(join(dir, "isolated", "user-data"), { recursive: true });
   await mkdir(join(dir, "isolated", "extensions"), { recursive: true });
-  for (const tool of ["ssh", "code", "fzf", "opener"]) {
+  for (const tool of ["ssh", "code", "fzf", "opener", "pilotRuntime"]) {
     const path = join(dir, "bin", tool);
-    await writeFile(path, `#!/bin/sh\nexec "${process.execPath}" "${FAKE_TOOL}" ${tool} "$@"\n`);
+    await writeFile(path, `#!/bin/sh\nFAKE_SCENARIO="${dir}/scenario.json" FAKE_LOG="${dir}/calls.jsonl" exec "${process.execPath}" "${FAKE_TOOL}" ${tool} "$@"\n`);
     await chmod(path, 0o755);
   }
   const scenarioPath = join(dir, "scenario.json");

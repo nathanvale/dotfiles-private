@@ -26,7 +26,7 @@ Commands:
                   Ctrl-A switches to all containers. Enter selects, Esc cancels.
   list [--all]    List configured targets, or every container with --all.
   open TARGET     Recheck TARGET, then open it in the isolated VS Code environment.
-  start TARGET    Start an opted-in exact existing container, then open isolated VS Code.
+  start TARGET    Start the existing target, restore configured services, then open VS Code.
                   Only exited or created containers can be started; running skips start.
   logs TARGET     Recheck TARGET, then print its native service log tail (secrets redacted).
                   Editor connection logs: in VS Code, View > Output > Dev Containers or Remote - SSH.

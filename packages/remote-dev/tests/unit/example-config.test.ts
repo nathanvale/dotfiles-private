@@ -37,7 +37,8 @@ test("the in-container guide names the current pilot, its service log, and the r
   expect(guide).toContain("/workspace/dotfiles");
   expect(guide).toContain("A connected editor does not prove that a repository, service or agent is ready.");
   expect(guide).toContain("with credentials redacted.");
-  expect(guide).toContain("startup command is `sleep infinity`");
+  expect(guide).toContain("Docker starts this container with `sleep infinity`");
+  expect(guide).toContain("then restores Core, Tailscale and Shepherdr through the configured native route.");
   expect(guide).toContain("holds remain unchanged.");
   expect(guide).not.toContain("shepherdr-pilot-main-20261112");
   expect(guide).not.toContain("main-d57a0261");

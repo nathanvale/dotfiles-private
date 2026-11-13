@@ -36,7 +36,8 @@ remote-dev start pilot
 ```
 
 Or run `remote-dev`, select **pilot**, then select **Start and open VS Code**.
-A running target offers **Open VS Code** instead. The desktop item continues
+The running pilot offers **Restore services and open VS Code**. Other running
+targets offer **Open VS Code**. The desktop item continues
 to use `open pilot` and never starts a stopped container.
 
 Startup requires `allowStart: true` on that exact configured target. The default
@@ -48,14 +49,34 @@ must exist before startup.
 
 The same container keeps its existing HOME, workspace, authentication mounts and
 startup command. Docker runs that existing command. For `agents-pilot`, it is
-`sleep infinity`. This command does not restore Core, Shepherdr, agents or tasks.
-Use their existing owner if those services are stopped. Never put sign-in or
-agent commands in this launcher.
+`sleep infinity`. Its explicit `restore` profile then checks Core, Tailscale and
+Shepherdr and starts only missing services through their existing native commands.
+It opens VS Code only when the services are ready. A running pilot's chooser
+therefore offers **Restore services and open VS Code**.
 
-If the container starts but VS Code fails, the container stays running. The
+The profile keeps Jobs off. It never launches agents, tasks, a browser or a new
+sign-in. A missing retained Tailscale login or Shepherdr token fails closed.
+Healthy services and their terminals are left alone. Core0.1.20 recovery uses
+native kept-terminal recovery shells, not an agent resume command.
+
+When Core is absent, the existing `with-one-password-token inject-stdin` owner
+delivers the profile's declared Claude OAuth field to Core only. The service-account
+token never enters the container. No secret is placed in argv, logs or source.
+Tailscale and the web service do not inherit the Claude token. Codex keeps its
+existing exclusive authentication mount. No API-billing route is selected.
+
+A target without a `restore` profile keeps container-only startup. The profile
+is `{"kind":"shepherdr-pilot","shepherdrVersion":"3.1.33","claudeOAuthRef":"op://VAULT/EXISTING-ITEM/FIELD"}`.
+Keep its real credential reference in the private targets file. This profile
+expects the existing Core0.1.20 layout. `resources/pilot-runtime.py` owns its
+startup, locking and sanitized readiness result. It reuses the previously
+reviewed stdin-to-Docker-env delivery pattern. It is not a cloud credential broker.
+
+If startup or service restoration succeeds but VS Code fails, running services stay running. The
 result records the completed start and the unfinished editor action. If the
 start result is unknown, inspect `remote-dev list` before another action. There
-is no automatic start retry or stop-on-error rollback.
+is no automatic mutation retry or stop-on-error rollback. Restore logs and its
+receipt stay private in `~/.local/state/pilot-runtime/remote-dev` inside the container.
 
 ## How it decides
 
