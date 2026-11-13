@@ -30,7 +30,7 @@ function effectsFor(state: string, effect: string | undefined) {
 export function resultFor(
   commandIdentity: string,
   reason: Reason,
-  options: { data?: unknown; effect?: string; message?: string; resource?: string } = {},
+  options: { data?: unknown; effect?: string; effects?: OperationResult["effects"]; message?: string; resource?: string } = {},
 ): OperationResult {
   const detail = REASONS[reason];
   const row = CAUSES[detail.cause];
@@ -39,7 +39,7 @@ export function resultFor(
     commandIdentity,
     data: row.outcome === "success" ? (options.data ?? null) : null,
     effectClass: effectClassOf(commandIdentity),
-    effects: effectsFor(row.transactionState, options.effect),
+    effects: options.effects ?? effectsFor(row.transactionState, options.effect),
     exitCode: row.exitCode,
     failureClass: row.failureClass,
     ...guidanceFor(reason, options.resource),
@@ -101,7 +101,7 @@ export const STATE_REASON: Record<Exclude<RowState, "running">, Reason> = {
   stopped: "target-stopped",
 };
 
-function actionsFor(target: ConfiguredTarget, eligible: boolean): RowAction[] {
+function actionsFor(target: ConfiguredTarget, eligible: boolean, startable: boolean): RowAction[] {
   const blocked = eligible ? null : "The target is not running with its configured identity.";
   const resource = (configured: boolean, missing: string) =>
     blocked ?? (configured ? null : missing);
@@ -113,6 +113,7 @@ function actionsFor(target: ConfiguredTarget, eligible: boolean): RowAction[] {
   });
   return [
     action("open", "Open VS Code", blocked),
+    ...(startable ? [action("start", "Start and open VS Code", null)] : []),
     action("logs", "Read service log", resource(target.serviceLog !== undefined, "No service log is configured.")),
     action("board", "Open task board", resource(target.board !== undefined, "No task board is configured.")),
   ];
@@ -126,13 +127,14 @@ function targetRow(target: ConfiguredTarget, containers: ObservedContainer[]): I
   const observed = findByName(containers, target.container);
   const state = stateOf(target, observed);
   const eligible = state === "running";
+  const startable = target.allowStart === true && state === "stopped" && (observed?.state === "exited" || observed?.state === "created");
   return {
-    actions: actionsFor(target, eligible),
+    actions: actionsFor(target, eligible, startable),
     container: target.container,
     containerId: observed?.id ?? null,
     eligible,
     host: target.host,
-    reason: state === "running" ? null : STATE_NOTE[state],
+    reason: state === "running" ? null : startable ? "Start and open VS Code is available for this opted-in target." : STATE_NOTE[state],
     role: target.role,
     state,
     target: target.id,
@@ -186,6 +188,11 @@ export function inventoryCommand(host: ConfiguredHost): string {
   return [host.dockerPath, "--host", host.dockerHost, "ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}} {{.State}}"]
     .map(quote)
     .join(" ");
+}
+
+/** Explicit opt-in start, addressed only by the identity checked on this host engine. */
+export function startCommand(host: ConfiguredHost, containerId: string): string {
+  return [host.dockerPath, "--host", host.dockerHost, "start", containerId].map(quote).join(" ");
 }
 
 /** Read-only log tail addressed by the rechecked container ID, never by name. */

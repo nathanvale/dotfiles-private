@@ -5,15 +5,17 @@ One way back to remote development from the viewing Mac:
 - **Remote Development** desktop item for the existing pilot.
 - **`remote-dev`** terminal chooser and commands for every configured target.
 
-Both use one rechecking launch policy. Nothing here creates, starts, restarts,
-rebuilds, replaces, stops, removes or prunes containers or services.
+Both use one rechecking editor policy. The explicit `start` action can start an
+existing, opted-in container before opening VS Code. No command creates, pulls,
+rebuilds, replaces, restarts, stops or removes containers.
 
 ## Commands
 
 ```text
 remote-dev                    interactive chooser (terminal only)
 remote-dev list [--all]       configured targets; --all adds unclassified containers
-remote-dev open TARGET        recheck, then open the isolated VS Code environment
+remote-dev open TARGET        open the running target in isolated VS Code
+remote-dev start TARGET       start the opted-in target, then open isolated VS Code
 remote-dev logs TARGET        recheck, then print the native service log tail (redacted)
 remote-dev board TARGET       recheck, then open the configured task board
 remote-dev --help | --discover --json | --discover-command ID --json
@@ -24,6 +26,36 @@ the chooser refuses at once (exit 2) instead of waiting for keyboard input.
 
 In the chooser, type to filter, use the arrow keys, press Enter to choose and
 Escape to cancel. Ctrl-A switches between known targets and all containers.
+
+## Start the existing pilot
+
+From your Mac, run:
+
+```sh
+remote-dev start pilot
+```
+
+Or run `remote-dev`, select **pilot**, then select **Start and open VS Code**.
+A running target offers **Open VS Code** instead. The desktop item continues
+to use `open pilot` and never starts a stopped container.
+
+Startup requires `allowStart: true` on that exact configured target. The default
+is false. `start` checks the host, container name and full ID, then uses native
+`docker start` by ID. Only `exited` or `created` containers can be started. An
+already-running container is opened without restart. A missing, replaced, paused
+or otherwise unexpected container is refused. The isolated editor directories
+must exist before startup.
+
+The same container keeps its existing HOME, workspace, authentication mounts and
+startup command. Docker runs that existing command. For `agents-pilot`, it is
+`sleep infinity`. This command does not restore Core, Shepherdr, agents or tasks.
+Use their existing owner if those services are stopped. Never put sign-in or
+agent commands in this launcher.
+
+If the container starts but VS Code fails, the container stays running. The
+result records the completed start and the unfinished editor action. If the
+start result is unknown, inspect `remote-dev list` before another action. There
+is no automatic start retry or stop-on-error rollback.
 
 ## How it decides
 
@@ -48,13 +80,16 @@ Escape to cancel. Ctrl-A switches between known targets and all containers.
 
 `$REMOTE_DEV_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/remote-dev/targets.json`.
 [`examples/targets.json`](examples/targets.json) describes the current pilot.
-Board URLs must be `https` with no credentials, query or fragment; add the
-pilot's private board URL only in your local copy.
+Board URLs must be `https` with no credentials, query or fragment. Add the
+pilot's private board URL only in your local copy. Set `allowStart: true` only
+after admitting that target's full ID, retained mounts and existing startup
+command. The example leaves startup disabled.
 
-## Adoption (not yet done)
+## Install on another Mac
 
-None of this has been run. Each block needs its own approval and is run by
-hand; this package performs none of it.
+The existing pilot Mac already has the launcher and private target configuration.
+These blocks are for a new installation. They refuse occupied destinations.
+The CLI does not run them.
 
 - **Adopt** refuses before writing anything if a destination already exists,
   including a broken symlink. It records each addition just before making it.
@@ -183,8 +218,19 @@ fi
 )
 ```
 
-The isolated editor directories, the pilot container and its existing
-`README.md` are not owned by this package. Leave them alone.
+The isolated editor directories and pilot container are not owned by this
+package. Guide updates to an existing pilot must compare the current bytes,
+save a scoped backup and update the guide record. Do not rerun the absent-only
+placement block over an existing guide. The native image, HOME, credentials and
+task state are outside guide rollback.
+
+## Source and local activation
+
+Dotfiles owns `packages/remote-dev/`. The Mac's `~/.local/bin/remote-dev` link
+selects the installed checkout. Keep a selected worktree until that link moves
+to its reviewed replacement. The desktop entry resolves through the same link.
+Machine-specific target configuration stays in `~/.config/remote-dev/targets.json`.
+Changing a source file alone does not update another installed checkout.
 
 ## Tests
 

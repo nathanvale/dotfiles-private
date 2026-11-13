@@ -47,6 +47,7 @@ test("choose adds the TTY refusal and cancellation to the dispatched outcomes", 
       ...SOURCE,
       "refused|DOMAIN_AUTHORITY_REQUIRED|3|unchanged|handoff",
       ...LAUNCH,
+      "failed|INTERNAL_RESULT_PARTIAL|1|partially-completed|handoff",
       "success|SUCCESS_UNCHANGED|0|unchanged|next",
       "refused|USAGE_INVALID_INVOCATION|2|unchanged|next",
     ].sort(),
@@ -95,5 +96,12 @@ test("only the transient station is retryable, with a bounded fixed delay", () =
 test("discovery and dispatch routes declare their own single stations", () => {
   expect(tuples("remote-dev.dispatch")).toEqual(["refused|USAGE_INVALID_INVOCATION|2|unchanged|next"]);
   expect(tuples("remote-dev.help")).toEqual(["success|SUCCESS_UNCHANGED|0|unchanged|next"]);
-  expect(stationsFor("remote-dev.start")).toEqual([]);
+  expect(stationsFor("remote-dev.restart")).toEqual([]);
+});
+
+test("start declares source failures, opt-in refusals and complete, partial or unknown external effects", () => {
+  expect(tuples("remote-dev.start").sort()).toEqual([
+    ...SOURCE, ...TARGET, ...LAUNCH,
+    "failed|INTERNAL_RESULT_PARTIAL|1|partially-completed|handoff",
+  ].sort());
 });

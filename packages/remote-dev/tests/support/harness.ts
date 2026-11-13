@@ -28,7 +28,7 @@ export interface Scenario {
   code?: { exit?: number };
   fzf?: { picks?: { exit?: number; key?: string; match?: string }[] };
   opener?: { exit?: number };
-  ssh?: { exit?: number; logs?: string; ps?: string[]; unreachableAliases?: string[] };
+  ssh?: { exit?: number; logs?: string; ps?: string[]; psExits?: number[]; startExit?: number; unreachableAliases?: string[] };
 }
 
 export interface World {

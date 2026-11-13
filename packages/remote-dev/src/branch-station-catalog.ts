@@ -22,6 +22,7 @@ export const CAUSES = {
   DOMAIN_CONFIG_MISSING: { exitCode: 3, failureClass: "domain", guidance: "next", outcome: "refused", retryable: false, transactionState: "unchanged" },
   DOMAIN_PRECONDITION_UNMET: { exitCode: 3, failureClass: "domain", guidance: "next", outcome: "refused", retryable: false, transactionState: "unchanged" },
   INTERNAL_RESULT_UNCHANGED: { exitCode: 1, failureClass: "internal", guidance: "handoff", outcome: "failed", retryable: false, transactionState: "unchanged" },
+  INTERNAL_RESULT_PARTIAL: { exitCode: 1, failureClass: "internal", guidance: "handoff", outcome: "failed", retryable: false, transactionState: "partially-completed" },
   INTERNAL_RESULT_UNKNOWN: { exitCode: 1, failureClass: "internal", guidance: "handoff", outcome: "failed", retryable: false, transactionState: "unknown" },
   SCHEMA_CONFIG_INVALID: { exitCode: 4, failureClass: "schema", guidance: "next", outcome: "refused", retryable: false, transactionState: "unchanged" },
   SCHEMA_INVALID_INPUT: { exitCode: 4, failureClass: "schema", guidance: "next", outcome: "refused", retryable: false, transactionState: "unchanged" },
@@ -49,6 +50,46 @@ const NO_FOLLOW_UP = "No follow-up is required.";
  * Contract Core cause and carries its own message and guidance.
  */
 export const REASONS = {
+  "start-not-allowed": {
+    cause: "DOMAIN_AUTHORITY_REQUIRED",
+    guidance: "Review this existing target and explicitly set allowStart to true before using remote-dev start.",
+    inspect: ["the target's allowStart setting"],
+    message: "This target is not opted in to start. Nothing was started or opened.",
+    repairAction: "Explicitly opt this exact target in to start, or use open for a running target.",
+    trigger: "The configured target does not have allowStart set to true.",
+  },
+  "start-state-unsupported": {
+    cause: "DOMAIN_AUTHORITY_REQUIRED",
+    guidance: "Inspect the container's native Docker state. Only exited or created containers can be started here; running targets can be opened.",
+    inspect: ["docker ps --all on the configured host engine"],
+    message: "The target's native state does not permit start. Nothing was started or opened.",
+    repairAction: "Inspect the container state through its owner before trying again.",
+    trigger: "The exact container is neither running, exited nor created.",
+  },
+  "start-unconfirmed": {
+    cause: "INTERNAL_RESULT_UNKNOWN",
+    guidance: "Inspect the exact configured container on its host engine before any retry. VS Code was not launched; remote-dev will not stop or retry the container.",
+    inspect: ["remote-dev list", "the exact configured containerId on its host engine"],
+    message: "The container start could not be confirmed. It may be running; VS Code was not opened.",
+    repairAction: "Inspect the exact container state before deciding whether to retry.",
+    trigger: "Start dispatch failed or exact running identity could not be read back after dispatch.",
+  },
+  "started-open-incomplete": {
+    cause: "INTERNAL_RESULT_PARTIAL",
+    guidance: "The confirmed container start remains in effect. Inspect the target and isolated editor prerequisites, then use remote-dev open when ready.",
+    inspect: ["remote-dev list", "editor.userDataDir", "editor.extensionsDir", "the configured code executable"],
+    message: "The container start was confirmed, but VS Code was not opened. The container was left running.",
+    repairAction: "Inspect the target and editor prerequisites, then open the running target.",
+    trigger: "The start was confirmed, then the editor's prelaunch recheck or prerequisites failed.",
+  },
+  "started-launch-unconfirmed": {
+    cause: "INTERNAL_RESULT_UNKNOWN",
+    guidance: "The confirmed container start remains in effect. Inspect existing VS Code windows before using remote-dev open; remote-dev will not retry or stop the container.",
+    inspect: ["open VS Code windows", "remote-dev list"],
+    message: "The container start was confirmed; the VS Code launch could not be confirmed. The container was left running.",
+    repairAction: "Inspect open windows and the target before opening it again.",
+    trigger: "The start was confirmed, then the editor launcher exited unsuccessfully or timed out.",
+  },
   "action-unconfigured": {
     cause: "DOMAIN_PRECONDITION_UNMET",
     guidance: "Add the resource (serviceLog or board) to this target's configuration, or pick another action.",
@@ -154,10 +195,10 @@ export const REASONS = {
   },
   "target-stopped": {
     cause: "DOMAIN_AUTHORITY_REQUIRED",
-    guidance: "The container is stopped and stays stopped. Starting it and its services needs a separate decision.",
+    guidance: "This action leaves the container stopped. If allowStart is true, use remote-dev start TARGET for an exited or created container. Otherwise starting needs a separate decision; services remain under their existing owner.",
     inspect: ["remote-dev list"],
     message: "The target is stopped. Nothing was started.",
-    repairAction: "Decide separately whether to start the container.",
+    repairAction: "Use remote-dev start TARGET only for an explicitly opted-in target; otherwise decide separately whether to allow start.",
     trigger: "The configured container exists but is not running.",
   },
   "target-unknown": {
@@ -201,11 +242,13 @@ export function guidanceFor(reason: Reason, resourceId?: string): { handoff: Han
 
 const SOURCE: Reason[] = ["config-invalid", "config-missing", "host-command-failed", "host-unreachable", "tool-unavailable"];
 const TARGET: Reason[] = ["input-invalid", "target-missing", "target-replaced", "target-stopped", "target-unknown"];
+const START: Reason[] = ["start-not-allowed", "start-state-unsupported", "start-unconfirmed", "started-open-incomplete", "started-launch-unconfirmed"];
 
 const COMMAND_REASONS: Record<string, Reason[]> = {
   "remote-dev.board": [...SOURCE, ...TARGET, "action-unconfigured", "launch-unconfirmed", "launched"],
   "remote-dev.choose": [
     ...SOURCE,
+    ...START,
     "action-unconfigured",
     "cancelled",
     "editor-profile-missing",
@@ -225,12 +268,14 @@ const COMMAND_REASONS: Record<string, Reason[]> = {
   "remote-dev.list": [...SOURCE, "inspected"],
   "remote-dev.logs": [...SOURCE, ...TARGET, "action-unconfigured", "inspected"],
   "remote-dev.open": [...SOURCE, ...TARGET, "editor-profile-missing", "launch-unconfirmed", "launched"],
+  "remote-dev.start": [...SOURCE, ...TARGET, ...START, "editor-profile-missing", "launch-unconfirmed", "launched"],
 };
 
 const EFFECT_CLASS: Record<string, EffectClass> = {
   "remote-dev.board": "external",
   "remote-dev.choose": "external",
   "remote-dev.open": "external",
+  "remote-dev.start": "external",
 };
 
 export function effectClassOf(commandIdentity: string): EffectClass {

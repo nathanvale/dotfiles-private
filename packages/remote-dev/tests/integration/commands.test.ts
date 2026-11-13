@@ -59,12 +59,12 @@ function reasonOf(envelope: { message: string; result: { causeCode: string } }):
 
 const RUNNING = psOutput(PS.pilotRunning, PS.devboxStopped, PS.infra);
 
-test("human help names every public command, option, and the no-lifecycle promise", async () => {
+test("human help names every public command, option, and the explicit start boundary", async () => {
   const world = await makeWorld({});
   const help = run(world, ["--help"]);
   expect(help.exitCode).toBe(0);
   expect(help.stderr).toBe("");
-  for (const fragment of ["choose", "list [--all]", "open TARGET", "logs TARGET", "board TARGET", "--lines N", "--json", "never creates, starts"]) {
+  for (const fragment of ["choose", "list [--all]", "open TARGET", "start TARGET", "logs TARGET", "board TARGET", "--lines N", "--json", "Other actions never start containers.", "No command creates, restarts"]) {
     expect(help.stdout).toContain(fragment);
   }
   const machine = envelopeOf(run(world, ["--help", "--json"]));
@@ -91,11 +91,20 @@ test("discovery reports the profile, exits, and the explicit effect exclusions",
     "remote-dev.dispatch:inspect",
     "remote-dev.list:inspect",
     "remote-dev.open:external",
+    "remote-dev.start:external",
     "remote-dev.logs:inspect",
     "remote-dev.board:external",
     "remote-dev.choose:external",
   ]);
-  const unknown = run(world, ["--discover-command", "remote-dev.start", "--json"]);
+  expect(data.effectExclusions).toEqual([
+    "Only start and the chooser start action may start an opted-in exact existing container; other actions never start containers.",
+    "No command creates, restarts, rebuilds, replaces, stops, removes, or prunes containers or services.",
+    "External effects are starting an opted-in existing container and opening VS Code or a browser window; diagnostics are not domain effects.",
+  ]);
+  const start = run(world, ["--discover-command", "remote-dev.start", "--json"]);
+  expect(start.exitCode).toBe(0);
+  expect(envelopeOf(start).result.data).toMatchObject({ command: { commandIdentity: "remote-dev.start", effectClass: "external", route: ["start"] } });
+  const unknown = run(world, ["--discover-command", "remote-dev.restart", "--json"]);
   expect(unknown.exitCode).toBe(2);
   expect(envelopeOf(unknown).result.causeCode).toBe("USAGE_INVALID_INVOCATION");
 });
@@ -478,7 +487,7 @@ test("non-TTY invocation refuses the chooser immediately even with stdin held op
 
 test("unknown commands and extra arguments are usage refusals", async () => {
   const world = await makeWorld({});
-  for (const args of [["start", "pilot"], ["list", "extra"], ["open"], ["open", "pilot", "extra"], ["choose", "x"]]) {
+  for (const args of [["restart", "pilot"], ["list", "extra"], ["open"], ["start"], ["start", "pilot", "extra"], ["open", "pilot", "extra"], ["choose", "x"]]) {
     const output = run(world, [...args, "--json"]);
     expect(output.exitCode).toBe(2);
     expect(envelopeOf(output).result.causeCode).toBe("USAGE_INVALID_INVOCATION");
@@ -679,6 +688,21 @@ test("desktop entry shows a visible failure, starts nothing, and never blocks wi
   expect(result.stderr.toString()).toContain("The target is stopped. Nothing was started.");
   expect(result.stdout.toString()).toContain("Nothing was started. Press Return to close this window.");
   expect((await calls(world)).map((call) => call.tool)).toEqual(["ssh"]);
+});
+
+test.each([false, true])("chooser: started container retains its completed effect when editor recheck fails (dispatch %s)", async (editorDispatched) => {
+  const world = await makeWorld({
+    code: { exit: 1 },
+    fzf: { picks: [{ match: PILOT_ROW }, { match: "start\t" }] },
+    ssh: { ps: [psOutput(PS.pilotStopped), psOutput(PS.pilotStopped), RUNNING, editorDispatched ? RUNNING : psOutput(PS.pilotReplaced)] },
+  }, (config) => { config.targets[0]!.allowStart = true; return config; });
+  const output = await runPty(world, ["--json"]);
+  expect(output.exitCode).toBe(1);
+  expect(lastEnvelope(output.output).result).toMatchObject({
+    causeCode: editorDispatched ? "INTERNAL_RESULT_UNKNOWN" : "INTERNAL_RESULT_PARTIAL",
+    effects: { completed: ["container-start:pilot"] },
+    transactionState: editorDispatched ? "unknown" : "partially-completed",
+  });
 });
 
 test("every required station was observed and no undeclared station appeared", async () => {

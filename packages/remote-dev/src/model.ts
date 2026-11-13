@@ -1,6 +1,6 @@
 export type EffectClass = "external" | "inspect";
 export type Outcome = "failed" | "refused" | "success";
-export type TransactionState = "completed" | "unchanged" | "unknown";
+export type TransactionState = "completed" | "partially-completed" | "unchanged" | "unknown";
 export type FailureClass =
   | "domain"
   | "internal"
@@ -46,7 +46,7 @@ export type RowRole = TargetRole | "unclassified";
 /** Observed or derived state of one inventory row. */
 export type RowState = "missing" | "replaced" | "running" | "stopped";
 
-export type ActionId = "board" | "logs" | "open";
+export type ActionId = "board" | "logs" | "open" | "start";
 
 export interface RowAction {
   available: boolean;

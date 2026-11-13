@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PACKAGE_ROOT } from "../support/harness.ts";
@@ -176,7 +176,7 @@ test("a partial Mac adoption is undone by the same rollback without touching any
 
 /** A throwaway container home and /workspace stand-in holding the dotfiles checkout. */
 async function pilot(): Promise<{ home: string; root: string; workspace: string }> {
-  const root = await mkdtemp(join(tmpdir(), "remote-dev-guide-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "remote-dev-guide-")));
   roots.push(root);
   const workspace = join(root, "workspace");
   const guide = join(workspace, "dotfiles/packages/remote-dev/guide/START-HERE.md");

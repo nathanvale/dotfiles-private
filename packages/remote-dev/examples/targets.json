@@ -16,14 +16,15 @@
   "targets": [
     {
       "id": "pilot",
-      "label": "Shepherdr consolidated pilot",
+      "label": "Agents pilot",
       "role": "ui-pilot",
       "host": "mini",
-      "container": "shepherdr-consolidated-20261112-01-agent-1",
-      "containerId": "393c8a52cb8a957946e34f63fd7975ddb02b50c371785f61e45ccedd600cd117",
+      "container": "agents-pilot",
+      "containerId": "568ba4e66e3b13c188cb206f480b2b81310b8275ae7a355280ce250cf3b69e0e",
       "workspaceFolder": "/workspace",
       "guide": "/workspace/START-HERE.md",
-      "serviceLog": "/home/agent/.local/state/pilot-runtime/consolidated-20261112-01/service.log"
+      "serviceLog": "/home/agent/.local/state/pilot-runtime/restore-intake-20261114-01/service.log",
+      "allowStart": false
     }
   ]
 }

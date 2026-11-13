@@ -15,11 +15,13 @@ import {
   resultFor,
   STATE_REASON,
   sshArguments,
+  startCommand,
 } from "./engine.ts";
 import type { ObservedContainer, OperationResult } from "./model.ts";
 import {
   configPath,
   directoriesExist,
+  executableExists,
   homeOf,
   loadConfig,
   runProgram,
@@ -136,6 +138,7 @@ async function recheck(
   config: RemoteDevConfig,
   targetId: string,
   environment: Environment,
+  requireRunning = true,
 ): Promise<Step<Resolved>> {
   const target = config.targets.find((candidate) => candidate.id === targetId);
   const host = config.hosts.find((candidate) => candidate.id === target?.host);
@@ -148,7 +151,7 @@ async function recheck(
     false,
   );
   const container = observed.value.containers.find((candidate) => candidate.id === target.containerId);
-  if (row === undefined || row.state !== "running" || container === undefined) {
+  if (row === undefined || row.state === "missing" || row.state === "replaced" || container === undefined || (requireRunning && row.state !== "running")) {
     const state = row?.state ?? "missing";
     return { reason: state === "running" ? "target-missing" : STATE_REASON[state], ok: false };
   }
@@ -206,6 +209,66 @@ export async function openTarget(
     data: { ...describe(resolved.value), editor: "isolated-vscode" },
     effect,
     message: `Opened ${targetId} in the isolated VS Code environment. Closing VS Code leaves the container running.`,
+  });
+}
+
+type RunningTransition = { ok: true; started: boolean } | { ok: false; result: OperationResult };
+
+function startUnconfirmed(command: string, targetId: string): OperationResult {
+  return resultFor(command, "start-unconfirmed", {
+    effects: { completed: [], inventoryComplete: true, remaining: [`editor-window:${targetId}`], uncertain: [`container-start:${targetId}`] },
+    resource: targetId,
+  });
+}
+
+/** Admit one exact existing target and perform at most one native start dispatch. */
+async function ensureRunning(
+  command: string,
+  config: RemoteDevConfig,
+  targetId: string,
+  environment: Environment,
+): Promise<RunningTransition> {
+  const refuse = (reason: Reason): RunningTransition => ({ ok: false, result: resultFor(command, reason, { resource: targetId }) });
+  const target = config.targets.find((candidate) => candidate.id === targetId);
+  if (target === undefined) return refuse("target-unknown");
+  if (target.allowStart !== true) return refuse("start-not-allowed");
+  const resolved = await recheck(config, targetId, environment, false);
+  if (!resolved.ok) return refuse(resolved.reason);
+  const { host, container } = resolved.value;
+  if (!["running", "exited", "created"].includes(container.state)) return refuse("start-state-unsupported");
+  const home = homeOf(environment);
+  if (!(await directoriesExist(editorLaunch(config, host, target, home).requiredDirectories))) return refuse("editor-profile-missing");
+  if (!(await executableExists(toolPath(config, "code", home)))) return refuse("tool-unavailable");
+  if (container.running) return { ok: true, started: false };
+  // A dispatched mutation cannot use remote()'s inspection-only unchanged/retryable failures.
+  const started = await runProgram(toolPath(config, "ssh", home), sshArguments(host, startCommand(host, container.id)), {
+    environment: { ...stringEnvironment(environment), SSH_AUTH_SOCK: "" },
+    timeoutMs: REMOTE_TIMEOUT_MS,
+  });
+  if (started.kind === "missing") return refuse("tool-unavailable");
+  if (started.kind !== "exited" || started.exitCode !== 0) return { ok: false, result: startUnconfirmed(command, targetId) };
+  const confirmed = await recheck(config, targetId, environment);
+  if (!confirmed.ok) return { ok: false, result: startUnconfirmed(command, targetId) };
+  return { ok: true, started: true };
+}
+
+/** Explicit lifecycle entry: ensure running, then reuse the isolated editor policy. */
+export async function startTarget(
+  command: string,
+  config: RemoteDevConfig,
+  targetId: string,
+  environment: Environment,
+): Promise<OperationResult> {
+  const transition = await ensureRunning(command, config, targetId, environment);
+  if (!transition.ok) return transition.result;
+  const opened = await openTarget(command, config, targetId, environment);
+  if (!transition.started) return opened;
+  const completed = [`container-start:${targetId}`, ...opened.effects.completed].sort();
+  if (opened.outcome === "success") return { ...opened, effects: { ...opened.effects, completed } };
+  const uncertain = opened.effects.uncertain;
+  return resultFor(command, uncertain.length > 0 ? "started-launch-unconfirmed" : "started-open-incomplete", {
+    effects: { completed, inventoryComplete: true, remaining: uncertain.length > 0 ? [] : [`editor-window:${targetId}`], uncertain },
+    resource: targetId,
   });
 }
 

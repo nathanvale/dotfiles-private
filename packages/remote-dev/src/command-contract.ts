@@ -42,6 +42,12 @@ export const COMMANDS = [
       "Recheck a target, then open it in the isolated VS Code environment.",
   },
   {
+    commandIdentity: "remote-dev.start",
+    effectClass: "external",
+    route: ["start"],
+    summary: "Start an opted-in existing target by exact identity, then open isolated VS Code.",
+  },
+  {
     commandIdentity: "remote-dev.logs",
     effectClass: "inspect",
     route: ["logs"],
@@ -71,6 +77,7 @@ const AVAILABLE_PATHS = [
   "remote-dev.list",
   "remote-dev.logs",
   "remote-dev.open",
+  "remote-dev.start",
 ] as const;
 
 /** Safe identifier: cannot carry shell metacharacters or control sequences. */
@@ -107,6 +114,7 @@ const Host = z.strictObject({
 });
 
 const Target = z.strictObject({
+  allowStart: z.boolean().optional(),
   board: BoardUrl.optional(),
   container: z.string().regex(SAFE_NAME),
   containerId: z.string().regex(CONTAINER_ID),
@@ -180,7 +188,7 @@ interface ResultFacts {
   causeCode: string;
   data: unknown;
   effectClass: string;
-  effects: { completed: string[] };
+  effects: OperationResult["effects"];
   exitCode: number;
   failureClass: keyof typeof CAUSE_PREFIX | null;
   handoff?: unknown;
@@ -190,6 +198,19 @@ interface ResultFacts {
   retryable: boolean;
   retryDelayMilliseconds?: number | undefined;
   transactionState: string;
+}
+
+function effectViolations(result: ResultFacts): string[] {
+  const { completed, remaining, uncertain, inventoryComplete } = result.effects;
+  const inventories = [completed, remaining, uncertain];
+  const all = inventories.flat();
+  const checks: [boolean, string][] = [
+    [new Set(all).size === all.length, "Effect inventories must be disjoint and contain unique effects."],
+    [inventories.every((items) => items.join("\n") === [...items].sort().join("\n")), "Effect inventories must be sorted."],
+    [result.transactionState !== "partially-completed" || (completed.length > 0 && remaining.length > 0 && uncertain.length === 0 && inventoryComplete), "Partial results require a complete inventory of completed and remaining effects, with no uncertain effects."],
+    [result.transactionState !== "unknown" || uncertain.length > 0, "Unknown results require uncertain effects."],
+  ];
+  return checks.filter(([valid]) => !valid).map(([, message]) => message);
 }
 
 function outcomeViolations(result: ResultFacts): string[] {
@@ -212,7 +233,7 @@ function contractViolations(result: ResultFacts): string[] {
     [result.retryable === (result.retryDelayMilliseconds !== undefined), "Only retryable rows carry a retry delay."],
     [result.effectClass !== "inspect" || result.effects.completed.length === 0, "Inspect results complete no effects."],
   ];
-  return [...outcomeViolations(result), ...checks.filter(([valid]) => !valid).map(([, message]) => message)];
+  return [...outcomeViolations(result), ...effectViolations(result), ...checks.filter(([valid]) => !valid).map(([, message]) => message)];
 }
 
 const ResultSchema = z
@@ -247,7 +268,7 @@ const ResultSchema = z
     retryable: z.boolean(),
     retryDelayMilliseconds: z.number().int().positive().max(60_000).optional(),
     runId: z.uuid(),
-    transactionState: z.enum(["completed", "unchanged", "unknown"]),
+    transactionState: z.enum(["completed", "partially-completed", "unchanged", "unknown"]),
   })
   .superRefine((result, context) => {
     for (const message of contractViolations(result)) {

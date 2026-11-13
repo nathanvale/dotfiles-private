@@ -1,4 +1,5 @@
-import { stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Config, type RemoteDevConfig } from "./command-contract.ts";
@@ -86,6 +87,12 @@ export async function directoriesExist(paths: string[]): Promise<boolean> {
     if (info === null || !info.isDirectory()) return false;
   }
   return true;
+}
+
+export async function executableExists(path: string): Promise<boolean> {
+  const info = await stat(path).catch(() => null);
+  if (info === null || !info.isFile()) return false;
+  return access(path, constants.X_OK).then(() => true, () => false);
 }
 
 export type PickResult =

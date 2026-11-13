@@ -8,6 +8,7 @@ import {
   openTarget,
   readConfig,
   readLogs,
+  startTarget,
   toolPath,
 } from "./operations.ts";
 import { homeOf, pick } from "./runtime.ts";
@@ -104,6 +105,7 @@ async function runAction(
   environment: Environment,
 ): Promise<OperationResult> {
   if (action === "open") return openTarget(COMMAND, config, target, environment);
+  if (action === "start") return startTarget(COMMAND, config, target, environment);
   if (action === "logs") return readLogs(COMMAND, config, target, LOG_LINES, environment);
   return openBoard(COMMAND, config, target, environment);
 }
@@ -115,7 +117,7 @@ export async function choose(environment: Environment): Promise<OperationResult>
   const picked = await pickRow(config.value, environment);
   if (picked.kind === "result") return picked.result;
   const { row } = picked;
-  if (!row.eligible || row.target === null) return refusalFor(row);
+  if (row.target === null || !row.actions.some((action) => action.available)) return refusalFor(row);
   const available = row.actions.filter((action) => action.available);
   const unavailable = row.actions
     .filter((action) => !action.available)

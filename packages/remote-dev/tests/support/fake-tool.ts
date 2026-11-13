@@ -2,33 +2,21 @@
 // It records its argv and selected environment facts, then replays the
 // scenario named by FAKE_SCENARIO. It never touches Docker, SSH, or editors.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-
-interface Pick {
-  exit?: number;
-  key?: string;
-  match?: string;
-}
-
-interface Scenario {
-  code?: { exit?: number };
-  fzf?: { picks?: Pick[] };
-  opener?: { exit?: number };
-  ssh?: { exit?: number; logs?: string; ps?: string[]; unreachableAliases?: string[] };
-}
+import type { Scenario } from "./harness.ts";
 
 const [tool = "unknown", ...argv] = process.argv.slice(2);
 const scenarioPath = process.env.FAKE_SCENARIO ?? "";
 const scenario = JSON.parse(readFileSync(scenarioPath, "utf8")) as Scenario;
 const stdin = tool === "fzf" ? readFileSync(0, "utf8") : "";
 
-function nextCount(): number {
-  const counter = `${scenarioPath}.${tool}.count`;
+function nextCount(category = tool): number {
+  const counter = `${scenarioPath}.${category}.count`;
   const count = existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0;
   writeFileSync(counter, String(count + 1));
   return count;
 }
 
-const count = nextCount();
+const count = tool === "ssh" ? 0 : nextCount();
 appendFileSync(
   process.env.FAKE_LOG ?? "",
   `${JSON.stringify({
@@ -45,12 +33,16 @@ function ssh(): number {
   if (settings.exit !== undefined) return settings.exit;
   if (settings.unreachableAliases?.some((alias) => argv.includes(alias))) return 255;
   const command = argv.at(-1) ?? "";
+  if (command.includes("'start'")) return settings.startExit ?? 0;
   if (command.includes("'exec'")) {
     process.stdout.write(settings.logs ?? "");
     return 0;
   }
   const outputs = settings.ps ?? [""];
-  const sshCount = count < outputs.length ? count : outputs.length - 1;
+  const inventoryCount = nextCount("inventory");
+  const inspectionExit = settings.psExits?.[inventoryCount] ?? 0;
+  if (inspectionExit !== 0) return inspectionExit;
+  const sshCount = Math.min(inventoryCount, outputs.length - 1);
   process.stdout.write(outputs[sshCount] ?? "");
   return 0;
 }

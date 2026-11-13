@@ -9,7 +9,7 @@
 # identity and running state, then opens the isolated VS Code environment and
 # the Start here guide. It never starts, rebuilds, or replaces a container.
 set -u
-cli=${REMOTE_DEV_CLI:-"$HOME/code/dotfiles/packages/remote-dev/bin/remote-dev"}
+cli=${REMOTE_DEV_CLI:-"$HOME/.local/bin/remote-dev"}
 if "$cli" open pilot; then
   exit 0
 fi
