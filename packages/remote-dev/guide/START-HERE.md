@@ -24,7 +24,8 @@ Check the native task's actual status before continuing work.
 ## Return from your Mac
 
 Run `remote-dev choose` for the fuzzy chooser. Select **pilot**, then select the action
-that matches its state.
+you need. Recent editor requests appear first; the saved target keeps the same
+workspace and isolated VS Code settings. Every action still rechecks its target.
 
 - `remote-dev open pilot` connects to the running container without restoration.
 - **Start and open VS Code** starts the same stopped container, restores missing

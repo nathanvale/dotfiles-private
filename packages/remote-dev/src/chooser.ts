@@ -12,6 +12,7 @@ import {
   toolPath,
 } from "./operations.ts";
 import { homeOf, pick } from "./runtime.ts";
+import { recentRows } from "./recents.ts";
 
 const COMMAND = "remote-dev.choose";
 const ROW_GUIDE =
@@ -64,7 +65,7 @@ function emptyInventory(all: boolean): Picked {
 async function pickFromView(config: RemoteDevConfig, all: boolean, environment: Environment): Promise<ViewPick> {
   const found = await inventory(config, all, environment);
   if (!found.ok) return { kind: "result", result: resultFor(COMMAND, found.reason) };
-  const rows = found.value.data.rows;
+  const rows = await recentRows(found.value.data.rows, environment);
   if (rows.length === 0) return emptyInventory(all);
   const view = all ? "all containers" : "known development targets";
   const fzf = toolPath(config, "fzf", homeOf(environment));

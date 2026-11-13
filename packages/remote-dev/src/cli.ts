@@ -24,6 +24,7 @@ Other actions never start containers. No command creates, restarts, rebuilds, st
 Commands:
   (none), --help  Show this help without connecting or starting anything.
   choose          Interactive fuzzy chooser (needs a terminal). Known targets first;
+                  recent editor requests first within that view.
                   Ctrl-A switches to all containers. Enter selects, Esc cancels.
   list [--all]    List configured targets, or every container with --all.
   open TARGET     Recheck TARGET, then open it in the isolated VS Code environment.

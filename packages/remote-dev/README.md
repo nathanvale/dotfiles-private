@@ -28,6 +28,17 @@ the chooser refuses at once (exit 2) instead of waiting for keyboard input.
 In the chooser, type to filter, use the arrow keys, press Enter to choose and
 Escape to cancel. Ctrl-A switches between known targets and all containers.
 
+The chooser puts recent editor launch requests first. `list` retains configuration
+order. Target settings remain in the existing targets file; history contains only
+host/target/container identities, never credentials or a second launch configuration.
+History is scoped to that config path under `${XDG_STATE_HOME:-~/.local/state}/remote-dev/recents-<hash>.json`,
+retains at most 50 identities, and is written privately after successful editor
+dispatch. It is advisory: missing or invalid history falls back to configuration
+order, and a history write failure never repeats or undoes a launch. A dispatch
+record does not prove VS Code connected. Cancellation, inspection and failed
+editor dispatch do not update history. Concurrent launches can lose a ranking
+update; they cannot change target settings or grant container access.
+
 ## Start the existing pilot
 
 From your Mac, run:

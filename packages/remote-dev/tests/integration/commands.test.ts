@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   assertNoLifecycleCommands,
@@ -507,6 +507,41 @@ function lastEnvelope(output: string) {
 }
 
 const PILOT_ROW = "\tmini\tpilot\t";
+
+test("recent launch requests order the chooser without changing list order or saved launch settings", async () => {
+  const world = await makeWorld({
+    fzf: { picks: [{ exit: 130 }] },
+    ssh: { ps: [psOutput(PS.pilotRunning, PS.devboxRunning)] },
+  });
+  const configBefore = await readFile(world.configPath, "utf8");
+  expect(run(world, ["open", "devbox", "--json"]).exitCode).toBe(0);
+  const historyDir = join(world.dir, ".local/state/remote-dev");
+  const files = await readdir(historyDir);
+  expect(files).toHaveLength(1);
+  const history = join(historyDir, files[0]!);
+  const historyBefore = await readFile(history, "utf8");
+  const listed = envelopeOf(run(world, ["list", "--json"]));
+  expect((listed.result.data as { rows: { target: string }[] }).rows.map((row) => row.target)).toEqual(["pilot", "devbox"]);
+  expect((await runPty(world, ["choose", "--json"])).exitCode).toBe(0);
+  const rows = (await calls(world, "fzf"))[0]?.stdin.trim().split("\n").map((line) => line.split("\t")[2]);
+  expect(rows).toEqual(["devbox", "pilot"]);
+  expect(await readFile(world.configPath, "utf8")).toBe(configBefore);
+  expect(await readFile(history, "utf8")).toBe(historyBefore);
+  expect(await calls(world, "code")).toHaveLength(1);
+});
+
+test("an unconfirmed editor launch does not create recent-target history", async () => {
+  const world = await makeWorld({
+    code: { exit: 1 },
+    fzf: { picks: [{ exit: 130 }] },
+    ssh: { ps: [psOutput(PS.pilotRunning, PS.devboxRunning)] },
+  });
+  expect(run(world, ["open", "devbox", "--json"]).exitCode).toBe(1);
+  expect((await runPty(world, ["choose", "--json"])).exitCode).toBe(0);
+  const rows = (await calls(world, "fzf"))[0]?.stdin.trim().split("\n").map((line) => line.split("\t")[2]);
+  expect(rows).toEqual(["pilot", "devbox"]);
+  expect(await readdir(join(world.dir, ".local/state/remote-dev")).catch(() => [])).toEqual([]);
+});
 
 test("chooser: type-to-select the pilot, choose Open VS Code, and dispatch through the shared recheck", async () => {
   const world = await makeWorld({

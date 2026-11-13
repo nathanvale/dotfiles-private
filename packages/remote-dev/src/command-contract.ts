@@ -63,7 +63,7 @@ export const COMMANDS = [
     commandIdentity: "remote-dev.choose",
     effectClass: "external",
     route: ["choose"],
-    summary: "Interactive fuzzy chooser (TTY only); dispatches one action.",
+    summary: "Recent-first fuzzy chooser (TTY only); dispatches one rechecked action.",
   },
 ] as const;
 

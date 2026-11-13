@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { restoreServices } from "./service-restore.ts";
+import { rememberLaunch } from "./recents.ts";
 import type { Reason } from "./branch-station-catalog.ts";
 import type {
   ConfiguredHost,
@@ -208,6 +209,7 @@ export async function openTarget(
     effect,
   );
   if (failure !== null) return failure;
+  await rememberLaunch(resolved.value.target, environment);
   return resultFor(command, "launched", {
     data: { ...describe(resolved.value), editor: "isolated-vscode" },
     effect,
