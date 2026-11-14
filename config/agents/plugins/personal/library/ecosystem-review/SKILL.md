@@ -48,6 +48,24 @@ Compare changes only against a supplied previous review or an explicit time
 window. Identify that baseline and any missing comparison evidence. Without a
 baseline, call the result a current snapshot. Create no review-history store.
 
+## Recognize the delivery stage
+
+Read the source index's "Idea to delivery: how the four skills fit together"
+section for workflow ownership. Trace relevant intake receipts, accepted
+outcomes, spec versions and acceptance checks, proposed tickets and coverage,
+publication approvals, and linked native execution evidence.
+
+Distinguish outcome acceptance, spec acceptance, ticket publication, execution
+authorization, merge, and activation. Report missing proof as a gap, rather
+than inferring that no work exists. Planning status is not runtime state.
+
+When the next step is a spec or ticket plan, recommend a source-linked handoff
+to `delivery-slice`. Name the bounded outcome, accepted-decision sources,
+constraints, exclusions, and material open choices it needs. Link the workflow
+owner and relevant outcome or spec records in that recommendation. Leave spec and
+ticket writing to that owner; do not invoke it during a review. Keep unrelated
+fog open. Ecosystem review is optional orientation, not a compulsory gate.
+
 ## Return a two-minute briefing
 
 Lead with one plain assessment and the useful outcomes actually proven.

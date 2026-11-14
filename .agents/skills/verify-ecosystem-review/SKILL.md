@@ -117,7 +117,9 @@ printf '%s\n' "$run_exit" > "$run_dir/exit.txt"
 ```
 
 Use [the offline journey](features/evidence.md) for supplied evidence, and
-[the comparison journey](features/comparison.md) for a baseline. Keep each
+[the comparison journey](features/comparison.md) for a baseline. Use
+[the delivery journey](features/delivery.md) to verify stage recognition and a
+read-only handoff recommendation. Keep each
 journey's files in a separate run directory. Reuse one owned registration
 sequentially, never double-drive the same browser session. A run ends when the
 process exits and a final answer plus `turn.completed` exist. Record an absent

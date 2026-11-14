@@ -10,6 +10,7 @@ Run Launch and Doctor in [the verifier](../SKILL.md) before a journey.
 | [Evidence interpretation](evidence.md) | Separate Done, accepted, merged, and usable, with real blocker direction. |
 | [Partial access](partial.md) | Disclose inaccessible or conflicting evidence without fabricated health. |
 | [Baseline comparison](comparison.md) | Claim changes only against a named comparison source. |
+| [Delivery handoff](delivery.md) | Recognize planning stages and recommend a source-linked handoff without invoking it. |
 
 Capture the user action and resulting briefing in a new native session per
 journey. An unrun or partial entry keeps its own status. Never substitute an
