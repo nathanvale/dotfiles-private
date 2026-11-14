@@ -89,6 +89,13 @@ a prerequisite when the consuming action's own complete contract remains intact.
 An eventual joint regression of otherwise complete actions alone is not a start
 blocker.
 
+Separate work that obtains a missing decision from work that consumes its answer.
+A research or manual decision-resolution ticket may require evidence or access,
+but its own unresolved answer is its output, not its prerequisite. Name the
+question and decision owner, and keep implementation or revised planning that
+consumes that answer blocked until it is accepted. Settled independent work
+retains its own prerequisites.
+
 For each edge, explain what the dependent cannot implement through existing
 supported interfaces until the prerequisite lands. A command name or entry point
 does not prove working behavior. If a slice needs behavior another slice is

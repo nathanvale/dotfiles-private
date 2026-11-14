@@ -7,6 +7,8 @@ Verify material choice through the user conversation.
 - F3.1: Sharing remains visible but blocked on read-only versus edit access, with the owning question identified.
 - F3.2: The local accepted queue outcome can be drafted without guessing the sharing answer or treating unrelated search fog as a blocker.
 - F3.3: No sharing implementation acceptance or readiness is invented.
+- F3.4: A task that obtains the sharing answer is not blocked by that same answer; any evidence or access prerequisite has its own reason.
+- F3.5: Work that consumes the sharing answer stays blocked until acceptance, while settled local work retains its independent path.
 
 ## How to get to it (user POV)
 
@@ -33,6 +35,9 @@ The sharing handback must not degrade the settled local decomposition. Check
 that a newly introduced archive action proves both accepted list and export
 consequences in its owning slice, with restart checks. A later export product
 ticket does not complete an archive slice that stopped at list-only proof.
+Inspect both a decision task's stated result and its edges. A task that obtains
+the answer differs from a task that revises a spec after consuming it. Leaving
+the answer open neither blocks obtaining it nor authorizes the consuming work.
 
 Supplied records prove reasoning over an offline input boundary. They do not
 prove live source acceptance or publication. A missing source, failed invocation

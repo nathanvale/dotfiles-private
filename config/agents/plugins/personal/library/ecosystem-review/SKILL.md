@@ -75,9 +75,13 @@ than inferring that no work exists. Planning status is not runtime state.
 When the next step is a spec or ticket plan, recommend a source-linked handoff
 to `delivery-slice`. Name the bounded outcome, accepted-decision sources,
 constraints, exclusions, and material open choices it needs. Link the workflow
-owner and relevant outcome or spec records in that recommendation. Leave spec and
-ticket writing to that owner; do not invoke it during a review. Keep unrelated
-fog open. Ecosystem review is optional orientation, not a compulsory gate.
+owner separately from the outcome or spec records: resolve `delivery-slice` in
+the current Harness catalogue and link its actual installed `SKILL.md` directly
+in the recommendation. Confirm that target exists. A planning-record link alone
+does not complete the handoff; if the skill cannot be resolved, report the
+missing workflow pointer and its installer owner. Leave spec and ticket writing
+to that owner; do not invoke it during a review. Keep unrelated fog open.
+Ecosystem review is optional orientation, not a compulsory gate.
 
 ## Carry a small Markdown handoff
 
