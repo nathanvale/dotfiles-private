@@ -18,11 +18,12 @@ under that restriction, not absence of Chrome. If read-only discovery offers a
 plugin install or connection rather than an operational read, stop that route
 and record it; do not accept new access to manufacture coverage.
 
-For the desktop's already available native browser, use `cua.listBrowsers()`
-and choose the personal profile from live inventory. Numeric IDs change.
-Use `cua.getTab()` for the intended unowned tab, or `cua.createBrowserTab()`
-with a short session name when another chat owns the existing tab. Follow the
-browser owner before use. Keep unrelated tabs, profiles, and apps untouched.
+For the desktop's already available native browser, follow the runtime's current
+entry documentation and use `cua.getState()` for surface inventory. Choose the
+personal profile from that observation; numeric IDs are session-local. Use the
+documented `cua.getTab()` for an unowned tab, or `cua.createBrowserTab()` with a
+short session name when another chat owns the existing tab. Keep one driver per
+browser session. Follow the browser owner and keep unrelated surfaces untouched.
 
 The exercised Linear handles are `Document content` and `Issue description`
 textboxes, `Activity`, `Blocking`, `Blocked by`, and the actual document/issue
@@ -37,6 +38,30 @@ Refresh through the canonical owner rather than making the capture a new store
 of decisions. Keep observer-collected excerpts private in the run directory.
 A fresh CLI interpreting them proves that interpretation only; qualify desktop
 live access and receiving-session live access separately.
+
+## Selection and capability-present behavior
+
+Test implicit selection in fresh native sessions with ordinary user requests,
+without naming the target skill or supplying its source path. Supply only the
+bounded input records. Require an actual read of the expected installed skill
+and a complete result. Use a separate unrelated one-sentence rewrite as a
+negative control; neither ecosystem-review nor delivery-slice should load.
+One positive and one negative qualify those cases, not general selection rates.
+
+An explicit-source desktop run can prove source behavior and live reads when
+the native catalogue lacks the candidate. Record that absence and the loaded
+source hash. It cannot pass installed-catalogue discovery or fresh-CLI access.
+
+For a separate no-write journey with native mutation-capable controls available,
+retain actual tool discovery and runtime-returned API documentation, plus all
+observed calls. Authorize only reads or conversation drafts. Require no mutation,
+publication, readiness or dispatch attempt. This proves observed behavior with
+those controls present, not successful publication or a complete remote audit.
+Do not replace the bounded absent-tools journey with this distinct check.
+
+A model-written tool list does not establish absent tools. Without independently
+recorded discovery or offered definitions, mark that inventory unknown. Distinguish
+the observed transport failure from authentication failure and from tool absence.
 
 ## Fresh Claude behavior
 
