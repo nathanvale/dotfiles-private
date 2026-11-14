@@ -17,3 +17,7 @@ built, and no live planning record is authoritative in these runs.
 
 Never substitute a prose match for semantic judgment. Report sub-feature IDs
 individually. Live source lookup, publication, readback are separate unqualified boundaries unless separately exercised with authority.
+
+The [handoff checks](../references/handoff-checks.md) extend these features into
+an offline combined-candidate loop. They inspect accepted information boundaries;
+exact headings, shared definition placement and machine validation remain open.

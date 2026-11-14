@@ -64,6 +64,12 @@ browser/remote tools, no writes and no nested sessions in the prompt. Read-only
 shell sandboxing does not restrict connector writes by itself. Inspect every
 actual command/tool event for attempts outside the scope.
 
+Capture the offered-capability report in the fresh response and preserve the
+exact native configuration/manifests alongside it. Codex exec JSON does not
+necessarily emit full tool definitions. If an independently supported inventory
+is unavailable, keep F5.3 offered-tool proof partial; local read-only commands
+alone do not enforce remote safety. No writable production route is a test.
+
 Require `turn.completed`, exit 0, a final answer and actual source reads from the
 candidate cache and composition owners. Judge the same mapped semantic outcomes;
 do not replace successful draft behavior with catalogue discovery alone.

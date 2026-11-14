@@ -29,6 +29,12 @@ Preconditions: Launch and Doctor pass; use the private run directory.
 
 ## Gotchas
 
+Retain offered-capability evidence as well as tool events. For Claude, inspect
+its initialization tool list against the explicit Read/Skill and empty-MCP
+launch. For Codex, retain native config/manifests and a current capability report;
+if full offered definitions are not independently exposed, F5.3 remains partial.
+Read-only shell protection does not restrict a writable connector.
+
 Supplied records prove reasoning over an offline input boundary. They do not
 prove live source acceptance or publication. A missing source, failed invocation
 or incomplete transcript is a failure or partial result, not a passing substitute.

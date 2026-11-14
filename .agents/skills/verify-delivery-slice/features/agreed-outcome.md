@@ -4,7 +4,7 @@ Verify agreed outcome through the user conversation.
 
 ## Sub-features
 
-- F1.1: The spec identifies revision 3 and links accepted D1 through D5, with proposals and unknowns separate.
+- F1.1: The spec identifies source branch revision 3 separately from its own draft alias/revision and links accepted D1 through D5, with proposals and unknowns separate.
 - F1.2: Observable stable criteria cover add/list, validation, restart persistence, archive, export and empty state.
 - F1.3: Tickets reference the named spec revision and criterion IDs; unrelated sharing/search/phone fog stays open.
 

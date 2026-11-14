@@ -115,6 +115,11 @@ control: retain its cycle, duplicate, bad reference and missing coverage, then
 compare the repaired result against those independent faults.
 
 Inspect the actual tools offered and used to support the no-live-effects claim.
+Retain the native launch configuration, candidate manifests, initialization/tool
+inventory where supported, and observed events separately. A session's capability
+self-report supports inspection but is not an independent tool-definition dump.
+If the native event format omits offered tools, mark F5.3 inventory partial;
+command silence and read-only shell mode alone do not prove remote tools absent.
 Compare before/after Git status and protected selections. This proves the
 observed run's bounded effects, not a remote audit or a general enforcement
 property of prose. Offline records qualify draft reasoning, not live source
@@ -122,6 +127,12 @@ resolution, workspace identity, deduplication, publication/readback, native
 blocker mutation, credentials or dispatch. Keep those paths explicitly unqualified
 until separately authorized isolated infrastructure supports them. No disposable
 live Linear records are authorized for this verifier.
+
+For the accepted small-Markdown handoff information, read
+[the handoff checks](references/handoff-checks.md). Keep its C1 through C6
+semantic checks separate from unimplemented format/schema enforcement.
+Use the combined candidate after both product sources settle; preserve the exact
+sibling SHA and bytes. These checks do not modify intake or select the open format/storage decisions.
 
 ## Cleanup
 

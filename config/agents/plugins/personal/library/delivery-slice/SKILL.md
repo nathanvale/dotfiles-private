@@ -18,10 +18,16 @@ sources through existing connected read tools. Resolve the actual project's
 planning entry, glossary and delivery owner. For ecosystem work, follow the
 configured vault's live Linear planning pointer; GitHub owns the code PR and
 Shepherdr retains adopted execution, review and recovery. This workflow creates
-no task synchronizer. Intake remains with `linear-intake`.
+no task synchronizer. Intake remains with `linear-intake`. `ecosystem-review`
+is optional read-only orientation; direct accepted-outcome input needs no review
+predecessor and a recommendation supplies no authority.
 
-Record the source revision or observation time, exact agreed outcome, requested
-scope and acceptance source. Distinguish source facts, accepted decisions,
+Use a small Markdown handoff with canonical source pointers, their revision or
+observation time, bounded scope/privacy/exclusions, actual approval references,
+evidence gaps and consequences, and the next responsible owner. Resolve accepted
+facts through their existing owners rather than adopting a copied decision cache.
+Record the exact agreed outcome and acceptance source. Keep source branch revision
+and spec draft revision separate. Distinguish source facts, accepted decisions,
 proposals, assumptions and unknowns. Supplied offline records can support a
 draft; identify them as supplied evidence, with live currency unverified.
 If required sources cannot be read, hand back the missing source and repair
@@ -72,8 +78,23 @@ Use numbered draft aliases, never invented live issue keys. For each ticket give
 - Actual prerequisite aliases and a reason each must complete first.
 - Observable checks, required evidence and the stop condition.
 
-Preserve dependency reasons instead of mechanically chaining the list. Show
-parallel work. Check existing supplied or readable delivery records for overlap,
+Keep required acceptance and regression evidence inside the product slice that
+introduces or changes the behavior, including its invalid, empty, restart and
+cross-command cases. A verification-only follow-on ticket cannot complete a
+feature's promised acceptance. When an interaction genuinely requires another
+feature, combine the interacting behavior into one usable slice or justify a
+behavior-based prerequisite. An eventual combined check alone is not a start
+blocker.
+
+For each edge, explain what the dependent cannot implement through existing
+supported interfaces until the prerequisite lands. A command name or entry point
+does not prove working behavior. If a slice needs behavior another slice is
+introducing, retain that prerequisite unless the source establishes that a working
+baseline already supplies it. Mark missing support evidence as unknown instead
+of asserting parallel startability. Preserve independent work;
+omit edges already guaranteed transitively. Inspect the actual ticket checks
+and graph, not just the coverage table. Choose the topology from this source's
+behavior and existing capabilities, rather than a fixed ticket count or chain. Check existing supplied or readable delivery records for overlap,
 including completed and canceled items; state the limit if live deduplication
 is unavailable. Inspect the proposed graph for duplicate outcomes, missing or
 retired criterion references, uncovered criteria, unnecessary edges and cycles.
