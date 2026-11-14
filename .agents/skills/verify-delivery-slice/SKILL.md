@@ -157,12 +157,27 @@ s = json.dumps({'enabledPlugins': d.get('enabledPlugins')}, sort_keys=True)+'\n'
 (r/'claude-selection-after.json').write_text(s)
 assert s == (r/'claude-selection-before.json').read_text()
 PYPROJECTION
-shasum -a 256 "$run_dir/prompt.txt" "$run_dir/events.jsonl"   "$run_dir/final.md" > "$run_dir/evidence-hashes.txt"
+python3 - <<'PYEVIDENCE'
+import hashlib, json, os
+from pathlib import Path
+r = Path(os.environ['run_dir'])
+rows = []
+for name in ('prompt.txt', 'events.jsonl', 'final.md'):
+    p = r/name
+    if p.is_file():
+        rows.append({'path': name, 'state': 'present',
+                     'sha256': hashlib.sha256(p.read_bytes()).hexdigest()})
+    else:
+        state = 'incomplete' if (r/'events.jsonl').exists() else 'unrun'
+        rows.append({'path': name, 'state': state})
+(r/'evidence-hashes.json').write_text(json.dumps(rows, indent=2)+'\n')
+PYEVIDENCE
 ```
 
 Keep the worktree for PR review and the entire private run directory after
-cleanup. Confirm all named proof files remain readable. Record every unrun
-feature and failed iteration; cleanup never removes proof.
+cleanup. Confirm every produced proof file remains readable. Record absent
+expected outputs as unrun or incomplete, and retain every failed iteration;
+cleanup never removes proof.
 
 ## Helpers and maintenance
 

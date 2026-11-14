@@ -7,7 +7,7 @@ tracker target. Default offline verification grants no write authority.
 
 - F6.1: Resolve the approved test workspace, team, project, source revision, spec revision, effects and object limit before writing; inspect existing records across statuses first.
 - F6.2: Publish only the approved synthetic spec and test issues through native controls, then save one justified blocker and read back every record and both relation directions.
-- F6.3: A fresh missing-receipt handoff searches by source, meaning and title, recovers the existing canonical record including a canceled match, and neither duplicates nor revives it.
+- F6.3: Separate fresh missing-receipt handoffs recover an existing published delivery spec or slice and the canceled intake fixture by source, meaning and title across statuses, without duplicate writes or revival.
 - F6.4: Return actual URLs, saved fields, criterion coverage and observed limits. Preserve draft PRs, the real pilot, readiness and execution authority.
 
 ## How to get to it (user POV)
@@ -46,6 +46,12 @@ journey. If the isolated target or approval is absent, report blocked.
   but withhold the earlier saved-record receipt. Require source/meaning/title
   search across statuses, canonical existing-record recovery and no retry write.
   This is a missing-receipt recovery test, not an injected transport failure.
+- Give a separate fresh read-only session the same approved project and original
+  synthetic source plus intended spec or slice content, withholding the saved
+  receipt for the existing published spec or either existing test slice.
+  Require source/meaning/title search across statuses, recovery of that exact
+  canonical record and no write. Reuse the already published spec or existing
+  test slices; this case authorizes no new records or state changes.
 - Compare actual saved records, native relation and counts against the authorised
   effects. Retain prompts, native observations, timestamps, identities, readback,
   screenshot proof and evidence after cleanup. Leave synthetic records clearly

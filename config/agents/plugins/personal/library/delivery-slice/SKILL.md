@@ -30,6 +30,9 @@ Record the exact agreed outcome and acceptance source. Keep source branch revisi
 and spec draft revision separate. Distinguish source facts, accepted decisions,
 proposals, assumptions and unknowns. Supplied offline records can support a
 draft; identify them as supplied evidence, with live currency unverified.
+Render source and accepted-decision references as clickable Markdown links.
+For supplied local files, use `[source](/absolute/path)` with the confirmed
+file path as the target; retain source aliases and revisions beside the link.
 If required sources cannot be read, hand back the missing source and repair
 route rather than claiming acceptance from a title or cached summary.
 
