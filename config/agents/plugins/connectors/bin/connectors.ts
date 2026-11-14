@@ -2510,7 +2510,8 @@ async function runRead(command: AdapterCommand, plan: TransportPlan, manifest: C
 	const effects = { completed, uncertain: [] };
 	if (exitCode !== 0) {
 		const failure = readFailure(stdout);
-		emitAdapterEnvelope(command, readCause(completed, failure), `${PROGRAM}: ${command.id} provider call did not complete`, null, readRepair(command, failure), effects, "connectors.auth");
+		const repair = failure === "unclassified" ? plan.unclassifiedReadRepair : undefined;
+		emitAdapterEnvelope(command, readCause(completed, failure), `${PROGRAM}: ${command.id} provider call did not complete`, null, repair ?? readRepair(command, failure), effects, repair === undefined ? "connectors.auth" : "connectors.help");
 		return;
 	}
 	let result: unknown;
