@@ -1,10 +1,10 @@
 // @bun
-// packages/cli-design-check/src/successor/main.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/main.ts
 import { realpathSync, statSync } from "fs";
 import { resolve } from "path";
 import { parseArgs } from "util";
 
-// packages/cli-design-check/src/successor/contract.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/contract.ts
 var CHECKER_CONTRACT_VERSION = "2.0.0";
 var CHECKER_ENVELOPE_VERSION = 2;
 var SUCCESSOR_FINDINGS = {
@@ -44,6 +44,7 @@ var CAUSE_RULES = {
   USAGE_UNKNOWN_COMMAND: cause("usage", "refused", "unchanged", false, "next"),
   SCHEMA_INVALID_INPUT: cause("schema", "refused", "unchanged", false, "next"),
   SCHEMA_UNSUPPORTED_CONTRACT: cause("schema", "refused", "unchanged", false, "next"),
+  DOMAIN_PRIOR_RUN_PENDING: cause("domain", "refused", "unchanged", false, "handoff"),
   DOMAIN_PRECONDITION_UNMET: cause("domain", "refused", "unchanged", false, "next"),
   DOMAIN_AUTHORITY_REQUIRED: cause("domain", "refused", "unchanged", false, "handoff"),
   TRANSIENT_NOT_STARTED: cause("transient", "refused", "unchanged", true, "next"),
@@ -381,7 +382,7 @@ function validateTargetEnvelope(value, observedExit, declaredCommands, discovery
   return validateSupported(value, observedExit, declaredCommands, discovery);
 }
 
-// packages/cli-design-check/src/successor/command-contract.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/command-contract.ts
 var CHECKER_IDENTITIES = {
   discovery: "cli-design-check.discovery",
   dispatch: "cli-design-check.dispatch",
@@ -461,7 +462,7 @@ function renderCheckerDiscoveryHuman() {
 `;
 }
 
-// packages/cli-design-check/src/successor/render.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/render.ts
 var EMPTY_EFFECTS = { completed: [], remaining: [], uncertain: [], inventoryComplete: true };
 function stringify(value) {
   return `${JSON.stringify(value)}
@@ -625,14 +626,14 @@ function renderInternalError(message) {
   });
 }
 
-// packages/cli-design-check/src/successor/runner.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/runner.ts
 import { spawn } from "child_process";
 import { createHash, randomUUID } from "crypto";
 import { lstatSync } from "fs";
 import { lstat, open, readlink, readdir, unlink } from "fs/promises";
 import { isAbsolute, join, relative } from "path";
 
-// packages/cli-design-check/src/successor/scenario-rules.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/scenario-rules.ts
 var JSON_FLAG = "--json";
 var LARGE_ENVELOPE_THRESHOLD_BYTES = 1024 * 1024;
 var REDACTED = "[REDACTED]";
@@ -717,6 +718,8 @@ function analyzeScenario(spec, result, declaredCommands) {
   if (parsed === null)
     return { findings: [...new Set([SUCCESSOR_FINDINGS.STDOUT_NOT_SINGLE_JSON_OBJECT, ...optional])], observedContractVersion: null, declaredCommands: [] };
   const validation = validateTargetEnvelope(parsed, result.observedExit, declaredCommands, spec.discovery === true);
+  if (validation.findings.length === 0 && !exitAccepted(spec.expectedExit, result.observedExit))
+    validation.findings.push(SUCCESSOR_FINDINGS.EXIT_MISMATCH);
   return { ...validation, findings: [...new Set([...validation.findings, ...optional])] };
 }
 function optionalRows(options) {
@@ -756,7 +759,7 @@ function buildSuccessorScenarios(options) {
   ];
 }
 
-// packages/cli-design-check/src/successor/runner.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/runner.ts
 var TIMED_OUT = Symbol("timed-out");
 var KILL_GRACE_MS = 500;
 var READ_GRACE_MS = 500;
@@ -988,7 +991,7 @@ async function runSuccessorMatrix(options) {
   return { runIdentity, targetDirectory: options.cwd, command: [...options.command], rows, passedCount, failedCount: rows.length - passedCount, targetUnchanged: changed.length === 0, changedPaths: changed, retention: { requested: options.retainStreamsDirectory !== undefined, directory: options.retainStreamsDirectory ?? null }, skippedRows: skippedSuccessorScenarios(options), observationExclusions: [...OBSERVATION_EXCLUSIONS] };
 }
 
-// packages/cli-design-check/src/successor/main.ts
+// config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/main.ts
 var DEFAULT_TIMEOUT_MS = 15000;
 function hasJsonFlag(args) {
   for (let index = 0;index < args.length; index += 1) {

@@ -624,8 +624,8 @@ function createWorkspace() {
 
 // packages/source-intake-classify/src/preflight.ts
 import { randomBytes } from "crypto";
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, rmdirSync, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
-import { dirname as dirname2, join as join2 } from "path";
+import { existsSync as existsSync2, lstatSync as lstatSync2, realpathSync as realpathSync2, mkdirSync as mkdirSync2, rmdirSync, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
+import { basename, dirname as dirname2, join as join2 } from "path";
 var PROBE_TIMEOUT_MS = 15000;
 var PERMISSION_DENIAL = "Operation not permitted";
 var INSTRUCTIONS_HEADING = "# Source Intake classifier lane";
@@ -718,10 +718,23 @@ function renderedEntries(text) {
   }
   return entries;
 }
+function helperDirectory(lane, path) {
+  const parent = dirname2(path);
+  const parents = [join2(lane.laneHome, "tmp", "arg0"), join2(lane.laneHome, "tmp", "arg0-macos")];
+  if (!parents.includes(parent) || !/^codex-arg0[A-Za-z0-9]+$/.test(basename(path)))
+    return false;
+  if (realpathSync2(parent) !== parent)
+    return false;
+  try {
+    const stat = lstatSync2(path);
+    return stat.isDirectory() && !stat.isSymbolicLink() && realpathSync2(path) === path;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
+  }
+}
 function readEntriesHold(lane, entries) {
-  const helperLinks = join2(lane.laneHome, "tmp", "arg0");
   const reads = entries.filter((entry) => entry.access === "read" && entry.kind === "path").map((entry) => entry.value);
-  return reads.every((path) => !lane.deniedRoots.some((root) => contains2(root, path)) || contains2(helperLinks, path));
+  return reads.every((path) => !lane.deniedRoots.some((root) => contains2(root, path)) || helperDirectory(lane, path));
 }
 function sessionHolds(lane, workspace) {
   const result = capture(lane, [lane.codex, "debug", "prompt-input", ...lane.configArgs, "pre-flight"], workspace);
