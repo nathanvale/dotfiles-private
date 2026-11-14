@@ -1,0 +1,76 @@
+---
+name: ecosystem-review
+description: Brief Nathan on the agent ecosystem's current outcomes, evidence, blockers, and next human decision. Use for "where are we with the agent ecosystem?" or an ecosystem progress review. Return a read-only snapshot in chat.
+---
+
+# Review the agent ecosystem
+
+## Resolve the current map
+
+Enter through `$HOME/.config/context/vault.md` and the startup pointer for
+agent ecosystem planning. Follow the current planning note's live entry and
+cutover ledger to the initiative's source index. Verify the workspace and
+project from current records. The index owns the map and document addresses;
+keep account IDs and the ecosystem plan out of this skill.
+
+Prefer connected Linear tools. If they lack a required read, use the current
+Harness's supported browser controls and the existing signed-in personal
+session, following its browser owner. Report an unavailable route precisely.
+Use existing integrations and credential custody rather than adding a client,
+connection, permission, or orchestrator.
+
+If the user supplies records for an offline review, treat them as the bounded
+source set and label the result offline. They do not establish current Linear
+state. Retained local notes are context until refreshed against their owners.
+When live access is unavailable, use the closest saved summary and name the
+unread owners. Avoid loading full historical archives to fill that gap.
+
+## Read across the outcomes
+
+Read the whole root map, the proposed Now / Next / Later overview, and the
+living ecosystem glossary. Read the task-engine glossary when that branch
+needs interpretation. Follow each outcome to its owning issues, including
+current questions, accepted-answer comments, assignment, native blocker
+relations, and relevant recent updates or intake. Cover every outcome without
+loading full archives or inventorying the machine.
+
+Follow source, PR, native-task, and qualification receipts selectively when a
+claim, decision, contradiction, or completion needs support. Keep these states
+distinct: proposed, accepted, implemented, merged, installed, activated, and
+runtime-qualified. A Done status or closed predecessor does not prove a usable
+outcome. Identify the environment, revision, and date a receipt actually proves.
+
+Separate native blockers from parent-child decomposition, architectural links,
+and proposed prerequisites. Keep accepted answers settled unless new evidence
+contradicts them. Preserve open human choices and proposed ordering.
+
+Compare changes only against a supplied previous review or an explicit time
+window. Identify that baseline and any missing comparison evidence. Without a
+baseline, call the result a current snapshot. Create no review-history store.
+
+## Return a two-minute briefing
+
+Lead with one plain assessment and the useful outcomes actually proven.
+Represent all outcome horizons, visibly retaining proposed ordering. Combine
+related outcomes only when each remains identifiable.
+
+Include:
+
+- Linked evidence for the material claims, with freshness and coverage. Use
+  absolute file paths for local sources so chat links resolve.
+- Real blockers, their direction, and the work they prevent.
+- Human choices separately from facts needing investigation.
+- One recommended next decision or action and why it matters. Leave acceptance
+  to Nathan.
+- Missing, stale, inaccessible, or conflicting evidence and its effect on the
+  conclusion. Label incomplete access a partial review, never an empty backlog.
+
+Keep the briefing compact. Avoid health scores or progress percentages without
+an independently supported denominator. When access prevents an outcome count,
+state that limit rather than inventing coverage or conclusions.
+
+Return in chat by default. Saving, posting, priority or status changes,
+architecture decisions, research launches, and task dispatch are separate
+operations. Route requested capture or triage to `linear-intake`; route
+requested consequential decision exploration to Wayfinder through the current
+planning owner. A review grants no mutation authority.
