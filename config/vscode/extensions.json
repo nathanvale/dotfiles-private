@@ -1,0 +1,24 @@
+{
+  "client": {
+    "sdras.night-owl": "2.1.1",
+    "alefragnani.bookmarks": "14.1.1",
+    "ryuta46.multi-command": "1.6.0",
+    "vscodevim.vim": "1.32.4",
+    "ms-vscode.remote-server": "1.5.4",
+    "ms-vscode-remote.remote-wsl": "1.104.7",
+    "ms-vscode-remote.vscode-remote-extensionpack": "0.26.0"
+  },
+  "workspace": [
+    "vsls-contrib.codetour",
+    "dbaeumer.vscode-eslint",
+    "mermaidchart.vscode-mermaid-chart",
+    "fallow-rs.fallow-vscode"
+  ],
+  "protected": {
+    "ms-vscode-remote.remote-containers": "0.469.0",
+    "ms-vscode-remote.remote-ssh": "0.128.0",
+    "ms-vscode-remote.remote-ssh-edit": "0.87.0",
+    "ms-vscode.remote-explorer": "0.5.0"
+  },
+  "local": {"nathanvale.diff-toggle": "0.3.6"}
+}

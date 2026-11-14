@@ -1,0 +1,25 @@
+{
+  "excludedPrefixes": ["remote.", "dev.containers.", "terminal.integrated.env.", "terminal.integrated.profiles."],
+  "settings": {
+    "dev.containers.copyGitConfig": false,
+    "dev.containers.gitCredentialHelperConfigLocation": "none",
+    "dev.containers.dockerCredentialHelper": false,
+    "remote.SSH.defaultExtensions": [],
+    "remote.autoForwardPorts": false,
+    "remote.restoreForwardedPorts": false,
+    "extensions.ignoreRecommendations": true,
+    "extensions.autoCheckUpdates": false,
+    "extensions.autoUpdate": "off",
+    "update.mode": "none",
+    "chat.disableAIFeatures": true,
+    "chat.tools.global.autoApprove": false,
+    "chat.tools.terminal.enableAutoApprove": false,
+    "files.autoSave": "off",
+    "security.workspace.trust.enabled": true,
+    "security.workspace.trust.untrustedFiles": "prompt",
+    "markdown-preview-enhanced.enableScriptExecution": false,
+    "window.restoreWindows": "none",
+    "terminal.integrated.env.osx": {"SSH_AUTH_SOCK": null, "VSCODE_IPC_HOOK_CLI": null, "NO_COLOR": null},
+    "terminal.integrated.env.linux": {"SSH_AUTH_SOCK": null, "VSCODE_IPC_HOOK_CLI": null}
+  }
+}
