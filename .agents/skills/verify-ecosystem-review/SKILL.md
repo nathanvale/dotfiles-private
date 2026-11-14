@@ -23,9 +23,9 @@ Set the run locations in the foreground shell:
 ```sh
 umask 077
 candidate_root=$(git rev-parse --show-toplevel)
-run_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ecosystem-review/$(date +%Y%m%dT%H%M%S)-candidate"
+mkdir -m 700 -p "${XDG_STATE_HOME:-$HOME/.local/state}/ecosystem-review"
+run_dir=$(mktemp -d "${XDG_STATE_HOME:-$HOME/.local/state}/ecosystem-review/candidate-XXXXXXXX")
 export candidate_root run_dir
-mkdir -m 700 -p "$run_dir"
 ```
 
 Capture protected selections before registration. This reads no secret values:
@@ -38,8 +38,14 @@ for name, path, keys in [
     ('codex', pathlib.Path.home()/'.codex/config.toml', ['plugins', 'marketplaces']),
     ('claude', pathlib.Path.home()/'.claude/settings.json', ['enabledPlugins', 'permissions', 'model']),
 ]:
-    data = tomllib.loads(path.read_text()) if name == 'codex' else json.loads(path.read_text())
-    (root/(name+'-selections-before.json')).write_text(json.dumps({k:data.get(k) for k in keys}, indent=2)+'\n')
+    exists = path.exists()
+    data = (
+        tomllib.loads(path.read_text()) if name == 'codex'
+        else json.loads(path.read_text())
+    ) if exists else {}
+    projection = {'exists': exists, 'selections': {k: data.get(k) for k in keys}}
+    (root/(name+'-selections-before.json')).write_text(
+        json.dumps(projection, indent=2)+'\n')
 market = root/'marketplace'
 (market/'.agents/plugins').mkdir(parents=True)
 (market/'personal').symlink_to(pathlib.Path(os.environ['candidate_root'])/'config/agents/plugins/personal', target_is_directory=True)
@@ -87,6 +93,10 @@ alongside the diff, because `git diff` does not include them. A missing login,
 wrong bytes, or absent skill is a failed readiness check. Repair through the
 native owner, then retry in a fresh session.
 
+Require production Personal to be disabled and the candidate enabled in the
+evaluation invocation, with unrelated connected-read selections preserved.
+Require the fresh session to load the candidate's installed skill bytes.
+
 Check the actual offered or discoverable read routes in each fresh session.
 Follow [native capability proof](references/native-capabilities.md). Capture
 supported discovery/read events and failure details. A self-reported list or a
@@ -114,7 +124,7 @@ save a review, reconnect services, drive Fable or Claude Desktop, or dispatch wo
 State which skill path you loaded.
 PROMPT
 caffeinate -dimsu codex exec -C "$candidate_root" -s read-only --ephemeral \
-  -c 'plugins."personal@personal".enabled=false' --json \
+  -c 'plugins={"personal@personal"={enabled=false},"personal@ecosystem-review-dev"={enabled=true}}' --json \
   -o "$run_dir/final.txt" - < "$run_dir/prompt.txt" \
   > "$run_dir/events.jsonl" 2> "$run_dir/stderr.log" &
 run_pid=$!

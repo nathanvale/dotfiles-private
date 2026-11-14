@@ -111,7 +111,8 @@ related outcomes only when each remains identifiable.
 Include:
 
 - Linked evidence for the material claims, with freshness and coverage. Use
-  literal absolute paths with optional `:line` for local sources. Keep invisible
+  Markdown links in the form `[source](/absolute/path)` for local sources,
+  with optional `:line` in the target. Keep invisible
   formatting controls and heading fragments out of local link targets so chat
   can open the actual file. Confirm local targets exist before returning.
 - The operation currently authorized and its approval reference. For a handoff,
