@@ -9,6 +9,7 @@ import {
   readFile,
   readlink,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -34,7 +35,7 @@ const TEMPLATE_ROOT = resolve(
 );
 // Independent oracle: this test-owned revision must not be imported from the
 // composer, so a changed production pin makes the public composition checks RED.
-const TEMPLATE_REVISION = "7f6d95017e051c23e978f5d7f7542732b799dfdc";
+const TEMPLATE_REVISION = "f035455f2cac8e283aedd72c27c960b1e62b829c";
 const DEFAULT_SOURCE_PACKET = "https://example.test/vault/projects/example/";
 const CONCURRENT_WORKSPACE_MANIFEST =
   '{"name":"concurrent","private":true,"dependencies":{"zod":"4.4.3"}}\n';
@@ -199,7 +200,10 @@ async function transactionArtifacts(root: string): Promise<string[]> {
 async function templateFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "cli-compose-template-fixture-"));
   roots.push(root);
+  const inventory = Bun.spawnSync(["git", "-C", TEMPLATE_ROOT, "show", `${TEMPLATE_REVISION}:src/cli-inventory.ts`], { stdout: "pipe", stderr: "pipe" });
+  expect(inventory.exitCode).toBe(0);
   const files = {
+    "src/cli-inventory.ts": inventory.stdout.toString(),
     "starters/simple/src/cli.ts": FIXTURE_SIMPLE_CLI,
     "starters/complex/src/cli.ts": FIXTURE_COMPLEX_CLI,
     "starters/complex/tests/catalog/catalog.test.ts": 'import { test } from "bun:test";\ntest("fixture", () => {});\n',
@@ -230,6 +234,7 @@ if (command === "cat-file" && rest.at(-1) === revision + "^{commit}") process.ex
 if (command === "ls-tree") {
   const prefix = rest.at(-1);
   const starter = prefix === "starters/simple/" ? "simple" : prefix === "starters/complex/" ? "complex" : undefined;
+  if (prefix === "starters/shared/") process.exit(0);
   if (starter === undefined) process.exit(1);
   process.stdout.write(paths[starter].join("\\n") + "\\n");
   process.exit(0);
@@ -276,6 +281,16 @@ Bun.plugin({
   return preload;
 }
 
+async function publicationPermissionPreload(path: string): Promise<string> {
+  const preload = await publicationMutationPreload(path, "");
+  const source = await readFile(preload, "utf8");
+  const needle = 'await Bun.write(\${JSON.stringify(target)}, \${JSON.stringify(mutation)});';
+  const replacement = 'await import("node:fs/promises").then(({ chmod }) => chmod(\${JSON.stringify(target)}, 0o500));';
+  expect(source).toContain(needle);
+  await writeFile(preload, source.replace(needle, replacement));
+  return preload;
+}
+
 async function publicationRemovalAfterDiscoveryPreload(path: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "cli-compose-publication-removal-"));
   roots.push(root);
@@ -291,8 +306,8 @@ async function publicationRemovalAfterDiscoveryPreload(path: string): Promise<st
       const source = await Bun.file(args.path).text();
       const publicationNeedle = \`for (const file of creations)\n      await writeNewFile(file, state, fileSystem);\`;
       const publicationReplacement = \`let removalInjected = false;\n    for (const file of creations) {\n      await writeNewFile(file, state, fileSystem);\n      if (!removalInjected) {\n        removalInjected = true;\n        globalThis[${marker}] = true;\n      }\n    }\`;
-      const discoveryNeedle = \`return await Promise.all([...paths].sort().map(async (path) => ({ bytes: await readFile(path), path })));\`;
-      const discoveryReplacement = \`if (globalThis[${marker}] === true) {\n    delete globalThis[${marker}];\n    await rm(${target});\n  }\n  return await Promise.all([...paths].sort().map(async (path) => ({ bytes: await readFile(path), path })));\`;
+      const discoveryNeedle = \`return await Promise.all([...paths].sort().map(async (path) => ({ bytes: await readFile2(path), path })));\`;
+      const discoveryReplacement = \`if (globalThis[${marker}] === true) {\n    delete globalThis[${marker}];\n    await rm(${target});\n  }\n  return await Promise.all([...paths].sort().map(async (path) => ({ bytes: await readFile2(path), path })));\`;
       if (!source.includes(publicationNeedle) || !source.includes(discoveryNeedle)) {
         throw new Error("comparison timing seam was not found");
       }
@@ -379,6 +394,184 @@ templateTest("the exact pinned canonical template revision is available", () => 
   expect(result.exitCode).toBe(0);
 });
 
+function runHost(project: ProjectFixture, entryPoint: string, args: string[]) {
+  const child = Bun.spawnSync([process.execPath, entryPoint, ...args], {
+    cwd: project.packageRoot,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, XDG_STATE_HOME: join(project.root, ".test-state"), CLI_EXAMPLE_STATE: join(project.root, ".test-state/state.json") },
+  });
+  return { exitCode: child.exitCode, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
+}
+
+async function realHost(starter: "simple" | "complex", workspace = false): Promise<ProjectFixture> {
+  const project = await fixture(workspace);
+  const created = invoke(project.root, project.packagePath, starter);
+  expect(created, created.stdout + created.stderr).toMatchObject({ exitCode: 0, stderr: "" });
+  expect(JSON.parse(created.stdout)).toMatchObject({ integration: "created", entryPoint: workspace ? "packages/tool/src/cli.ts" : "src/cli.ts" });
+  const installed = Bun.spawnSync([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+  expect(installed.exitCode, installed.stderr.toString()).toBe(0);
+  return project;
+}
+
+async function writeHostCommands(project: ProjectFixture): Promise<void> {
+  await writeFile(join(project.packageRoot, "src/commands.ts"), `import type { CommandDefinition } from "./commands-contract.ts";
+export const commands: CommandDefinition[] = [{
+  commandIdentity: "host.ping", effectClass: "inspect", route: ["ping"], summary: "Check the existing host.", stations: () => [],
+  execute: () => Promise.resolve({ commandIdentity: "host.ping", data: { reply: "pong" }, message: "pong", causeCode: "SUCCESS_UNCHANGED", effectClass: "inspect", effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, exitCode: 0, failureClass: null, nextAction: "No follow-up is required.", outcome: "success", repairAction: null, retryable: false, transactionState: "unchanged" }),
+}];\n`);
+}
+
+async function moveHostCli(project: ProjectFixture): Promise<void> {
+  await mkdir(join(project.packageRoot, "bin"));
+  const oldPath = join(project.packageRoot, "src/cli.ts");
+  await writeFile(oldPath, (await readFile(oldPath, "utf8")).replaceAll('from "./', 'from "../src/'));
+  await rename(oldPath, join(project.packageRoot, "bin/home.ts"));
+  const metadataPath = join(project.packageRoot, ".cli-design-template.json");
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+  metadata.entryPoint = "bin/home.ts";
+  await writeFile(metadataPath, JSON.stringify(metadata) + "\n");
+  const packagePath = join(project.packageRoot, "package.json");
+  const manifest = JSON.parse(await readFile(packagePath, "utf8"));
+  manifest.scripts["cli:example"] = "bun run bin/home.ts";
+  await writeFile(packagePath, JSON.stringify(manifest) + "\n");
+  // A test-owned host command establishes the behaviour that composition must
+  // preserve. Its expected identity and result do not come from the composer.
+  await writeHostCommands(project);
+  // Adapt only this disposable fixture. The original starter tests belong to
+  // the template suite; this host now owns a different command vocabulary.
+  await rm(join(project.packageRoot, "tests"), { recursive: true, force: true });
+  const installed = Bun.spawnSync([process.execPath, "install", "--lockfile-only", "--ignore-scripts"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+  expect(installed.exitCode).toBe(0);
+}
+
+async function qualityHost(starter: "simple" | "complex"): Promise<ProjectFixture> {
+  const project = await realHost(starter);
+  const prefix = `profiles/static-admission/${starter}/`;
+  const listing = Bun.spawnSync(["git", "-C", TEMPLATE_ROOT, "ls-tree", "-r", "--name-only", TEMPLATE_REVISION, "--", prefix], { stdout: "pipe", stderr: "pipe" });
+  expect(listing.exitCode).toBe(0);
+  for (const path of listing.stdout.toString().trim().split("\n")) {
+    if (path.endsWith("TEMPLATE-SOURCE.md")) continue;
+    const file = Bun.spawnSync(["git", "-C", TEMPLATE_ROOT, "show", `${TEMPLATE_REVISION}:${path}`], { stdout: "pipe", stderr: "pipe" });
+    expect(file.exitCode).toBe(0);
+    await writeFile(join(project.root, path.slice(prefix.length)), file.stdout.toString().replaceAll("__REPOSITORY_NAME__", "host"));
+  }
+  await rm(join(project.root, "existing.test.ts"));
+  await rm(join(project.root, "tests"), { recursive: true });
+  if (starter === "simple") {
+    await writeHostCommands(project);
+    await rm(join(project.root, "src/domains"), { recursive: true });
+  } else {
+    for (const name of await readdir(join(project.root, "src"), { recursive: true })) {
+      if (!name.endsWith(".ts")) continue;
+      const path = join(project.root, "src", name);
+      let source = await readFile(path, "utf8");
+      for (const command of ["status", "set", "recover"]) source = source.replaceAll(`example.${command}`, `host.${command}`).replaceAll(`route: ["${command}"]`, `route: ["host", "${command}"]`);
+      await writeFile(path, source);
+    }
+  }
+  await mkdir(join(project.root, "tests/integration"), { recursive: true });
+  const cases = starter === "simple" ? [[ ["ping"], "host.ping" ]] : [[ ["host", "status"], "host.status" ], [["host", "set", "--value", "enabled", "--preview"], "host.set"], [["host", "recover"], "host.recover"]];
+  await writeFile(join(project.root, "tests/integration/host.test.ts"), `import {expect,test} from "bun:test";
+import {fileURLToPath} from "node:url";
+const entry=fileURLToPath(new URL("../../src/cli.ts",import.meta.url));
+const cases=${JSON.stringify(cases)} as const;
+for(const [args,identity] of cases) test(identity,()=>{const child=Bun.spawnSync([process.execPath,entry,...args,"--json"],{stdout:"pipe",stderr:"pipe",env:{...process.env,CLI_EXAMPLE_STATE:entry+".state",XDG_STATE_HOME:entry+".diagnostics"}});expect(child.exitCode).toBe(0);expect(child.stderr.toString()).toBe("");const observed:unknown=JSON.parse(child.stdout.toString());expect(observed).toMatchObject({result:{commandIdentity:identity,outcome:"success",transactionState:"unchanged"}});});
+`);
+  const installed = Bun.spawnSync([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+  expect(installed.exitCode, installed.stderr.toString()).toBe(0);
+  const formatted = Bun.spawnSync([process.execPath, "run", "format"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+  expect(formatted.exitCode, formatted.stderr.toString()).toBe(0);
+  return project;
+}
+
+for (const starter of ["simple", "complex"] as const) {
+  templateTest(`composition preserves the existing ${starter} host quality gates`, async () => {
+    const project = await qualityHost(starter);
+    const before = Bun.spawnSync([process.execPath, "run", "check"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+    expect(before.exitCode, before.stdout.toString() + before.stderr.toString()).toBe(0);
+    const composed = invoke(project.root, ".", starter);
+    expect(composed.exitCode, composed.stdout + composed.stderr).toBe(0);
+    const after = Bun.spawnSync([process.execPath, "run", "check"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+    expect(after.exitCode, after.stdout.toString() + after.stderr.toString()).toBe(0);
+  }, 120_000);
+}
+
+for (const starter of ["simple", "complex"] as const) {
+  templateTest(`extends the existing nondefault ${starter} CLI and preserves its commands`, async () => {
+    const project = await realHost(starter, starter === "complex");
+    await moveHostCli(project);
+    const beforePing = runHost(project, "bin/home.ts", ["ping", "--json"]);
+    expect(beforePing).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(beforePing.stdout)).toMatchObject({ result: { commandIdentity: "host.ping", data: { reply: "pong" } } });
+    const entryBytes = await readFile(join(project.packageRoot, "bin/home.ts"));
+    const qualityBytes = await readFile(join(project.root, "biome.json"));
+    const sentinelBytes = await readFile(join(project.root, "unrelated.txt"));
+    const result = invoke(project.root, project.packagePath, starter);
+    expect(result, result.stdout + result.stderr).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ integration: "extended", entryPoint: starter === "complex" ? "packages/tool/bin/home.ts" : "bin/home.ts" });
+    expect(await readFile(join(project.packageRoot, "bin/home.ts"))).toEqual(entryBytes);
+    expect(await Bun.file(join(project.packageRoot, "src/cli.ts")).exists()).toBe(false);
+    expect(await readFile(join(project.root, "biome.json"))).toEqual(qualityBytes);
+    expect(await readFile(join(project.root, "unrelated.txt"))).toEqual(sentinelBytes);
+    expect(JSON.parse(await readFile(join(project.packageRoot, "package.json"), "utf8")).scripts["cli:example"]).toBe("bun run bin/home.ts");
+    const expected = starter === "simple" ? ["host.ping", "example.status", "example.template.info"] : ["host.ping", "example.status", "example.set", "example.recover"];
+    const discovery = runHost(project, "bin/home.ts", ["--discover", "--json"]);
+    expect(discovery).toMatchObject({ exitCode: 0, stderr: "" });
+    const commands = JSON.parse(discovery.stdout).result.data.commands as { commandIdentity: string }[];
+    expect(commands.map((command) => command.commandIdentity)).toEqual(["example.dispatch", "example.help", "example.discovery", "example.command-discovery", ...expected]);
+    const help = runHost(project, "bin/home.ts", ["--help"]);
+    expect(help).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(help.stdout).toContain("ping");
+    expect(help.stdout).toContain("status");
+    const afterPing = runHost(project, "bin/home.ts", ["ping", "--json"]);
+    expect(afterPing).toMatchObject({ exitCode: 0, stderr: "" });
+    const { runId: beforeRun, ...beforeResult } = JSON.parse(beforePing.stdout).result;
+    const { runId: afterRun, ...afterResult } = JSON.parse(afterPing.stdout).result;
+    expect(beforeRun).toBeString();
+    expect(afterRun).toBeString();
+    expect(afterRun).not.toBe(beforeRun);
+    expect(afterResult).toEqual(beforeResult);
+    const added = runHost(project, "bin/home.ts", starter === "simple" ? ["template", "info", "--json"] : ["set", "--value", "enabled", "--preview", "--json"]);
+    expect(added).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(added.stdout)).toMatchObject({ result: { commandIdentity: starter === "simple" ? "example.template.info" : "example.set", outcome: "success", transactionState: "unchanged" } });
+    const inventorySource = Bun.spawnSync(["git", "-C", TEMPLATE_ROOT, "show", `${TEMPLATE_REVISION}:src/cli-inventory.ts`], { stdout: "pipe", stderr: "pipe" });
+    const probe = join(project.root, ".inventory-probe.ts");
+    await writeFile(probe, inventorySource.stdout);
+    const inventory = Bun.spawnSync([process.execPath, probe, project.root], { stdout: "pipe", stderr: "pipe" });
+    await rm(probe);
+    expect(inventory.exitCode, inventory.stdout.toString()).toBe(0);
+    expect(JSON.parse(inventory.stdout.toString()).entries).toEqual([starter === "complex" ? "packages/tool/bin/home.ts" : "bin/home.ts"]);
+    const composedTests = Bun.spawnSync([process.execPath, "test", `tests/integration/composed-${starter}.test.ts`], { cwd: project.packageRoot, stdout: "pipe", stderr: "pipe" });
+    expect(composedTests.exitCode, composedTests.stderr.toString()).toBe(0);
+  }, 60_000);
+}
+
+for (const scenario of ["multiple", "collision", "prefix", "unsupported", "profile"] as const) {
+  templateTest(`refuses ${scenario} CLI integration with every host byte preserved`, async () => {
+    const project = await realHost(scenario === "prefix" ? "complex" : "simple");
+    if (scenario === "prefix") {
+      await moveHostCli(project);
+      const owner = join(project.root, "src/commands.ts");
+      await writeFile(owner, (await readFile(owner, "utf8")).replace('route: ["ping"]', 'route: ["template"]').replace('effectClass: "inspect"', 'effectClass: "repository-local"'));
+    }
+    if (scenario === "multiple") {
+      await mkdir(join(project.root, "packages/another/src"), { recursive: true });
+      await writeFile(join(project.root, "packages/another/package.json"), '{"name":"another","bin":{"another":"src/other.ts"}}\n');
+      await writeFile(join(project.root, "packages/another/src/other.ts"), 'if (import.meta.main) process.stdout.write("another\\n");\n');
+    }
+    if (scenario === "unsupported") await rm(join(project.root, ".cli-design-template.json"));
+    const before = await snapshotTree(project.root);
+    const result = invoke(project.root, project.packagePath, scenario === "profile" ? "complex" : "simple");
+    expect(result).toMatchObject({ exitCode: 3, stderr: "" });
+    const cause = scenario === "multiple" ? "DOMAIN_MULTIPLE_APPLICATION_CLIS" : ["collision", "prefix"].includes(scenario) ? "DOMAIN_COMMAND_ROUTE_CONFLICT" : scenario === "profile" ? "DOMAIN_CLI_PROFILE_CONFLICT" : "DOMAIN_EXISTING_CLI_UNSUPPORTED";
+    expect(JSON.parse(result.stdout)).toMatchObject({ causeCode: cause });
+    expect(JSON.parse(result.stdout).repairAction.length).toBeGreaterThan(0);
+    expect(await snapshotTree(project.root)).toEqual(before);
+  }, 60_000);
+}
+
 test("composes the simple starter into a single package and preserves host owners", async () => {
   const project = await fixture(false);
   const beforeLock = await readFile(join(project.root, "bun.lock"));
@@ -437,8 +630,8 @@ test("composes complex into a workspace package and updates the owning lock", as
   expect(packageJson).toEqual({
     ...beforePackageManifest,
     dependencies: {
-      "@logtape/logtape": "2.3.1",
-      "@logtape/redaction": "2.3.1",
+      "@logtape/logtape": "2.4.2",
+      "@logtape/redaction": "2.4.2",
       zod: "4.4.3",
     },
     scripts: {
@@ -449,7 +642,7 @@ test("composes complex into a workspace package and updates the owning lock", as
   const lock = await readFile(join(project.root, "bun.lock"), "utf8");
   expect(lock).not.toBe(beforeLock);
   expect(lock).toContain('"@types/bun": "1.4.0"');
-  expect(lock).toContain('"@logtape/logtape": "2.3.1"');
+  expect(lock).toContain('"@logtape/logtape": "2.4.2"');
   expect(lock).toContain('"zod": "4.4.3"');
   expect(await readFile(join(project.root, "package.json"))).toEqual(
     beforeWorkspaceManifest,
@@ -574,7 +767,7 @@ test("refuses a sibling workspace manifest changed after staging", async () => {
 test("refuses a source collision without changing manifest or lock bytes", async () => {
   const project = await fixture(false);
   await mkdir(join(project.packageRoot, "src"));
-  await writeFile(join(project.packageRoot, "src/cli.ts"), "owned bytes\n");
+  await writeFile(join(project.packageRoot, "src/cli.ts"), "export const owned = true;\n");
   const packageBefore = await readFile(join(project.packageRoot, "package.json"));
   const lockBefore = await readFile(join(project.root, "bun.lock"));
   const treeBefore = await snapshotTree(project.root);
@@ -586,7 +779,7 @@ test("refuses a source collision without changing manifest or lock bytes", async
     causeCode: "DOMAIN_TARGET_COLLISION",
     status: "refused",
   });
-  expect(await readFile(join(project.packageRoot, "src/cli.ts"), "utf8")).toBe("owned bytes\n");
+  expect(await readFile(join(project.packageRoot, "src/cli.ts"), "utf8")).toBe("export const owned = true;\n");
   expect(digest(await readFile(join(project.packageRoot, "package.json")))).toBe(digest(packageBefore));
   expect(digest(await readFile(join(project.root, "bun.lock")))).toBe(digest(lockBefore));
   expect(await snapshotTree(project.root)).toEqual(treeBefore);
@@ -695,7 +888,7 @@ test("refuses script and dependency conflicts before changing owner bytes", asyn
     const project = await fixture(false);
     const manifestPath = join(project.packageRoot, "package.json");
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-    if (kind === "script") manifest.scripts["cli:example"] = "bun run owned.ts";
+    if (kind === "script") manifest.scripts["cli:example"] = "echo owned script";
     else if (kind === "dependency") manifest.dependencies = { zod: "4.3.0" };
     else manifest.devDependencies = { ...manifest.devDependencies, zod: "4.4.3" };
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
@@ -975,11 +1168,13 @@ test.skipIf(process.getuid?.() === 0)(
   "restores the host project when a commit-phase write fails after earlier writes",
   async () => {
     const project = await fixture(false);
-    // Complex sources write src/ first, then tests/; a read-only tests/ directory fails the later mkdir.
+    // The public publication preload changes permissions after the first host write,
+    // so this exercises rollback rather than an earlier stage refusal.
     const testsRoot = join(project.packageRoot, "tests");
-    await mkdir(testsRoot, { mode: 0o500 });
+    await mkdir(testsRoot, { mode: 0o700 });
     const treeBefore = await snapshotTree(project.root);
-    const result = invokeFixture(project, "complex");
+    const preload = await publicationPermissionPreload(testsRoot);
+    const result = await invokeFixtureAsync(project, "complex", [], DEFAULT_SOURCE_PACKET, { BUN_OPTIONS: `${process.env.BUN_OPTIONS ?? ""} --preload=${preload}`.trim() });
     await chmod(testsRoot, 0o700);
 
     expect(result.exitCode).toBe(1);

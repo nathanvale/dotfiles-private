@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { validateTargetEnvelope } from "./contract.ts";
 import type { SuccessorRunReport } from "./runner.ts"
 import { CHECKER_COMMANDS, CHECKER_DISCOVERY_DATA, CHECKER_HELP_DATA, CHECKER_VALUE_OPTIONS, FORMAT_CASES, HUMAN_DISCOVERY_CASES, PROCESS_EXIT_CASES, PUBLIC_BUNDLE_CASES, RETENTION_CASES, SEMANTIC_CASES, SUCCESSOR_ROWS } from "./specimen-manifest.ts"
 
@@ -470,3 +471,34 @@ test.each([...PUBLIC_BUNDLE_CASES])("CDS-CE-3 public bundle: $name", async (bund
 	expect(bundle.stderr).toBe("")
 	expect(normalizeEnvelope(bundle.stdout)).toEqual(normalizeEnvelope(source.stdout))
 }, 120000)
+
+
+test("the checker refuses a valid envelope from the wrong scenario", async () => {
+  const args = matrixArgs("successor-conformant", null, undefined, false);
+  args[args.indexOf("--transient-args") + 1] = "success";
+  const run = await runChecker("source", args);
+  expect(run.exitCode).toBe(4);
+  expect(run.stderr).toBe("");
+  expect(failedHumanRows(run.stdout)).toEqual([
+    { scenario: "transient-refusal-json", findings: ["EXIT_MISMATCH"] },
+  ]);
+  expect(run.stdout.split("\n").filter((line) => line.split(" | ").length === 7)).toHaveLength(16);
+});
+
+
+test("pending earlier work is a preflight refusal with no current-run effects", () => {
+  // Independent C0 oracle: old uncertainty is not a new attempted mutation.
+  const envelope = {
+    envelopeVersion: 2, contractVersion: "2.0.0", availablePaths: ["example.set"], message: "Prior work is unresolved.",
+    result: {
+      runId: "new-run", commandIdentity: "example.set", causeCode: "DOMAIN_PRIOR_RUN_PENDING",
+      effectClass: "repository-local", outcome: "refused", transactionState: "unchanged",
+      failureClass: "domain", exitCode: 3, data: null, retryable: false,
+      effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+      repairAction: "Inspect the prior work.",
+      handoff: { owner: "operator", reason: "Earlier work is unresolved.", inspect: ["Run recover."] },
+    },
+  };
+  expect(validateTargetEnvelope(envelope, 3, ["example.set"]).findings).toEqual([]);
+  expect(validateTargetEnvelope({ ...envelope, result: { ...envelope.result, outcome: "failed", transactionState: "unknown", effects: { ...envelope.result.effects, uncertain: ["effect.set-state"] } } }, 3, ["example.set"]).findings).toEqual(["TARGET_CAUSE_CORRELATION"]);
+});

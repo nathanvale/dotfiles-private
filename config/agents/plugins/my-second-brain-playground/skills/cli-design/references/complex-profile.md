@@ -7,7 +7,10 @@ Consume it through the public bootstrap or preservation-safe composer.
 ## Layout
 
 ```text
-src/cli.ts
+src/cli.ts                        # one public entry point
+src/commands.ts                   # shared command registration
+src/commands-contract.ts
+src/domains/                      # internal domain modules
 src/command-contract.ts
 src/model.ts
 src/engine.ts
@@ -15,7 +18,8 @@ src/runtime.ts
 src/branch-station-catalog.ts
 src/journal.ts
 src/process-lifecycle.ts
-src/diagnostics.ts                 # only when diagnostics triggers apply
+src/diagnostics.ts                 # selected starter includes XDG diagnostics
+src/diagnostics-custody.ts
 tests/unit/
 tests/integration/
 tests/catalog/
@@ -33,7 +37,8 @@ tests/catalog/
 | diagnostics | bounded private diagnostics and redaction |
 
 Split only when a concern earns an independent seam. Add one command module when
-its body has its own contract. Add a front door only for a distinct CLI domain.
+its body has its own contract. Keep each domain under the existing public entry point. A domain does not gain
+another application CLI.
 
 ## Preview, apply, and recovery
 

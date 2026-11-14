@@ -65,6 +65,8 @@ const CAUSE_RULES = {
 	USAGE_UNKNOWN_COMMAND: cause("usage", "refused", "unchanged", false, "next"),
 	SCHEMA_INVALID_INPUT: cause("schema", "refused", "unchanged", false, "next"),
 	SCHEMA_UNSUPPORTED_CONTRACT: cause("schema", "refused", "unchanged", false, "next"),
+	// Template recovery refuses a new operation while an older intent is unresolved.
+	DOMAIN_PRIOR_RUN_PENDING: cause("domain", "refused", "unchanged", false, "handoff"),
 	DOMAIN_PRECONDITION_UNMET: cause("domain", "refused", "unchanged", false, "next"),
 	DOMAIN_AUTHORITY_REQUIRED: cause("domain", "refused", "unchanged", false, "handoff"),
 	TRANSIENT_NOT_STARTED: cause("transient", "refused", "unchanged", true, "next"),
