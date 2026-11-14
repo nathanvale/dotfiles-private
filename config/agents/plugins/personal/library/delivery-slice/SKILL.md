@@ -81,9 +81,12 @@ Use numbered draft aliases, never invented live issue keys. For each ticket give
 Keep required acceptance and regression evidence inside the product slice that
 introduces or changes the behavior, including its invalid, empty, restart and
 cross-command cases. A verification-only follow-on ticket cannot complete a
-feature's promised acceptance. When an interaction genuinely requires another
-feature, combine the interacting behavior into one usable slice or justify a
-behavior-based prerequisite. An eventual combined check alone is not a start
+feature's promised acceptance. Keep every accepted observable consequence of a
+newly introduced action in that action's slice. Moving one consequence to a
+later product ticket also leaves the introducing slice incomplete. Combine
+interacting behavior when needed to deliver the whole accepted action; only use
+a prerequisite when the consuming action's own complete contract remains intact.
+An eventual joint regression of otherwise complete actions alone is not a start
 blocker.
 
 For each edge, explain what the dependent cannot implement through existing

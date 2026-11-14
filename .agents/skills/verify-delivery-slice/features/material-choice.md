@@ -29,6 +29,11 @@ Preconditions: Launch and Doctor pass; use the private run directory.
 
 ## Gotchas
 
+The sharing handback must not degrade the settled local decomposition. Check
+that a newly introduced archive action proves both accepted list and export
+consequences in its owning slice, with restart checks. A later export product
+ticket does not complete an archive slice that stopped at list-only proof.
+
 Supplied records prove reasoning over an offline input boundary. They do not
 prove live source acceptance or publication. A missing source, failed invocation
 or incomplete transcript is a failure or partial result, not a passing substitute.
