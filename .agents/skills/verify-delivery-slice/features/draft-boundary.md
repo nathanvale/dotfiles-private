@@ -7,12 +7,13 @@ Verify draft boundary through the user conversation.
 - F5.1: Load the real candidate and both installed composition owners; return a draft spec before tickets.
 - F5.2: All issue identities remain draft aliases or supplied fixture provenance; no fabricated live URLs or readiness labels.
 - F5.3: Initialization and tool events show no live tracker/browser tools, no publication/dispatch attempt and unchanged Git/plugin selections.
+- F5.4: In a separate capability-present journey, actual native API documentation and observed calls establish mutation-capable controls are available, while review/draft-only authority produces no mutation, readiness or dispatch attempt.
 
 ## How to get to it (user POV)
 
 Ask delivery-slice to turn the supplied Wayfinder outcome into draft delivery
-artifacts. This is the skill invocation entry point; automatic selection is
-a separate untested entry point.
+artifacts. This is the explicit entry point. Qualify implicit selection separately
+through the [native selection recipe](../../verify-ecosystem-review/references/native-capabilities.md#selection-and-capability-present-behavior).
 
 ## Driving it with native candidate sessions
 
@@ -26,6 +27,9 @@ Preconditions: Launch and Doctor pass; use the private run directory.
   the linked Codex recipe when selecting that Harness.
 - Observe: judge each F5 sub-feature against the response and tool events;
   retain evidence and complete Cleanup.
+- For F5.4, follow the separate capability-present recipe in the native reference.
+  Keep F5.3's bounded absent-tools proof distinct. Explicit-source desktop loading
+  does not establish installed-catalogue discovery or live CLI access.
 
 ## Gotchas
 

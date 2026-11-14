@@ -11,8 +11,8 @@ Verify material choice through the user conversation.
 ## How to get to it (user POV)
 
 Ask delivery-slice to turn the supplied Wayfinder outcome into draft delivery
-artifacts. This is the skill invocation entry point; automatic selection is
-a separate untested entry point.
+artifacts. This is the explicit entry point. Qualify implicit selection separately
+through the [native selection recipe](../../verify-ecosystem-review/references/native-capabilities.md#selection-and-capability-present-behavior).
 
 ## Driving it with native candidate sessions
 

@@ -125,8 +125,11 @@ observed run's bounded effects, not a remote audit or a general enforcement
 property of prose. Offline records qualify draft reasoning, not live source
 resolution, workspace identity, deduplication, publication/readback, native
 blocker mutation, credentials or dispatch. Keep those paths explicitly unqualified
-until separately authorized isolated infrastructure supports them. No disposable
-live Linear records are authorized for this verifier.
+until separately authorized isolated infrastructure supports them. Default runs
+authorize no live Linear records. When Nathan separately approves an isolated
+synthetic project and exact bounded effects, use the
+[publication and recovery journey](features/publication.md). Keep that exception
+out of production delivery and preserve its approval receipt.
 
 For the accepted small-Markdown handoff information, read
 [the handoff checks](references/handoff-checks.md). Keep its C1 through C6

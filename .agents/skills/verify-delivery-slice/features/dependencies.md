@@ -5,14 +5,14 @@ Verify dependencies through the user conversation.
 ## Sub-features
 
 - F2.1: Each build ticket delivers an independently verifiable CLI outcome, not a storage-only or test-only layer.
-- F2.2: Archive and export can proceed independently after the queue foundation unless a concrete behavior requires another edge.
+- F2.2: Each action retains all accepted consequences in its introducing slice; combinations and prerequisites follow demonstrated behavior, while supplied independent work stays independent.
 - F2.3: The coverage table agrees with ticket checks, including restart and empty/invalid states; dependency reasons are explicit, with no transitively redundant edges.
 
 ## How to get to it (user POV)
 
 Ask delivery-slice to turn the supplied Wayfinder outcome into draft delivery
-artifacts. This is the skill invocation entry point; automatic selection is
-a separate untested entry point.
+artifacts. This is the explicit entry point. Qualify implicit selection separately
+through the [native selection recipe](../../verify-ecosystem-review/references/native-capabilities.md#selection-and-capability-present-behavior).
 
 ## Driving it with native candidate sessions
 
@@ -34,7 +34,9 @@ Preconditions: Launch and Doctor pass; use the private run directory.
 
 Keep the audited verification-only follow-on output as a failing negative control.
 Required cross-command acceptance must be owned and proved inside a usable
-product slice, not deferred to a fourth verification ticket. Read the tickets
+product slice, not deferred to a fourth verification ticket or a later product
+ticket. Archive's accepted active-JSON exclusion belongs in the archive slice.
+Read the tickets
 and checks themselves; a complete-looking coverage table does not override them.
 The reading-queue fixture supplies command entry points, not proof that durable
 add/list already works. A later slice using that newly delivered behavior must

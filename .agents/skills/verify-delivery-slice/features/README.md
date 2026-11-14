@@ -1,11 +1,11 @@
 # Delivery-slice verification map
 
 Run each journey in a separate fresh native candidate session using Launch,
-Doctor, Drive, Evidence and Cleanup in [the verifier](../SKILL.md). Use Claude
-Skill invocation with Read/Skill only, or the verifier's native Codex candidate
-recipe with read-only commands and no remote tool use.
+Doctor, Drive, Evidence and Cleanup in [the verifier](../SKILL.md). For offline
+journeys, use Claude Read/Skill only or the native Codex read-only recipe. F6
+instead requires the separately approved foreground tracker boundary below.
 All fixture identities are synthetic. No reading-queue implementation is being
-built, and no live planning record is authoritative in these runs.
+built; synthetic publication does not establish real outcome acceptance.
 
 | Journey | Observed contract |
 | --- | --- |
@@ -14,9 +14,12 @@ built, and no live planning record is authoritative in these runs.
 | [Material choice](material-choice.md) | F3: material fog blocks only affected scope |
 | [Proposal audit](proposal-audit.md) | F4: duplicates, cycles and acceptance gaps repaired |
 | [Draft boundary](draft-boundary.md) | F5: no live publication, readiness or dispatch |
+| [Isolated publication and recovery](publication.md) | F6: separately approved synthetic publication, readback, duplicate lookup and missing-receipt recovery |
 
 Never substitute a prose match for semantic judgment. Report sub-feature IDs
-individually. Live source lookup, publication, readback are separate unqualified boundaries unless separately exercised with authority.
+individually. Live source lookup, publication and readback need their own recorded
+evidence. F6 is gated on explicit run-specific synthetic-record authority and an
+isolated target; it supplies no real delivery or dispatch authority.
 
 The [handoff checks](../references/handoff-checks.md) extend these features into
 an offline combined-candidate loop. They inspect accepted information boundaries;
