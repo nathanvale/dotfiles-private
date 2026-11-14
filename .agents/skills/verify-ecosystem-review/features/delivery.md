@@ -28,8 +28,10 @@ as the bounded supplied-artifact input. Leave live planning records untouched.
 - Observe: The answer connects I to accepted O, draft spec v1 and AC1 through
   AC3, and the proposed T1 through T3 aliases. It preserves their proposed edges.
 - Judge: Spec review is the next human step. The recommendation names
-  delivery-slice and links the accepted outcome, draft spec, constraints and
-  workflow owner. It carries the concrete-task priority and exclusions forward.
+  delivery-slice and links the accepted outcome, draft spec and constraints,
+  with a separate link to the installed delivery-slice `SKILL.md` as workflow
+  owner. Its event stream confirms that linked file exists.
+  It carries the concrete-task priority and exclusions forward.
   It leaves unrelated authentication fog open. Missing receipts are coverage
   gaps rather than proof of absent work. Review remains optional orientation.
 - D4 judge: The handoff preserves source branch revision fixture-r3 separately
