@@ -55,4 +55,15 @@ if ($command eq "debug" && $mode eq "render-variant") {
 	print $text;
 	exit($? >> 8);
 }
+if ($command eq "debug" && $mode eq "render-extra") {
+	open(my $render, "-|", $real, @ARGV) or die "fake codex: render";
+	local $/;
+	my $text = <$render> // "";
+	close $render;
+	my $exit = $? >> 8;
+	my $items = JSON::PP->new->decode($text);
+	$items->[0]{content}[0]{text} .= slurp("$root/permission-entry");
+	print JSON::PP->new->encode($items);
+	exit($exit);
+}
 exec { $real } $real, @ARGV or die "fake codex: real codex";
