@@ -22,8 +22,10 @@ Do not revoke production permissions to manufacture a failure.
 - Observe: E's inaccessible restore proof limits the conclusion. Neither
   conflicting F comment becomes an accepted decision. The answer distinguishes
   the open Pilot choice from F's missing acceptance evidence and C's research.
-- Action: Inspect the normal snapshot's tool inventory and read attempts.
+- Action: Inspect the normal snapshot's actual capability proof and read attempts
+  through [the native route](../references/native-capabilities.md).
 - Observe: If unavailable, the answer names the missing route and unread sources,
+  distinguishes prompt restrictions from absent tools or failed authentication,
   limits saved observations by date, and recommends one next action. It claims
   no live health score, empty backlog, or automatic acceptance.
 

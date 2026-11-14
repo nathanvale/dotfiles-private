@@ -87,9 +87,13 @@ alongside the diff, because `git diff` does not include them. A missing login,
 wrong bytes, or absent skill is a failed readiness check. Repair through the
 native owner, then retry in a fresh session.
 
-Inventory connected read tools inside the fresh session. An unavailable Linear
-connector or browser is an access gap, not evidence of an empty backlog. Do not
-add credentials, clients, or connections to make a journey pass.
+Check the actual offered or discoverable read routes in each fresh session.
+Follow [native capability proof](references/native-capabilities.md). Capture
+supported discovery/read events and failure details. A self-reported list or a
+configured plugin alone is not an independent offered-tool inventory. Record
+which entries are offered, actually tested, restricted by the task, or unknown.
+An unavailable route is not evidence of an empty backlog. Add no credentials,
+clients, connections, or permissions to make a journey pass.
 
 ## Drive
 
@@ -100,9 +104,12 @@ the action, complete event stream, final answer, diagnostics, and exit status:
 cat > "$run_dir/prompt.txt" <<'PROMPT'
 Where are we with the agent ecosystem, and what needs me next?
 Use the candidate ecosystem-review skill from the available skill catalogue.
-Keep this a read-only current snapshot, with no baseline. Use existing connected
-read tools only for remote records. If no read route is available, report the
-access gap and distinguish saved context from live evidence. Do not write files,
+Keep this a read-only current snapshot, with no baseline. Prefer existing
+connected Linear reads; if insufficient, use this Harness's supported native
+browser and existing signed-in personal session through the browser owner.
+Substantiate access limits with offered/discovered capabilities and supported
+read attempts. If no route is available, name its prerequisite and distinguish
+saved context from live evidence. Do not write files,
 save a review, reconnect services, drive Fable or Claude Desktop, or dispatch work.
 State which skill path you loaded.
 PROMPT
@@ -130,7 +137,9 @@ and ask it to identify `$verify-ecosystem-review` and its feature map from the
 catalogue, without launching another run. Require the loaded path to be this
 `.agents/skills/verify-ecosystem-review/SKILL.md`. Claude plugin discovery can be
 checked separately with `claude --plugin-dir "$candidate_root/config/agents/plugins/personal"`.
-Do not report that unrun Harness route as qualified.
+Use [native capability proof](references/native-capabilities.md) for the bounded
+fresh Claude recipe. Keep its tool, quota, and runtime outcomes separate from
+Codex. Do not report an unrun or denied route as qualified.
 
 ## Evidence
 

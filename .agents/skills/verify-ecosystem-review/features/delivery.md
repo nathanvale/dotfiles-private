@@ -8,6 +8,8 @@ publishing tickets, or starting execution.
 - D1: Trace intake, accepted outcome, draft spec checks, and proposed ticket coverage.
 - D2: Keep spec acceptance, publication, execution, merge, and activation distinct.
 - D3: Recommend a source-linked delivery-slice handoff without invoking it.
+- D4: Carry the accepted Markdown handoff information without inventing authority.
+- D5: Hand back missing or conflicting authority without fabricating acceptance.
 
 ## How to get to it (user POV)
 
@@ -30,6 +32,18 @@ as the bounded supplied-artifact input. Leave live planning records untouched.
   workflow owner. It carries the concrete-task priority and exclusions forward.
   It leaves unrelated authentication fog open. Missing receipts are coverage
   gaps rather than proof of absent work. Review remains optional orientation.
+- D4 judge: The handoff preserves source branch revision fixture-r3 separately
+  from spec draft v1, observation time, bounded privacy/exclusions, the supplied
+  Decision O acceptance reference, missing drafting/publication/execution
+  authority and gaps with consequences. It names the next responsible owner.
+  It does not treat the review as a prerequisite for direct accepted-outcome
+  delivery. Validate meaning, not exact headings or a serialized schema.
+- D5 action: In a separate fresh session, replace the supplied path in the D1
+  prompt with `.agents/skills/verify-ecosystem-review/fixtures/handoff-gaps.md`.
+- D5 judge: Return a partial review with the inaccessible acceptance source and
+  conflicting spec claims, their effect on any handoff, and the next owner to
+  recover or resolve them. No accepted outcome, spec approval, live identity or
+  downstream authority is invented. Keep unrelated fog separate.
 - Boundary: Inspect the event stream. No delivery-slice, to-spec or to-tickets
   invocation, Linear write, execution dispatch, or draft generation occurs.
 
@@ -40,3 +54,7 @@ must name that limit rather than invent outcomes. The example aliases are not
 live keys, and proposed dependencies need supporting prerequisite evidence. Grouping alone
 does not establish blockers.
 Offline qualification proves stage interpretation and recommendation only.
+The missing-authority variant is [handoff-gaps.md](../fixtures/handoff-gaps.md).
+The integration owner separately proves direct accepted-outcome delivery and
+combined composition. Exact headings, canonical shared-contract placement and
+deterministic validation remain proposals, not implemented checks.

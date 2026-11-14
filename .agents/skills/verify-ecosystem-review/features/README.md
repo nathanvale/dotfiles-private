@@ -9,7 +9,7 @@ Run Launch and Doctor in [the verifier](../SKILL.md) before a journey.
 | [Current snapshot](snapshot.md) | Resolve canonical owners and cover every outcome in proposed order. |
 | [Evidence interpretation](evidence.md) | Separate Done, accepted, merged, and usable, with real blocker direction. |
 | [Partial access](partial.md) | Disclose inaccessible or conflicting evidence without fabricated health. |
-| [Baseline comparison](comparison.md) | Claim changes only against a named comparison source. |
+| [Baseline comparison](comparison.md) | Use a supplied baseline or explicit dated window without invented history. |
 | [Delivery handoff](delivery.md) | Recognize planning stages and recommend a source-linked handoff without invoking it. |
 
 Capture the user action and resulting briefing in a new native session per

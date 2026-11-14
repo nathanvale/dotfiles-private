@@ -5,6 +5,10 @@ Review date: 2026-11-14. It contains one proposed Now outcome: recover project
 context. There are no supplied records for other outcome horizons. This is an
 illustration, not selection of the real Personal pilot project.
 
+Source branch revision: fixture-r3. Spec draft revision: v1. These are separate
+identities. Synthetic observation time: 2026-11-14T16:45:00+11:00. Authority for
+this request is read-only review; no drafting authority is supplied.
+
 ## Workflow owner
 
 The shared workflow is the "Idea to delivery: how the four skills fit together"
