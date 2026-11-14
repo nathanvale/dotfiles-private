@@ -12,6 +12,7 @@ export interface ExistingCli {
   entryPoint: string;
   entryBytes: Uint8Array;
   commandOwner: string;
+  contractOwner: string;
   packageRoot: string;
   metadataPath: string;
   metadata: Record<string, unknown>;
@@ -61,6 +62,25 @@ function registrationDocument(bytes: Uint8Array): Record<string, unknown> {
   catch { throw unsupportedRegistration(); }
 }
 
+// Admit named imports followed by one explicitly typed array initializer. Bun's
+// parser, rather than a bracket regex, locates its end even inside nested code,
+// comments and strings. Bound the work and hand other declarations to maintenance.
+function registrationArray(source: string): { end: number; contractImport: string } {
+  const header = /^(?:\s|import (?:type )?\{[\w\s,]+\} from ["'][^"'\r\n]+["'];)*export const commands: (?:readonly )?CommandDefinition\[\] = \[/u.exec(source);
+  const contract = /^import type \{\s*CommandDefinition\s*\} from ["'](\.[^"'\r\n]+\.ts)["'];/mu.exec(header?.[0] ?? "");
+  if (header === null || contract?.[1] === undefined || source.length > 65_536) throw unsupportedRegistration();
+  const parser = new Bun.Transpiler({ loader: "ts" });
+  let candidates = 0;
+  for (let end = source.indexOf("]", header[0].length); end !== -1 && candidates < 256; end = source.indexOf("]", end + 1)) {
+    candidates += 1;
+    try {
+      parser.transformSync(source.slice(0, end + 1));
+      return { end, contractImport: contract[1] };
+    } catch { /* This bracket belongs to a nested expression or literal. */ }
+  }
+  throw unsupportedRegistration();
+}
+
 async function readRegistration(owner: string, entryPoint: string, metadataPath: string): Promise<ExistingCli> {
   const originalMetadata = await ordinary(metadataPath);
   const metadata = registrationDocument(originalMetadata);
@@ -68,12 +88,15 @@ async function readRegistration(owner: string, entryPoint: string, metadataPath:
   const commandOwner = resolve(owner, metadata.commandOwner);
   if (!inside(owner, commandOwner)) throw unsupportedRegistration();
   const originalCommands = await ordinary(commandOwner);
+  const declaration = registrationArray(new TextDecoder().decode(originalCommands));
+  const contractOwner = resolve(dirname(commandOwner), declaration.contractImport);
+  if (!inside(owner, contractOwner)) throw unsupportedRegistration();
+  await ordinary(contractOwner);
   const scanner = new Bun.Transpiler({ loader: "ts" });
-  if (!scanner.scan(new TextDecoder().decode(originalCommands)).exports.includes("commands")) throw unsupportedRegistration();
   const entryBytes = await ordinary(entryPoint);
   const imports = scanner.scan(new TextDecoder().decode(entryBytes)).imports;
   if (!imports.some((item) => item.path.startsWith(".") && resolve(dirname(entryPoint), item.path.replace(/\.ts$/, "") + ".ts") === commandOwner)) throw unsupportedRegistration();
-  return { entryPoint, entryBytes, commandOwner, packageRoot: owner, metadataPath, metadata, originalMetadata, originalCommands };
+  return { entryPoint, entryBytes, commandOwner, contractOwner, packageRoot: owner, metadataPath, metadata, originalMetadata, originalCommands };
 }
 
 export async function existingCli(root: string, entries: string[]): Promise<ExistingCli | null> {
@@ -94,7 +117,7 @@ export function extensionFiles(files: TemplateFile[], packagePath: string, exist
   if (existing.metadata.starter === "simple" && starter === "complex") throw new CliIntegrationError("DOMAIN_CLI_PROFILE_CONFLICT", "The selected commands require a complex CLI, but the existing CLI is simple.", "Upgrade the existing CLI's profile and qualify it before adding mutating commands.");
   if (!inside(existing.packageRoot, packagePath)) throw new CliIntegrationError("DOMAIN_EXISTING_CLI_UNSUPPORTED", "The selected module package lies outside the existing CLI's configured ownership scope.", "Integrate through the existing CLI package or its declared workspace interface before retrying.");
   const directory = `src/domains/composed-${starter}`;
-  const sharedOwner = join(dirname(existing.commandOwner), "commands-contract.ts");
+  const sharedOwner = existing.contractOwner;
   return files.filter((file) => file.relativePath.startsWith("src/") && !["src/cli.ts", "src/commands-contract.ts", "src/process-lifecycle.ts", "src/diagnostics.ts", "src/diagnostics-custody.ts"].includes(file.relativePath)).map((file) => {
     const relativePath = `${directory}/${file.relativePath.slice(4)}`;
     const parent = dirname(join(packagePath, relativePath));
@@ -153,7 +176,35 @@ export function extendRegistration(existing: ExistingCli, packagePath: string, s
   let route = relative(dirname(existing.commandOwner), imported).split("\\").join("/");
   if (!route.startsWith(".")) route = `./${route}`;
   const binding = starter === "complex" ? "composedComplexCommands" : "composedSimpleCommands";
-  return new TextEncoder().encode(`${new TextDecoder().decode(existing.originalCommands)}\nimport { commands as ${binding} } from ${JSON.stringify(route)};\ncommands.push(...${binding});\n`);
+  const source = new TextDecoder().decode(existing.originalCommands);
+  const { end } = registrationArray(source);
+  const importedSource = `import { commands as ${binding} } from ${JSON.stringify(route)};\n`;
+  const append = (separator: string) => `${importedSource}${source.slice(0, end).trimEnd()}\n${separator}  ...${binding},\n${source.slice(end)}`;
+  const parser = new Bun.Transpiler({ loader: "ts" });
+  try {
+    const extended = append("");
+    parser.transformSync(extended);
+    return new TextEncoder().encode(extended);
+  } catch {
+    const extended = append(",");
+    try { parser.transformSync(extended); }
+    catch { throw unsupportedRegistration(); }
+    return new TextEncoder().encode(extended);
+  }
+}
+
+export async function checkStagedCompilation(stage: string, projectRoot: string, existing: ExistingCli): Promise<void> {
+  const packageRoot = join(stage, relative(projectRoot, existing.packageRoot));
+  const config = join(packageRoot, "tsconfig.json");
+  await ordinary(config);
+  // Resolve only a local compiler installed in the isolated stage. Never run an
+  // arbitrary host script, whose typecheck name could hide repository effects.
+  const compiler = Bun.which("tsc", { PATH: [join(packageRoot, "node_modules/.bin"), join(stage, "node_modules/.bin")].join(":") });
+  if (compiler === null) throw new CliIntegrationError("DOMAIN_EXISTING_CLI_UNSUPPORTED", "The existing CLI has no local compiler for staged validation.", "Install its local TypeScript compiler and provide a package tsconfig.json, or integrate through cli-design maintenance.");
+  const child = Bun.spawnSync([compiler, "--noEmit", "--noCheck", "false", "--incremental", "false", "--composite", "false", "--listFiles", "-p", config], { cwd: packageRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const checkedFiles = new Set(child.stdout.toString().split(/\r?\n/u).map((path) => resolve(packageRoot, path)));
+  const requiredFiles = [existing.entryPoint, existing.commandOwner].map((path) => join(stage, relative(projectRoot, path)));
+  if (child.exitCode !== 0 || !requiredFiles.every((path) => checkedFiles.has(path))) throw new CliIntegrationError("DOMAIN_EXISTING_CLI_UNSUPPORTED", "The composed CLI does not pass its staged TypeScript check.", "Reconcile the selected commands with the host types and compiler configuration through cli-design maintenance before retrying.");
 }
 
 export function discoverCommands(root: string, entryPoint: string): { identities: string[]; routes: string[] } {

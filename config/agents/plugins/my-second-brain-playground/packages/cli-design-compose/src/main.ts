@@ -1,4 +1,4 @@
-import { CliIntegrationError, discoverCommands, existingCli, extendRegistration, extendBoundaryOwner, extensionFiles, inventoryClis, type ExistingCli, type TemplateFile } from "./repository-cli.ts";
+import { CliIntegrationError, checkStagedCompilation, discoverCommands, existingCli, extendRegistration, extendBoundaryOwner, extensionFiles, inventoryClis, type ExistingCli, type TemplateFile } from "./repository-cli.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
@@ -17,7 +17,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-const TEMPLATE_REVISION = "f035455f2cac8e283aedd72c27c960b1e62b829c";
+const TEMPLATE_REVISION = "fc5f27169dce5603753c9f3c6a54bc1656e57f3f";
 const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
@@ -559,6 +559,7 @@ async function regenerateLock(
       );
     }
     if (existing !== null) {
+      await checkStagedCompilation(stage, options.projectRoot, existing);
       const before = discoverCommands(options.projectRoot, existing.entryPoint);
       const after = discoverCommands(stage, join(stage, relative(options.projectRoot, existing.entryPoint)));
       if (!before.identities.every((identity) => after.identities.includes(identity)) || !before.routes.every((route) => after.routes.includes(route)) || after.identities.length <= before.identities.length) throw new CliIntegrationError("DOMAIN_CLI_DISCOVERY_INVALID", "Composition did not preserve existing commands and expose the added commands.", "Repair the existing registration owner before retrying.");

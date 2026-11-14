@@ -35,7 +35,7 @@ const TEMPLATE_ROOT = resolve(
 );
 // Independent oracle: this test-owned revision must not be imported from the
 // composer, so a changed production pin makes the public composition checks RED.
-const TEMPLATE_REVISION = "f035455f2cac8e283aedd72c27c960b1e62b829c";
+const TEMPLATE_REVISION = "fc5f27169dce5603753c9f3c6a54bc1656e57f3f";
 const DEFAULT_SOURCE_PACKET = "https://example.test/vault/projects/example/";
 const CONCURRENT_WORKSPACE_MANIFEST =
   '{"name":"concurrent","private":true,"dependencies":{"zod":"4.4.3"}}\n';
@@ -200,10 +200,18 @@ async function transactionArtifacts(root: string): Promise<string[]> {
 async function templateFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "cli-compose-template-fixture-"));
   roots.push(root);
-  const inventory = Bun.spawnSync(["git", "-C", TEMPLATE_ROOT, "show", `${TEMPLATE_REVISION}:src/cli-inventory.ts`], { stdout: "pipe", stderr: "pipe" });
-  expect(inventory.exitCode).toBe(0);
+  // These transaction fixtures start without a CLI. Inventory correctness is
+  // proved separately by the real pinned-template process tests.
   const files = {
-    "src/cli-inventory.ts": inventory.stdout.toString(),
+    "src/cli-inventory.ts": `import { join } from "node:path";
+export async function inventoryApplicationClis(root: string) {
+  const entries: string[] = [];
+  for (const directory of [".", "packages/tool"]) {
+    if (await Bun.file(join(root, directory, ".cli-design-template.json")).exists()) entries.push(join(directory, "src/cli.ts"));
+  }
+  return entries;
+}
+`,
     "starters/simple/src/cli.ts": FIXTURE_SIMPLE_CLI,
     "starters/complex/src/cli.ts": FIXTURE_COMPLEX_CLI,
     "starters/complex/tests/catalog/catalog.test.ts": 'import { test } from "bun:test";\ntest("fixture", () => {});\n',
@@ -405,12 +413,28 @@ function runHost(project: ProjectFixture, entryPoint: string, args: string[]) {
   return { exitCode: child.exitCode, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
 }
 
+async function installHostCompiler(project: ProjectFixture): Promise<void> {
+  const manifestPath = join(project.root, "package.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.devDependencies.typescript = "7.0.2";
+  await writeFile(manifestPath, JSON.stringify(manifest) + "\n");
+  await writeFile(join(project.packageRoot, "tsconfig.json"), JSON.stringify({
+    compilerOptions: { target: "ESNext", module: "Preserve", moduleResolution: "Bundler", strict: true, noEmit: true, allowImportingTsExtensions: true, skipLibCheck: true, types: ["bun"] },
+    include: ["src/**/*.ts", "bin/**/*.ts"],
+  }) + "\n");
+}
+
+function compileHost(project: ProjectFixture) {
+  return Bun.spawnSync([join(project.root, "node_modules/.bin/tsc"), "--noEmit", "-p", join(project.packageRoot, "tsconfig.json")], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+}
+
 async function realHost(starter: "simple" | "complex", workspace = false): Promise<ProjectFixture> {
   const project = await fixture(workspace);
   const created = invoke(project.root, project.packagePath, starter);
   expect(created, created.stdout + created.stderr).toMatchObject({ exitCode: 0, stderr: "" });
   expect(JSON.parse(created.stdout)).toMatchObject({ integration: "created", entryPoint: workspace ? "packages/tool/src/cli.ts" : "src/cli.ts" });
-  const installed = Bun.spawnSync([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
+  await installHostCompiler(project);
+  const installed = Bun.spawnSync([process.execPath, "install", "--ignore-scripts"], { cwd: project.root, stdout: "pipe", stderr: "pipe" });
   expect(installed.exitCode, installed.stderr.toString()).toBe(0);
   return project;
 }
@@ -545,6 +569,81 @@ for (const starter of ["simple", "complex"] as const) {
     expect(JSON.parse(inventory.stdout.toString()).entries).toEqual([starter === "complex" ? "packages/tool/bin/home.ts" : "bin/home.ts"]);
     const composedTests = Bun.spawnSync([process.execPath, "test", `tests/integration/composed-${starter}.test.ts`], { cwd: project.packageRoot, stdout: "pipe", stderr: "pipe" });
     expect(composedTests.exitCode, composedTests.stderr.toString()).toBe(0);
+  }, 60_000);
+}
+
+for (const shape of ["readonly", "cached", "relocated"] as const) {
+  templateTest(`extends ${shape} registration with compiled old and new dispatch`, async () => {
+    const project = await realHost("simple");
+    await moveHostCli(project);
+    const owner = join(project.root, "src/commands.ts");
+    if (shape === "readonly") await writeFile(owner, (await readFile(owner, "utf8")).replace("commands: CommandDefinition[]", "commands: readonly CommandDefinition[]"));
+    if (shape === "cached") {
+      await writeFile(owner, (await readFile(owner, "utf8")) + 'export const byRoute = new Map(commands.map(command => [command.route.join(" "), command]));\n');
+      const entry = join(project.root, "bin/home.ts");
+      const source = (await readFile(entry, "utf8")).replace("import { commands }", "import { commands, byRoute }");
+      const start = source.indexOf("  const selected = commands.find(");
+      const end = source.indexOf("  if (selected !==", start);
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start);
+      await writeFile(entry, source.slice(0, start) + '  const selected = byRoute.get(args.join(" "));\n' + source.slice(end));
+    }
+    if (shape === "relocated") {
+      await mkdir(join(project.root, "src/contracts"));
+      await rename(join(project.root, "src/commands-contract.ts"), join(project.root, "src/contracts/types.ts"));
+      for (const path of [owner, join(project.root, "bin/home.ts"), join(project.root, "src/domains/result.ts")]) {
+        const source = await readFile(path, "utf8");
+        await writeFile(path, source.replaceAll("/commands-contract.ts", "/contracts/types.ts"));
+      }
+    }
+    const beforeCompile = compileHost(project);
+    expect(beforeCompile.exitCode, beforeCompile.stdout.toString() + beforeCompile.stderr.toString()).toBe(0);
+    const entryBytes = await readFile(join(project.root, "bin/home.ts"));
+    const before = runHost(project, "bin/home.ts", ["ping", "--json"]);
+    expect(before).toMatchObject({ exitCode: 0, stderr: "" });
+    const result = invoke(project.root, ".", "simple");
+    expect(result, result.stdout + result.stderr).toMatchObject({ exitCode: 0, stderr: "" });
+    const compiled = compileHost(project);
+    expect(compiled.exitCode, compiled.stdout.toString() + compiled.stderr.toString()).toBe(0);
+    expect(await readFile(join(project.root, "bin/home.ts"))).toEqual(entryBytes);
+    for (const [args, identity, data] of [
+      [["ping"], "host.ping", { reply: "pong" }],
+      [["status"], "example.status", { ready: true }],
+    ] as const) {
+      const actual = runHost(project, "bin/home.ts", [...args, "--json"]);
+      expect(actual).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(actual.stdout)).toMatchObject({ result: { commandIdentity: identity, data, outcome: "success" } });
+    }
+  }, 60_000);
+}
+
+for (const shape of ["unsupported-initializer", "incompatible-contract", "missing-compiler"] as const) {
+  templateTest(`refuses ${shape} registration before changing any host bytes`, async () => {
+    const project = await realHost("simple");
+    await moveHostCli(project);
+    const owner = join(project.root, "src/commands.ts");
+    if (shape === "unsupported-initializer") await writeFile(owner, (await readFile(owner, "utf8")).replace("= [{", "= Array.from([{").replace("}];", "}]);"));
+    if (shape === "incompatible-contract") {
+      const contract = join(project.root, "src/commands-contract.ts");
+      const source = await readFile(contract, "utf8");
+      expect(source).toContain("interface CommandDefinition {");
+      await writeFile(contract, source.replace("interface CommandDefinition {", "interface CommandDefinition {\n  hostRequired: string;"));
+      await writeFile(owner, (await readFile(owner, "utf8")).replace('commandIdentity: "host.ping",', 'hostRequired: "owned", commandIdentity: "host.ping",'));
+      expect(compileHost(project).exitCode).toBe(0);
+    }
+    if (shape === "missing-compiler") {
+      const manifestPath = join(project.root, "package.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      delete manifest.devDependencies.typescript;
+      await writeFile(manifestPath, JSON.stringify(manifest) + "\n");
+      expect(Bun.spawnSync([process.execPath, "install", "--ignore-scripts"], { cwd: project.root, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+    }
+    const before = await snapshotTree(project.root);
+    const result = invoke(project.root, ".", "simple");
+    expect(result, result.stdout + result.stderr).toMatchObject({ exitCode: 3, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ causeCode: "DOMAIN_EXISTING_CLI_UNSUPPORTED" });
+    expect(JSON.parse(result.stdout).repairAction.length).toBeGreaterThan(0);
+    expect(await snapshotTree(project.root)).toEqual(before);
   }, 60_000);
 }
 
