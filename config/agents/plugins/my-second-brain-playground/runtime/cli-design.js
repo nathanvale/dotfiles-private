@@ -18,8 +18,12 @@ function record(value) {
     throw new CliIntegrationError("DOMAIN_CLI_DISCOVERY_INVALID", "The CLI did not expose a supported command declaration.", "Repair its help, discovery and registration owner before extending it.");
   return value;
 }
+function sourceParser(options) {
+  const safeOptions = { ...options, macro: false };
+  return new Bun.Transpiler(safeOptions);
+}
 function inventoryClis(source, root) {
-  const javascript = new Bun.Transpiler({ loader: "ts", target: "bun" }).transformSync(source);
+  const javascript = sourceParser({ loader: "ts", target: "bun" }).transformSync(source);
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`;
   const script = `const { inventoryApplicationClis } = await import(${JSON.stringify(moduleUrl)}); process.stdout.write(JSON.stringify(await inventoryApplicationClis(${JSON.stringify(root)})));`;
   const child = Bun.spawnSync([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -57,7 +61,7 @@ function registrationArray(source) {
   const contract = /^import type \{\s*CommandDefinition\s*\} from ["'](\.[^"'\r\n]+\.ts)["'];/mu.exec(header?.[0] ?? "");
   if (header === null || contract?.[1] === undefined || source.length > 65536)
     throw unsupportedRegistration();
-  const parser = new Bun.Transpiler({ loader: "ts" });
+  const parser = sourceParser({ loader: "ts" });
   let candidates = 0;
   for (let end = source.indexOf("]", header[0].length);end !== -1 && candidates < 256; end = source.indexOf("]", end + 1)) {
     candidates += 1;
@@ -82,9 +86,14 @@ async function readRegistration(owner, entryPoint, metadataPath) {
   if (!inside(owner, contractOwner))
     throw unsupportedRegistration();
   await ordinary(contractOwner);
-  const scanner = new Bun.Transpiler({ loader: "ts" });
+  const scanner = sourceParser({ loader: "ts" });
   const entryBytes = await ordinary(entryPoint);
-  const imports = scanner.scan(new TextDecoder().decode(entryBytes)).imports;
+  let imports;
+  try {
+    imports = scanner.scan(new TextDecoder().decode(entryBytes)).imports;
+  } catch {
+    throw unsupportedRegistration();
+  }
   if (!imports.some((item) => item.path.startsWith(".") && resolve(dirname(entryPoint), item.path.replace(/\.ts$/, "") + ".ts") === commandOwner))
     throw unsupportedRegistration();
   return { entryPoint, entryBytes, commandOwner, contractOwner, packageRoot: owner, metadataPath, metadata, originalMetadata, originalCommands };
@@ -193,7 +202,7 @@ function extendRegistration(existing, packagePath, starter) {
   const append = (separator) => `${importedSource}${source.slice(0, end).trimEnd()}
 ${separator}  ...${binding},
 ${source.slice(end)}`;
-  const parser = new Bun.Transpiler({ loader: "ts" });
+  const parser = sourceParser({ loader: "ts" });
   try {
     const extended = append("");
     parser.transformSync(extended);
@@ -270,7 +279,7 @@ import {
 import { homedir, tmpdir } from "os";
 import { dirname as dirname2, isAbsolute as isAbsolute2, join as join2, parse, relative as relative2, resolve as resolve2 } from "path";
 import { parseArgs } from "util";
-var TEMPLATE_REVISION = "fc5f27169dce5603753c9f3c6a54bc1656e57f3f";
+var TEMPLATE_REVISION = "000b6f16317b226ef75eae061c48ac7c83ba37b6";
 var TEMPLATE_ROOT = resolve2(process.env.BUN_TYPESCRIPT_TEMPLATE_ROOT ?? join2(homedir(), "code", "bun-typescript-template"));
 var COMPLEX_DEPENDENCIES = {
   "@logtape/logtape": "2.4.2",

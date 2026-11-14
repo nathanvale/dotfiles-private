@@ -31,8 +31,16 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function sourceParser(options: Bun.TranspilerOptions): Bun.Transpiler {
+  // Bun 1.4 accepts macro:false, but its bundled type declarations only expose
+  // the macro map. Keep other options checked while disabling effects in both
+  // scan and transform passes over repository source.
+  const safeOptions: Record<string, unknown> = { ...options, macro: false };
+  return new Bun.Transpiler(safeOptions);
+}
+
 export function inventoryClis(source: string, root: string): string[] {
-  const javascript = new Bun.Transpiler({ loader: "ts", target: "bun" }).transformSync(source);
+  const javascript = sourceParser({ loader: "ts", target: "bun" }).transformSync(source);
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`;
   const script = `const { inventoryApplicationClis } = await import(${JSON.stringify(moduleUrl)}); process.stdout.write(JSON.stringify(await inventoryApplicationClis(${JSON.stringify(root)})));`;
   const child = Bun.spawnSync([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -69,7 +77,7 @@ function registrationArray(source: string): { end: number; contractImport: strin
   const header = /^(?:\s|import (?:type )?\{[\w\s,]+\} from ["'][^"'\r\n]+["'];)*export const commands: (?:readonly )?CommandDefinition\[\] = \[/u.exec(source);
   const contract = /^import type \{\s*CommandDefinition\s*\} from ["'](\.[^"'\r\n]+\.ts)["'];/mu.exec(header?.[0] ?? "");
   if (header === null || contract?.[1] === undefined || source.length > 65_536) throw unsupportedRegistration();
-  const parser = new Bun.Transpiler({ loader: "ts" });
+  const parser = sourceParser({ loader: "ts" });
   let candidates = 0;
   for (let end = source.indexOf("]", header[0].length); end !== -1 && candidates < 256; end = source.indexOf("]", end + 1)) {
     candidates += 1;
@@ -92,9 +100,11 @@ async function readRegistration(owner: string, entryPoint: string, metadataPath:
   const contractOwner = resolve(dirname(commandOwner), declaration.contractImport);
   if (!inside(owner, contractOwner)) throw unsupportedRegistration();
   await ordinary(contractOwner);
-  const scanner = new Bun.Transpiler({ loader: "ts" });
+  const scanner = sourceParser({ loader: "ts" });
   const entryBytes = await ordinary(entryPoint);
-  const imports = scanner.scan(new TextDecoder().decode(entryBytes)).imports;
+  let imports: ReturnType<Bun.Transpiler["scan"]>["imports"];
+  try { imports = scanner.scan(new TextDecoder().decode(entryBytes)).imports; }
+  catch { throw unsupportedRegistration(); }
   if (!imports.some((item) => item.path.startsWith(".") && resolve(dirname(entryPoint), item.path.replace(/\.ts$/, "") + ".ts") === commandOwner)) throw unsupportedRegistration();
   return { entryPoint, entryBytes, commandOwner, contractOwner, packageRoot: owner, metadataPath, metadata, originalMetadata, originalCommands };
 }
@@ -180,7 +190,7 @@ export function extendRegistration(existing: ExistingCli, packagePath: string, s
   const { end } = registrationArray(source);
   const importedSource = `import { commands as ${binding} } from ${JSON.stringify(route)};\n`;
   const append = (separator: string) => `${importedSource}${source.slice(0, end).trimEnd()}\n${separator}  ...${binding},\n${source.slice(end)}`;
-  const parser = new Bun.Transpiler({ loader: "ts" });
+  const parser = sourceParser({ loader: "ts" });
   try {
     const extended = append("");
     parser.transformSync(extended);

@@ -35,7 +35,7 @@ const TEMPLATE_ROOT = resolve(
 );
 // Independent oracle: this test-owned revision must not be imported from the
 // composer, so a changed production pin makes the public composition checks RED.
-const TEMPLATE_REVISION = "fc5f27169dce5603753c9f3c6a54bc1656e57f3f";
+const TEMPLATE_REVISION = "000b6f16317b226ef75eae061c48ac7c83ba37b6";
 const DEFAULT_SOURCE_PACKET = "https://example.test/vault/projects/example/";
 const CONCURRENT_WORKSPACE_MANIFEST =
   '{"name":"concurrent","private":true,"dependencies":{"zod":"4.4.3"}}\n';
@@ -669,6 +669,36 @@ for (const scenario of ["multiple", "collision", "prefix", "unsupported", "profi
     expect(JSON.parse(result.stdout).repairAction.length).toBeGreaterThan(0);
     expect(await snapshotTree(project.root)).toEqual(before);
   }, 60_000);
+}
+
+for (const location of ["registration", "entry-legacy", "entry-attribute"] as const) {
+test(`refuses macro ${location} without executing it or changing host bytes`, async () => {
+  const project = await fixture(false);
+  const marker = join(project.root, "macro-effect.txt");
+  const macro = join(project.root, "macro.ts");
+  await writeFile(macro, `import { writeFileSync } from "node:fs";
+export function identity() { writeFileSync(${JSON.stringify(marker)}, "inspection executed a macro"); return "host.ping"; }
+`);
+  await mkdir(join(project.root, "src"));
+  await writeFile(join(project.root, "src/commands-contract.ts"), "export interface CommandDefinition { commandIdentity: string }\n");
+  await writeFile(join(project.root, "src/commands.ts"), `import type { CommandDefinition } from "./commands-contract.ts";
+import { identity } from ${JSON.stringify(`macro:${macro}`)};
+export const commands: CommandDefinition[] = [{ commandIdentity: identity() }];
+`);
+  await writeFile(join(project.root, "src/cli.ts"), 'import { commands } from "./commands.ts";\nexport { commands };\n');
+  await writeFile(join(project.root, ".cli-design-template.json"), JSON.stringify({ registrationVersion: 1, entryPoint: "src/cli.ts", commandOwner: "src/commands.ts" }));
+  if (location !== "registration") {
+    await writeFile(join(project.root, "src/commands.ts"), 'import type { CommandDefinition } from "./commands-contract.ts";\nexport const commands: CommandDefinition[] = [{ commandIdentity: "host.ping" }];\n');
+    const imported = location === "entry-legacy" ? `${JSON.stringify(`macro:${macro}`)};` : `${JSON.stringify(macro)} with { type: "macro" };`;
+    await writeFile(join(project.root, "src/cli.ts"), `import { commands } from "./commands.ts";\nimport { identity } from ${imported}\nexport const name = identity();\nexport { commands };\n`);
+  }
+  const before = await snapshotTree(project.root);
+  const result = invokeFixture(project, "simple");
+  expect(await Bun.file(marker).exists()).toBe(false);
+  expect(result, result.stdout + result.stderr).toMatchObject({ exitCode: 3, stderr: "" });
+  expect(JSON.parse(result.stdout)).toMatchObject({ causeCode: "DOMAIN_EXISTING_CLI_UNSUPPORTED", status: "refused" });
+  expect(await snapshotTree(project.root)).toEqual(before);
+});
 }
 
 test("composes the simple starter into a single package and preserves host owners", async () => {
