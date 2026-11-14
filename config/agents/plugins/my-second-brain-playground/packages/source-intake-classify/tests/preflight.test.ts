@@ -2,7 +2,7 @@
 // this run cannot prove the lane denies both receipt roots. The weakened double is a fake codex whose sandbox runs
 // every probe unsandboxed, and, at module level, a profile with the explicit denies removed and read on the root.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { type Lane, laneConfigArgs, prepareLane } from "../src/lane.ts"
 import { runPreflight } from "../src/preflight.ts"
@@ -91,6 +91,33 @@ proofs.test("a rendered permission entry in an unrecognised format is refused", 
 	setFake(fixture, "render-variant")
 	expectRefusedWithoutModel(["classify"])
 }, 60_000)
+
+// Independent permission fixtures: unknown or broader helper access must never reach model execution.
+for (const [name, suffix, link] of [
+	["another denied subtree", "other/codex-arg0ABC123", false],
+	["the whole temporary directory", "tmp", false],
+	["the helper parent", "tmp/arg0-macos", false],
+	["a misleading helper sibling", "tmp/arg0-macos-extra/codex-arg0ABC123", false],
+	["a helper name with a traversal", "tmp/arg0-macos/../codex-arg0ABC123", false],
+	["a helper child symlink", "tmp/arg0/codex-arg0ABC123", true],
+	["a helper parent symlink", "tmp/arg0/codex-arg0ABC123", "parent"],
+] as const) {
+	proofs.test(`rendered read of ${name} refuses without starting the model`, () => {
+		const home = join(fixture.privateRoot, "source-intake-classify", "codex-home")
+		const path = `${home}/${suffix}`
+		const legacy = join(home, "tmp", "arg0")
+		mkdirSync(join(home, "tmp"), { recursive: true })
+		if (link === "parent") symlinkSync(fixture.privateRoot, legacy)
+		else if (link) {
+			mkdirSync(legacy, { recursive: true })
+			symlinkSync(fixture.privateRoot, path)
+		}
+		setFake(fixture, "render-extra")
+		writeFileSync(join(fixture.fakeRoot, "permission-entry"), `<entry access="read"><path>${path}</path></entry>`)
+		try { expectRefusedWithoutModel(["classify"]) }
+		finally { if (link) rmSync(legacy, { recursive: true, force: true }) }
+	}, 60_000)
+}
 
 // Independent oracle: the opaque item ref shape restated from the source-intake-dispatch README.
 const OPAQUE_ITEM_REF_SHAPE = /^[a-z0-9][a-z0-9-]{0,63}$/
@@ -245,4 +272,4 @@ describe("module-level pre-flight", () => {
 	}, 60_000)
 })
 
-proofs.pin(14)
+proofs.pin(21)

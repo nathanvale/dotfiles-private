@@ -1,3 +1,4 @@
+import { CliIntegrationError, checkStagedCompilation, discoverCommands, existingCli, extendRegistration, extendBoundaryOwner, extensionFiles, inventoryClis, type ExistingCli, type TemplateFile } from "./repository-cli.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
@@ -16,14 +17,14 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-const TEMPLATE_REVISION = "7f6d95017e051c23e978f5d7f7542732b799dfdc";
+const TEMPLATE_REVISION = "fc5f27169dce5603753c9f3c6a54bc1656e57f3f";
 const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
 );
 const COMPLEX_DEPENDENCIES = {
-  "@logtape/logtape": "2.3.1",
-  "@logtape/redaction": "2.3.1",
+  "@logtape/logtape": "2.4.2",
+  "@logtape/redaction": "2.4.2",
   zod: "4.4.3",
 } as const;
 const COMPOSE_SCRIPT = "bun run src/cli.ts";
@@ -39,10 +40,7 @@ interface ComposeOptions {
   starter: Starter;
 }
 
-interface PlannedFile {
-  bytes: Uint8Array;
-  relativePath: string;
-}
+type PlannedFile = TemplateFile;
 
 export interface FileSystemAdapter {
   copyTree(source: string, destination: string, filter: (source: string) => boolean): Promise<void>;
@@ -355,10 +353,9 @@ function git(...args: string[]): string {
 function templateFiles(starter: Starter): PlannedFile[] {
   git("cat-file", "-e", `${TEMPLATE_REVISION}^{commit}`);
   const prefix = `starters/${starter}/`;
-  const paths = git("ls-tree", "-r", "--name-only", TEMPLATE_REVISION, "--", prefix)
-    .trim()
-    .split("\n")
-    .filter((path) => path.startsWith(`${prefix}src/`) || path.startsWith(`${prefix}tests/`));
+  const sharedPrefix = "starters/shared/";
+  const paths = [prefix, sharedPrefix].flatMap((sourcePrefix) => git("ls-tree", "-r", "--name-only", TEMPLATE_REVISION, "--", sourcePrefix)
+    .trim().split("\n").filter((path) => path.startsWith(`${sourcePrefix}src/`) || path.startsWith(`${sourcePrefix}tests/`)));
   if (paths.length === 0) {
     throw new ComposeError(
       "INTERNAL_TEMPLATE_SOURCE_MISSING",
@@ -380,7 +377,7 @@ function templateFiles(starter: Starter): PlannedFile[] {
         "Repair the canonical template revision before retrying.",
       );
     }
-    return { bytes: result.stdout, relativePath: path.slice(prefix.length) };
+    return { bytes: result.stdout, relativePath: path.slice(path.startsWith(sharedPrefix) ? sharedPrefix.length : prefix.length) };
   });
 }
 
@@ -489,10 +486,10 @@ function addComposeScript(packageJson: Record<string, unknown>): void {
   packageJson.scripts = scripts;
 }
 
-async function updatedPackage(path: string, starter: Starter): Promise<Uint8Array> {
+async function updatedPackage(path: string, starter: Starter, reuseExisting = false): Promise<Uint8Array> {
   const parsed = await readManifest(path, "target package.json");
   addExactDependencies(parsed, starter);
-  addComposeScript(parsed);
+  if (!reuseExisting) addComposeScript(parsed);
   return new TextEncoder().encode(`${JSON.stringify(parsed, null, 2)}\n`);
 }
 
@@ -502,6 +499,7 @@ function ignoredStagePath(source: string): boolean {
     name === ".git" ||
     name === "node_modules" ||
     name === ".fallow" ||
+    name === ".worktrees" ||
     name === PROJECT_LOCK
   );
 }
@@ -533,6 +531,9 @@ export async function stageProject(
 async function regenerateLock(
   options: ComposeOptions,
   updatedManifest: Uint8Array,
+  creations: Creation[] = [],
+  replacements: Replacement[] = [],
+  existing: ExistingCli | null = null,
 ): Promise<Uint8Array> {
   const stage = await stageProject(options.projectRoot);
   let lock: Uint8Array | undefined;
@@ -540,8 +541,13 @@ async function regenerateLock(
   try {
     const stagePackage = resolve(stage, options.packagePath, "package.json");
     await writeFile(stagePackage, updatedManifest);
+    for (const file of [...creations, ...replacements]) {
+      const target = join(stage, relative(options.projectRoot, file.path));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, file.bytes);
+    }
     const result = Bun.spawnSync(
-      [process.execPath, "install", "--lockfile-only", "--ignore-scripts"],
+      [process.execPath, "install", ...(existing === null ? ["--lockfile-only"] : []), "--ignore-scripts"],
       { cwd: stage, stderr: "pipe", stdout: "pipe" },
     );
     if (result.exitCode !== 0) {
@@ -551,6 +557,12 @@ async function regenerateLock(
         3,
         "Repair the workspace or dependency constraints, then retry.",
       );
+    }
+    if (existing !== null) {
+      await checkStagedCompilation(stage, options.projectRoot, existing);
+      const before = discoverCommands(options.projectRoot, existing.entryPoint);
+      const after = discoverCommands(stage, join(stage, relative(options.projectRoot, existing.entryPoint)));
+      if (!before.identities.every((identity) => after.identities.includes(identity)) || !before.routes.every((route) => after.routes.includes(route)) || after.identities.length <= before.identities.length) throw new CliIntegrationError("DOMAIN_CLI_DISCOVERY_INVALID", "Composition did not preserve existing commands and expose the added commands.", "Repair the existing registration owner before retrying.");
     }
     lock = await readFile(join(stage, "bun.lock"));
   } catch (error) {
@@ -965,6 +977,7 @@ async function rollbackPublication(
 }
 
 function publicationError(error: unknown, unresolved: string[]): ComposeError {
+  if (error instanceof CliIntegrationError) error = new ComposeError(error.causeCode, error.message, 3, error.repairAction);
   const inherited = error instanceof ComposeError ? error.unresolvedEffects : [];
   const issue =
     error instanceof TransactionIssue
@@ -1119,6 +1132,26 @@ export async function withProjectLock<T>(
   return result as T;
 }
 
+async function verifyPublishedCli(projectRoot: string, source: string, current: ExistingCli | null): Promise<void> {
+  if (current !== null && !sameBytes(await readFile(current.entryPoint), current.entryBytes)) throw new ComposeError("DOMAIN_CONCURRENT_CHANGE", "The existing CLI entry point changed during composition.", 3, "Inspect the concurrent edit and retry from the new state.");
+  const entries = inventoryClis(source, projectRoot);
+  const originalPreserved = current === null || resolve(projectRoot, entries[0] ?? "") === current.entryPoint;
+  if (entries.length !== 1 || !originalPreserved) throw new CliIntegrationError("DOMAIN_MULTIPLE_APPLICATION_CLIS", "Composition would expose a second application CLI.", "Preserve one existing entry point and reconcile the conflict before retrying.");
+}
+
+async function validateIntegrationPaths(projectRoot: string, packagePath: string, sources: PlannedFile[], metadataPath: string, currentCli: ExistingCli | null): Promise<void> {
+  for (const source of sources) {
+    const target = join(packagePath, source.relativePath);
+    await refuseSymlinkPath(packagePath, target, false);
+    await requireAbsent(target);
+  }
+  if (currentCli === null) await requireAbsent(metadataPath);
+  else {
+    await refuseSymlinkPath(projectRoot, currentCli.commandOwner, false);
+    await refuseSymlinkPath(projectRoot, metadataPath, false);
+  }
+}
+
 async function composeLocked(options: ComposeOptions) {
   const { packagePath } = await resolveOwners(options);
   const packageFile = join(packagePath, "package.json");
@@ -1126,17 +1159,26 @@ async function composeLocked(options: ComposeOptions) {
   const lockInputs = await snapshotLockInputs(options.projectRoot);
   const originalPackage = snapshotBytes(lockInputs, packageFile);
   const originalLock = snapshotBytes(lockInputs, lockFile);
-  const sources = templateFiles(options.starter);
-  const metadataPath = join(packagePath, ".cli-design-template.json");
-  for (const source of sources) {
-    const target = join(packagePath, source.relativePath);
-    await refuseSymlinkPath(packagePath, target, false);
-    await requireAbsent(target);
+  const inventorySource = git("show", `${TEMPLATE_REVISION}:src/cli-inventory.ts`);
+  const entryPoints = inventoryClis(inventorySource, options.projectRoot);
+  const currentCli = await existingCli(options.projectRoot, entryPoints);
+  const canonicalSources = templateFiles(options.starter);
+  const sources = currentCli === null ? canonicalSources : extensionFiles(canonicalSources, packagePath, currentCli, options.starter);
+  const metadataPath = currentCli?.metadataPath ?? join(packagePath, ".cli-design-template.json");
+  await validateIntegrationPaths(options.projectRoot, packagePath, sources, metadataPath, currentCli);
+  const creations: Creation[] = sources.map((source) => ({ bytes: source.bytes, path: join(packagePath, source.relativePath) }));
+  if (currentCli !== null) {
+    const testPath = join(packagePath, "tests/integration", `composed-${options.starter}.test.ts`);
+    await refuseSymlinkPath(options.projectRoot, testPath, false);
+    await requireAbsent(testPath);
+    const relativeEntry = relative(dirname(testPath), currentCli.entryPoint).split("\\").join("/").split("/").map((part) => encodeURIComponent(part)).join("/");
+    const testSource = git("show", `${TEMPLATE_REVISION}:starters/${options.starter}/composition-tests/commands.test.ts`).replaceAll('"__CLI_ENTRY_POINT__"', JSON.stringify(relativeEntry));
+    creations.push({ path: testPath, bytes: new TextEncoder().encode(testSource) });
   }
-  await requireAbsent(metadataPath);
-
-  const nextPackage = await updatedPackage(packageFile, options.starter);
-  const nextLock = await regenerateLock(options, nextPackage);
+  const registration: Replacement[] = currentCli === null ? [] : [{ path: currentCli.commandOwner, original: currentCli.originalCommands, bytes: extendRegistration(currentCli, packagePath, options.starter) }];
+  if (currentCli !== null) registration.push(...await extendBoundaryOwner(currentCli, packagePath, sources, options.starter, git("show", `${TEMPLATE_REVISION}:profiles/static-admission/${options.starter}/.fallowrc.json`)));
+  const nextPackage = await updatedPackage(packageFile, options.starter, currentCli !== null);
+  const nextLock = await regenerateLock(options, nextPackage, creations, registration, currentCli);
   await requireUnchangedLockInputs(options.projectRoot, lockInputs);
   const publishedLockInputs = lockInputs.map((input) => ({
     ...input,
@@ -1150,29 +1192,27 @@ async function composeLocked(options: ComposeOptions) {
 
   const metadata = new TextEncoder().encode(
     `${JSON.stringify(
-      {
-        sourcePacket: options.sourcePacket,
-        starter: options.starter,
-        templateRevision: TEMPLATE_REVISION,
-      },
+      currentCli === null ? {
+        sourcePacket: options.sourcePacket, starter: options.starter, templateRevision: TEMPLATE_REVISION,
+        specRevision: "4", entryPoint: "src/cli.ts", commandOwner: "src/commands.ts", registrationVersion: 1,
+      } : { ...currentCli.metadata, extensions: [...(Array.isArray(currentCli.metadata.extensions) ? currentCli.metadata.extensions : []), { sourcePacket: options.sourcePacket, starter: options.starter, templateRevision: TEMPLATE_REVISION, specRevision: "4", commandModule: relative(currentCli.packageRoot, join(packagePath, "src/domains", `composed-${options.starter}`, "commands.ts")) }] },
       null,
       2,
     )}\n`,
   );
   await publish(
+    [...creations, ...(currentCli === null ? [{ bytes: metadata, path: metadataPath }] : [])],
     [
-      ...sources.map((source) => ({
-        bytes: source.bytes,
-        path: join(packagePath, source.relativePath),
-      })),
-      { bytes: metadata, path: metadataPath },
-    ],
-    [
+      ...registration,
+      ...(currentCli === null ? [] : [{ bytes: metadata, original: currentCli.originalMetadata, path: metadataPath }]),
       { bytes: nextPackage, original: originalPackage, path: packageFile },
       { bytes: nextLock, original: originalLock, path: lockFile },
     ],
     nodeFileSystem,
-    async () => await requireUnchangedLockInputs(options.projectRoot, publishedLockInputs),
+    async () => {
+      await requireUnchangedLockInputs(options.projectRoot, publishedLockInputs);
+      await verifyPublishedCli(options.projectRoot, inventorySource, currentCli);
+    },
   );
 
   return {
@@ -1182,7 +1222,9 @@ async function composeLocked(options: ComposeOptions) {
     starter: options.starter,
     status: "composed",
     templateRevision: TEMPLATE_REVISION,
-    writtenFiles: [...sources.map((source) => source.relativePath), ".cli-design-template.json"].sort(),
+    entryPoint: currentCli === null ? relative(options.projectRoot, join(packagePath, "src/cli.ts")) : relative(options.projectRoot, currentCli.entryPoint),
+    integration: currentCli === null ? "created" : "extended",
+    writtenFiles: [...creations.map((file) => relative(options.projectRoot, file.path)), ...registration.map((file) => relative(options.projectRoot, file.path)), relative(options.projectRoot, metadataPath)].sort(),
   };
 }
 
@@ -1197,8 +1239,10 @@ const HELP = `Compose the canonical Bun CLI starter into an existing Bun project
 Usage:
   bun run cli-design compose-existing --project-root PATH --package PATH --starter simple|complex --source-packet PATH_OR_URL [--json]
 
-The package path is relative to the project root. Existing source files,
-conflicting scripts and incompatible dependency pins are refused before writes.
+The package path is relative to the project root. An existing supported CLI receives
+new commands through its current registration owner. Unsupported integrations,
+command collisions and multiple existing CLIs refuse without creating another CLI.
+Existing source, scripts, configuration and unrelated behavior are preserved.
 `;
 
 function hasJson(argv: string[]): boolean {
@@ -1206,6 +1250,7 @@ function hasJson(argv: string[]): boolean {
 }
 
 function failure(error: unknown, json: boolean): number {
+  if (error instanceof CliIntegrationError) error = new ComposeError(error.causeCode, error.message, 3, error.repairAction);
   const known =
     error instanceof ComposeError
       ? error

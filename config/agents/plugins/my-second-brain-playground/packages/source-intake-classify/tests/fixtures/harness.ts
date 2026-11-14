@@ -113,7 +113,7 @@ export interface ProcessResult {
 	stdout: string
 }
 
-export type FakeMode = "honest" | "open" | "slow-probe" | "render-variant"
+export type FakeMode = "honest" | "open" | "slow-probe" | "render-variant" | "render-extra"
 
 export interface Fixture {
 	root: string

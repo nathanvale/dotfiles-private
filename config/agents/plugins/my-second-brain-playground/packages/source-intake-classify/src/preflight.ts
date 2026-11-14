@@ -2,8 +2,8 @@
 // Codex's sandbox denies the private receipt roots and that the model session resolves the same profile and the
 // dedicated instructions. Probe output never leaves this module; the caller learns only pass or fail.
 import { randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, lstatSync, realpathSync, mkdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs"
+import { basename, dirname, join } from "node:path"
 import { type Lane, PROFILE_NAME } from "./lane.ts"
 
 const PROBE_TIMEOUT_MS = 15_000
@@ -136,10 +136,24 @@ function renderedEntries(text: string): RenderedEntry[] | null {
  * Every read entry under a denied root must be Codex's own helper-link directory. A more specific read entry overrides
  * a deny, so any other one would open part of a receipt root that the sentinel probe cannot see.
  */
+function helperDirectory(lane: Lane, path: string): boolean {
+	const parent = dirname(path)
+	const parents = [join(lane.laneHome, "tmp", "arg0"), join(lane.laneHome, "tmp", "arg0-macos")]
+	if (!parents.includes(parent) || !/^codex-arg0[A-Za-z0-9]+$/.test(basename(path))) return false
+	// The process-specific directory may already be removed when prompt rendering exits.
+	// Its persistent parent must be physical; any surviving child must be an ordinary directory.
+	if (realpathSync(parent) !== parent) return false
+	try {
+		const stat = lstatSync(path)
+		return stat.isDirectory() && !stat.isSymbolicLink() && realpathSync(path) === path
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "ENOENT"
+	}
+}
+
 function readEntriesHold(lane: Lane, entries: readonly RenderedEntry[]): boolean {
-	const helperLinks = join(lane.laneHome, "tmp", "arg0")
 	const reads = entries.filter((entry) => entry.access === "read" && entry.kind === "path").map((entry) => entry.value)
-	return reads.every((path) => !lane.deniedRoots.some((root) => contains(root, path)) || contains(helperLinks, path))
+	return reads.every((path) => !lane.deniedRoots.some((root) => contains(root, path)) || helperDirectory(lane, path))
 }
 
 /**
