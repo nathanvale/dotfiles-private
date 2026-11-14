@@ -184,6 +184,13 @@ export const REASONS = {
     repairAction: "Inspect open windows, then retry once if nothing opened.",
     trigger: "The local launcher exited non-zero or timed out.",
   },
+  "editor-dispatched": {
+    cause: "SUCCESS_COMPLETED",
+    guidance: "Verify the file and integrated terminal in the target window. If it remains disconnected, run Developer: Reload Window there; reopening the same folder can focus the disconnected window even with --new-window.",
+    message: "Editor launch request sent; attachment was not verified.",
+    repairAction: null,
+    trigger: "The isolated editor CLI exited zero; native attachment remains unverified.",
+  },
   launched: {
     cause: "SUCCESS_COMPLETED",
     guidance: NO_FOLLOW_UP,
@@ -272,6 +279,7 @@ const COMMAND_REASONS: Record<string, Reason[]> = {
     ...START,
     "action-unconfigured",
     "cancelled",
+    "editor-dispatched",
     "editor-profile-missing",
     "inspected",
     "launch-unconfirmed",
@@ -288,8 +296,8 @@ const COMMAND_REASONS: Record<string, Reason[]> = {
   "remote-dev.help": ["inspected"],
   "remote-dev.list": [...SOURCE, "inspected"],
   "remote-dev.logs": [...SOURCE, ...TARGET, "action-unconfigured", "inspected"],
-  "remote-dev.open": [...SOURCE, ...TARGET, "editor-profile-missing", "launch-unconfirmed", "launched"],
-  "remote-dev.start": [...SOURCE, ...TARGET, ...START, "editor-profile-missing", "launch-unconfirmed", "launched"],
+  "remote-dev.open": [...SOURCE, ...TARGET, "editor-dispatched", "editor-profile-missing", "launch-unconfirmed"],
+  "remote-dev.start": [...SOURCE, ...TARGET, ...START, "editor-dispatched", "editor-profile-missing", "launch-unconfirmed"],
 };
 
 const EFFECT_CLASS: Record<string, EffectClass> = {

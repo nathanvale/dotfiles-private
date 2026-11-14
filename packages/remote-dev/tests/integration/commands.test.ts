@@ -232,16 +232,18 @@ test("missing and invalid configuration refuse before any remote call", async ()
   expect([...(await calls(missing)), ...(await calls(tokenBoard)), ...(await calls(broken))]).toEqual([]);
 });
 
-test("open rechecks the pilot, then launches the isolated editor with the guide", async () => {
+test("open confirms editor dispatch, gives native reconnect guidance, and keeps the isolated guide launch", async () => {
   const world = await makeWorld({ ssh: { ps: [RUNNING] } });
   const output = run(world, ["open", "pilot", "--json"]);
   expect(output.exitCode).toBe(0);
   expect(output.stderr).toBe("");
   expect(envelopeOf(output).result).toMatchObject({
     causeCode: "SUCCESS_COMPLETED",
+    nextAction: "Verify the file and integrated terminal in the target window. If it remains disconnected, run Developer: Reload Window there; reopening the same folder can focus the disconnected window even with --new-window.",
     effects: { completed: ["editor-window:pilot"], inventoryComplete: true, remaining: [], uncertain: [] },
     transactionState: "completed",
   });
+  expect(envelopeOf(output).message).toBe("Sent pilot to the isolated VS Code launcher. Attachment was not verified. If disconnected, run Developer: Reload Window in that target window. Closing VS Code leaves the container running.");
   const code = await calls(world, "code");
   expect(code.map((call) => call.argv)).toEqual([
     [
@@ -710,7 +712,7 @@ test("desktop entry opens the pilot through the same isolated launch policy", as
   const world = await makeWorld({ ssh: { ps: [RUNNING] } });
   const result = runDesktopEntry(world);
   expect(result.exitCode).toBe(0);
-  expect(result.stdout.toString()).toContain("Opened pilot in the isolated VS Code environment.");
+  expect(result.stdout.toString()).toContain("Sent pilot to the isolated VS Code launcher. Attachment was not verified.");
   const [code] = await calls(world, "code");
   expect(code?.argv.at(-1)).toBe(`vscode-remote://${AUTHORITY}/workspace/START-HERE.md`);
   expect(code?.sshAuthSock).toBe("");

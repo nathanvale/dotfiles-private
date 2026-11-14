@@ -210,10 +210,10 @@ export async function openTarget(
   );
   if (failure !== null) return failure;
   await rememberLaunch(resolved.value.target, environment);
-  return resultFor(command, "launched", {
+  return resultFor(command, "editor-dispatched", {
     data: { ...describe(resolved.value), editor: "isolated-vscode" },
     effect,
-    message: `Opened ${targetId} in the isolated VS Code environment. Closing VS Code leaves the container running.`,
+    message: `Sent ${targetId} to the isolated VS Code launcher. Attachment was not verified. If disconnected, run Developer: Reload Window in that target window. Closing VS Code leaves the container running.`,
   });
 }
 

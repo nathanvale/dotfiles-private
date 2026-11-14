@@ -58,12 +58,12 @@ test("each product condition is a named reason under its station", () => {
   expect(reasonsFor("remote-dev.open")).toEqual([
     "config-invalid",
     "config-missing",
+    "editor-dispatched",
     "editor-profile-missing",
     "host-command-failed",
     "host-unreachable",
     "input-invalid",
     "launch-unconfirmed",
-    "launched",
     "target-missing",
     "target-replaced",
     "target-stopped",

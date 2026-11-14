@@ -109,6 +109,23 @@ receipt stay private in `~/.local/state/pilot-runtime/remote-dev` inside the con
   credentials, tokens, URL queries and terminal control sequences removed.
   Editor connection logs (View > Output) and Docker stdout are separate.
 
+## Reconnect a disconnected editor
+
+A successful `open` or `start` confirms official VS Code CLI dispatch. The legacy
+`editor-window:TARGET` effect records that request, not a completed connection.
+Confirm a file read and an integrated terminal in the intended container.
+
+VS Code can focus an existing window for the same folder even with `--new-window`.
+If the container stopped, that window may have already given up reconnecting.
+After the container and services return, run **Developer: Reload Window** from
+the Command Palette in that target's isolated window. This restarts native
+connection resolution without restarting the container or its services.
+Reissuing `remote-dev open TARGET` alone is not a reload or attachment proof.
+
+The launcher does not automate UI commands, close windows, change settings or
+retry service mutations to repair an editor connection. A warm reload after an
+earlier stop is separate evidence from a complete new cold-start recovery test.
+
 ## Targets file
 
 `$REMOTE_DEV_CONFIG`, else `${XDG_CONFIG_HOME:-~/.config}/remote-dev/targets.json`.
