@@ -35,6 +35,8 @@ const ADMITTED_READS = ["create_session", "whoami", "get_metadata", "get_design_
 const ADMITTED_WRITES = ["add_code_connect_map", "send_code_connect_mappings", "create_generative_plugin", "create_shader", "update_generative_plugin", "update_shader", "create_new_file", "generate_diagram", "use_figma", "upload_assets", "weave_cancel_tool_run", "weave_run_tool"];
 const NOT_ADMITTED = ["generate_figma_design", "weave_upload_asset"];
 const AMBIENT_SENTINEL = "SENTINEL_AMBIENT_FIGMA_TOKEN";
+// Independent oracle for the accepted session recovery guidance.
+const SESSION_FAILURE_REPAIR = "Figma create_session failed. The underlying Provider cause is unknown. Open the target file with the intended Figma account. If access is pending or denied, ask the file owner to grant access and wait for approval. Once the file opens, create a new task session. If setup still fails, give this result's runId to the connector maintainer. Do not call dependent file tools until setup returns a valid session UUID.";
 
 interface Context {
 	readonly machine: FigmaMachine;
@@ -403,6 +405,8 @@ test.skipIf(!OFFICIAL_MCPORTER)("file-session workflow reads guidance, creates o
 		expect(missing.code).toBe(3);
 		expect(missing.result.causeCode).toBe("DOMAIN_PROVIDER_CALL_FAILED");
 		expect(missing.result.data).toBeNull();
+		expect(missing.result).toMatchObject({ nextAction: "connectors.auth", retryable: false });
+		expect(missing.result.repairAction).toBe("If the grant expired, run connectors auth login figma yourself in a terminal; otherwise correct the operation or its --input before running again");
 		const index = await run(["run", "figma", "get_figma_skill", ...input({ uri: "skill://index.json" })]);
 		expect(station(index)).toEqual({ code: 0, cause: "SUCCESS_UNCHANGED", connectorCause: null });
 		const guidance = await run(["run", "figma", "get_figma_skill", ...input({ uri: "skill://figma/figma-design-to-code/SKILL.md" })]);
@@ -419,6 +423,64 @@ test.skipIf(!OFFICIAL_MCPORTER)("file-session workflow reads guidance, creates o
 		}
 		expect(stub.calls.map(({ tool }) => tool)).toEqual(["get_metadata", "resources/read", "resources/read", "create_session", "get_metadata", "get_design_context"]);
 		expect(stub.calls.slice(4).map(({ args }) => args)).toEqual([{ fileKey, nodeId: "1:1", sessionId: "9b7513a6-fc1a-4b25-945c-46f3b900b4de" }, { fileKey: "FileKeyOther00000000001", nodeId: "1:1", sessionId: "9b7513a6-fc1a-4b25-945c-46f3b900b4de" }]);
+	});
+}, 120_000);
+
+test.skipIf(!OFFICIAL_MCPORTER)("file-session failures give conditional recovery without inferring a cause or leaking Provider text", async () => {
+	await withFigma(async ({ run, stub, machine }) => {
+		expect((await run(["run", "figma", "whoami"])).code).toBe(0);
+		for (const message of ["Invalid arguments SENTINEL_PRIVATE", "Access denied Bearer SENTINEL_PRIVATE", "Expired grant SENTINEL_PRIVATE"]) {
+			stub.rejectNext = { tool: "create_session", message };
+			const failed = await machine.run(["run", "figma", "create_session", ...input({ fileKey: "FileKeyExisting00000001", description: "Read fixture frame" })]);
+			expect(failed.code).toBe(3);
+			expect(failed.envelope.result).toMatchObject({
+				commandIdentity: "connectors.run", outcome: "failed", failureClass: "domain", exitCode: 3,
+				causeCode: "DOMAIN_PROVIDER_CALL_FAILED", effectClass: "inspect", transactionState: "unchanged",
+				data: null, retryable: false, repairAction: SESSION_FAILURE_REPAIR, nextAction: "connectors.help",
+				effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+			});
+			expect(failed.stdout.trim().split("\n")).toHaveLength(1);
+			expect(failed.stderr).toBe("");
+			expect(failed.stdout).not.toContain("SENTINEL_PRIVATE");
+		}
+		expect(machine.stateText()).not.toContain("SENTINEL_PRIVATE");
+		expect(stub.calls.map(({ tool }) => tool)).toEqual(["whoami", "create_session", "create_session", "create_session"]);
+		expect(existsSync(machine.journalDirectory())).toBe(false);
+	});
+}, 120_000);
+
+test.skipIf(!OFFICIAL_MCPORTER)("file-session failure hint preserves completed local vault effects", async () => {
+	await withFigma(async ({ machine, stub }) => {
+		rmSync(path.join(machine.state, "connectors", "figma-mcporter"), { recursive: true, force: true });
+		stub.rejectNext = { tool: "create_session", message: "SENTINEL_PRIVATE" };
+		const failed = await machine.run(["run", "figma", "create_session", ...input({ fileKey: "FileKeyExisting00000001", description: "Read fixture frame" })]);
+		expect(failed.code).toBe(3);
+		expect(failed.envelope.result).toMatchObject({
+			causeCode: "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT", outcome: "failed", failureClass: "domain", exitCode: 3,
+			effectClass: "repository-local", transactionState: "completed", data: null, retryable: false,
+			repairAction: SESSION_FAILURE_REPAIR, nextAction: "connectors.help",
+			effects: { completed: ["account-vault", "mcporter-vault-file"], remaining: [], uncertain: [], inventoryComplete: true },
+		});
+		expect(failed.stderr).toBe("");
+		expect(failed.stdout).not.toContain("SENTINEL_PRIVATE");
+		expect(stub.calls.map(({ tool }) => tool)).toEqual(["create_session"]);
+	});
+}, 120_000);
+
+test.skipIf(!OFFICIAL_MCPORTER)("file-session offline failures keep the existing transient retry guidance", async () => {
+	await withFigma(async ({ machine, stub }) => {
+		stub.rejectNext = { tool: "create_session", code: -32000, message: "Connection closed SENTINEL_PRIVATE" };
+		const failed = await machine.run(["run", "figma", "create_session", ...input({ fileKey: "FileKeyExisting00000001", description: "Read fixture frame" })]);
+		expect(failed.code).toBe(75);
+		expect(failed.envelope.result).toMatchObject({
+			causeCode: "TRANSIENT_PROVIDER_UNREACHABLE", outcome: "refused", failureClass: "transient", exitCode: 75,
+			effectClass: "inspect", transactionState: "unchanged", data: null, retryable: true,
+			repairAction: "Retry the run; if it keeps failing, run connectors auth status figma", nextAction: "connectors.auth",
+			effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+		});
+		expect(failed.stderr).toBe("");
+		expect(failed.stdout).not.toContain("SENTINEL_PRIVATE");
+		expect(stub.calls.map(({ tool }) => tool)).toEqual(["create_session"]);
 	});
 }, 120_000);
 

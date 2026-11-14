@@ -15,10 +15,17 @@ biome.json
 .fallowrc.json
 tsconfig.json
 src/cli.ts
+src/commands.ts
+src/commands-contract.ts
+src/domains/
+eslint.config.mjs
+eslint-rules.mjs
 tests/cli.test.ts
 ```
 
-Keep the behavioral entry point cohesive while it remains small. Split a module
+Keep one public entry point. Separate domain files are permitted in the simple
+profile; splitting a file does not make the CLI complex. Keep the behavioral
+entry point cohesive while it remains small. Split a module
 only when one concern gains an independent contract or test seam. The simple
 starter has no runtime dependency and no LogTape.
 

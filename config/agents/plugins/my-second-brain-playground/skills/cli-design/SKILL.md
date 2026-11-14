@@ -18,6 +18,12 @@ In the owning task brief, record:
 - Each command's effect class, `inspect`, `repository-local`, or `external`.
 - The route, new repository, existing-project composition, or maintenance.
 
+Use one first-party application CLI per repository, including workspace packages.
+Put domain commands in separate internal files under that entry point. Extend
+the existing CLI when one exists. If its registration cannot be integrated safely,
+stop with the conflict and repair path; never generate a second application CLI.
+Third-party tools and ordinary build/test scripts are separate tooling.
+
 For an existing CLI, inspect its public help, command contract, profile, typed
 catalogue, and process tests. Preserve its adopted contract owner, including
 `@side-quest/cli-command-facade` where present.
@@ -80,8 +86,11 @@ bun run --cwd "$PLUGIN_ROOT" cli-design compose-existing --project-root PATH --p
 ```
 
 Use an absolute `--project-root`. Set `--package` relative to that root, either
-`.` or a declared workspace member. Add `--json` for the machine result. Resolve
-ownership conflicts before replacing source, scripts, dependencies, tests,
+`.` or a declared workspace member. Add `--json` for the machine result. The composer inventories application CLIs across the repository. It creates one
+when none exists and extends a supported existing CLI through its declared command
+owner. Multiple CLIs, route collisions and unsupported registration refuse before
+publication. Preserve the public invocation and existing commands. Resolve
+ownership conflicts before changing source, scripts, dependencies, tests,
 lockfiles, or quality configuration.
 
 ### Maintain or extend
@@ -119,6 +128,10 @@ Completion criterion: the brief names the selected APIs, limits, loss reporting,
 cleanup boundary, and any application-owned guarantees they cannot supply.
 
 ## 5. Implement commands and their contract
+
+Use the existing typed command declarations for domain routing, help and discovery.
+Keep provider setup inside the selected command so unavailable integrations do not
+block root help or unrelated domains. File count does not select the effect profile.
 
 Read [Contract Core](references/contract-core.md). Keep one typed owner for
 identities, routes, causes, exit meanings, result correlations, and serialization.

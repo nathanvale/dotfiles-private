@@ -17,7 +17,8 @@ bun run admit:static /absolute/project/path complex /absolute/evidence/path
 ```
 
 Choose the command matching the selected profile. The admission interface
-checks the resolved pins, authored-file inventory, Biome, TypeScript, tests, and
+checks the resolved pins, authored-file and single-CLI inventory, typed ESLint, Biome formatting, native
+TypeScript, tests, and
 both Fallow passes. `quality:fallow` must cover the whole project, including
 tests, with complete required semantic evidence. The separate production
 dependency pass must also succeed. A changed-files or `new-only` audit is useful
@@ -28,9 +29,13 @@ that failure from a run that proves no semantic query was necessary.
 Keep the focused Fallow policy enabled for unused files, exports and types;
 unused, unlisted, unresolved and misclassified dependencies; circular imports
 and re-export cycles; declared module-boundary violations with complete file
-coverage; and unexplained or stale Fallow suppressions. Keep Biome responsible
+coverage; and unexplained or stale Fallow suppressions. Keep ESLint responsible
 for stray console output, explicit `any`, non-null assertions, and the scoped
-restricted imports defined by the canonical profile.
+restricted imports defined by the canonical profile. ESLint uses the TypeScript 6
+API and its recommended typed preset. Compilation uses native TypeScript 7.
+Biome formats only, with lint and assist disabled. Inspect the admission
+toolchain receipt to verify all three resolver identities, including Fallow
+using its intended native TypeScript backend.
 
 Completion criterion: the profile's static-admission result is `admitted`, both
 whole-project Fallow passes have complete evidence, and the generated
@@ -38,7 +43,7 @@ repository's own `bun run check` passes.
 
 ### Existing or maintained Bun project
 
-Preserve the host's TypeScript, Biome, Fallow, package, lockfile, script, test,
+Preserve the host's TypeScript, ESLint, Biome, Fallow, package, lockfile, script, test,
 and source owners. Review an explicit scoped policy delta for the added or
 changed CLI paths. Set `COMPARISON_BASE` to the verified immutable commit SHA
 of the intended integration baseline. Run the accepted gradual-adoption review
@@ -92,9 +97,37 @@ catalogue and process tests prove command-scoped discovery (reference:
 the generated or host repository's complete checks. For complex CLIs, run unit,
 integration, catalogue, recovery, and lifecycle process tests.
 
-Completion criterion: every required and applicable optional checker row passes,
-as do the repository checks and profile process tests. Explain each `skippedRows`
+For generated starters, the accepted template criterion is every profile-applicable
+row. The checker still requires arguments for every failure class. When the
+starter has no behavior that can produce a requested class, retain the failing
+row with its actual exit and explain applicability from the command owner. A
+usage refusal is not domain, schema or transient proof. Use fault injection for
+reachable internal failures. Keep the whole-matrix result red; do not invent a
+production command or mark an unexecuted scenario as passed.
+
+Completion criterion: every profile-applicable required and optional checker row
+passes, as do the repository checks and profile process tests. Record each
+inapplicable row and its command-owner justification separately from passing proof. Explain each `skippedRows`
 entry, because the checker records only scenario names. Supply fixtures or fault
 injection for required failure-class rows; a generated starter does not by
 itself prove every row reachable. Run the complete generated CI sequence from a
 clean checkout. Keep retained streams outside the repository.
+
+## Prove one CLI across domains
+
+Inventory application entry points across manifests, scripts, source and documented
+invocations, including workspace members. Multiple invocations of the same entry
+point count once. Prove a second application CLI is rejected while tooling remains
+valid. Use two internal domain modules through the same CLI. Missing configuration
+in one domain must leave root help, discovery and an unrelated domain usable.
+
+For existing-project composition, keep the original entry point and public
+invocation. Exercise both an existing and an added command, inspect their shared
+help/discovery, and prove the application CLI count remains one. Test a non-default
+entry-point path. Multiple pre-existing CLIs, route collisions, incompatible
+profiles and unsupported registration must refuse with repository bytes preserved.
+A new repository without a CLI receives exactly one.
+
+Completion criterion: CDS-TS-6 passes on generated output and preservation-safe
+composition, including its revision 4 negative controls. No second CLI or parallel
+command registry is introduced.

@@ -136,7 +136,11 @@ Before the model starts, every run proves with the lane's exact configuration:
    formats it recognises (a write entry or any unknown format refuses), a deny
    entry for `:root`, `:tmpdir`, `:slash_tmp` and every private root spelling,
    and no read entry under a denied root except Codex's own
-   `<lane Codex home>/tmp/arg0/`.
+   `<lane Codex home>/tmp/arg0/codex-arg0<suffix>` or
+   `<lane Codex home>/tmp/arg0-macos/codex-arg0<suffix>`. The suffix must be
+   nonempty and alphanumeric. The helper parent must resolve to its own physical
+   path; a surviving helper child must be an ordinary directory, never a symlink.
+   Parent-wide grants, other descendants and lookalike prefixes refuse.
    A more specific read entry overrides a deny, so this is what proves the rest
    of the subtree the sentinel cannot reach.
 
@@ -178,7 +182,8 @@ never writes a receipt, grant, Beads record, vault note or Codex `config.toml`.
   Under the per-user temporary directory Codex's sandbox also answers file
   metadata inside a denied path; the pre-flight's `stat` probe refuses a root
   there. Codex also grants itself read of its helper-link directory
-  `<lane Codex home>/tmp/arg0/`, which holds only links to the Codex binary. A
+  `<lane Codex home>/tmp/arg0/codex-arg0<suffix>` (or `tmp/arg0-macos/`
+  with the same child shape on Codex 0.166.0), which holds its helper links. A
   separate macOS account (M2) is the escalation if this residual is rejected.
 - Profiles govern sandboxed commands and sandbox-aware file tools. MCP
   servers, connectors, browser, computer use and web search have their own

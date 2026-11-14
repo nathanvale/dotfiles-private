@@ -115,6 +115,7 @@ export function analyzeScenario(spec: ScenarioSpec, result: ProcessResult, decla
 	if (result.stderr !== "") return { findings: [...new Set([SUCCESSOR_FINDINGS.STDERR_NOT_EMPTY, ...optional])], observedContractVersion: null, declaredCommands: [] }
 	if (parsed === null) return { findings: [...new Set([SUCCESSOR_FINDINGS.STDOUT_NOT_SINGLE_JSON_OBJECT, ...optional])], observedContractVersion: null, declaredCommands: [] }
 	const validation = validateTargetEnvelope(parsed, result.observedExit, declaredCommands, spec.discovery === true)
+	if (validation.findings.length === 0 && !exitAccepted(spec.expectedExit, result.observedExit)) validation.findings.push(SUCCESSOR_FINDINGS.EXIT_MISMATCH)
 	return { ...validation, findings: [...new Set([...validation.findings, ...optional])] }
 }
 

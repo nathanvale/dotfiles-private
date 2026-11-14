@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "my-second-brain-playground",
-      "version": "0.18.1",
+      "version": "0.18.2",
       "source": {
         "source": "local",
         "path": "./my-second-brain-playground"
@@ -22,7 +22,7 @@
     },
     {
       "name": "personal",
-      "version": "0.4.65",
+      "version": "0.4.72",
       "source": {
         "source": "local",
         "path": "./personal"

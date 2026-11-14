@@ -171,6 +171,8 @@ export type Prepared =
 		readonly env: Readonly<Record<string, string>>;
 		readonly data: Record<string, unknown>;
 		readonly hostedRead?: HostedRead;
+		// Adapter-owned static guidance; Provider output never enters this field.
+		readonly unclassifiedReadRepair?: string;
 		commit(): Committed;
 		settle(): readonly LocalEffect[];
 	};
