@@ -169,6 +169,10 @@
 
 ## Agent-Native Work
 
+- Agent ecosystem planning, Wayfinder intake or delivery: read the configured
+  vault's `projects/mac-mini-development-migration/research/linear-project-planning.md`
+  for the live Linear map and subsystem questions. Use its cutover ledger to
+  distinguish active Linear work from retained GitHub evidence.
 - Give capable agents maps, invariants, owner paths, inspectable state, and the
   next safe action.
 - Beads-backed research, planning, implementation, or review: read
