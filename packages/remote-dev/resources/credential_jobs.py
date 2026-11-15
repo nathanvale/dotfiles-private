@@ -134,12 +134,50 @@ def jobs(labels, deadline=None):
     return found
 
 
-def same_process(pid, argv, deadline=None):
+def same_process(pid, argv, deadline=None, observation=None):
     if not isinstance(pid, int) or pid < 1:
         return False
-    seen = command(['/bin/ps', '-ww', '-p', str(pid), '-o', 'uid=', '-o', 'args='], deadline)
-    values = seen.stdout.decode().strip().split(None, 1)
-    return seen.returncode == 0 and len(values) == 2 and values == [str(os.getuid()), ' '.join(argv)]
+    seen = command(['/bin/ps', '-ww', '-p', str(pid), '-o', 'uid=',
+                    '-o', 'ucomm=', '-o', 'args='], deadline)
+    values = seen.stdout.decode().strip().split(None, 2)
+    complete = seen.returncode == 0 and len(values) == 3 and values[0].isdecimal()
+    matched = complete and values[0] == str(os.getuid()) and values[2] == ' '.join(argv)
+    if observation is not None:
+        # Keep numeric/accounting metadata and digests, never untrusted argv.
+        program = values[1] if complete else None
+        observation.update({'status': 'observed', 'psExitCode': seen.returncode,
+                            'psStdoutSha256': hashlib.sha256(seen.stdout).hexdigest(),
+                            'fieldCount': len(values),
+                            'observedUid': int(values[0]) if complete else None,
+                            'programClass': ('launchd-proxy' if program == 'xpcproxy' else
+                                             'expected' if program == Path(argv[0]).name else 'other'),
+                            'uidMatches': bool(complete and values[0] == str(os.getuid())),
+                            'argvMatches': bool(complete and values[2] == ' '.join(argv)),
+                            'identityMatches': bool(matched)})
+    return bool(matched)
+
+
+def wait_for_process(label, pid, argv, deadline, observation):
+    while True:
+        remaining(deadline)
+        require(jobs([label], deadline).get(label) == pid,
+                'credential job PID changed during startup')
+        matched = same_process(pid, argv, deadline, observation)
+        if 'firstInspection' not in observation:
+            observation['firstInspection'] = dict(observation)
+        require(jobs([label], deadline).get(label) == pid,
+                'credential job PID changed during startup')
+        remaining(deadline)
+        if matched:
+            return
+        # xpcproxy is a documented pre-exec stage, never an accepted owner.
+        # No changed PID, arbitrary command, other UID or observation error waits.
+        require(observation.get('psExitCode') == 0
+                and observation.get('fieldCount') == 3
+                and observation.get('programClass') == 'launchd-proxy'
+                and observation.get('observedUid') in {0, os.getuid()},
+                'credential process identity mismatch')
+        time.sleep(min(0.2, remaining(deadline)))
 
 
 def observe(a, configs, checkout, deadline=None):
@@ -321,11 +359,14 @@ def restore(a, bundle, probe=False):
     attempted = False
     deadline = None
     outcome_path = root / 'restore-result.json'
+    process_observations = {}
 
     def result(ready, error=None):
         return {'credentials': ready, 'credentialsChanged': bool(effects['completed']),
                 'credentialEffects': {k: sorted(v) for k, v in effects.items()},
-                'attempted': attempted, **({} if ready else {'status': 'failed', 'error': error})}
+                'attempted': attempted,
+                **({'processObservations': process_observations} if process_observations else {}),
+                **({} if ready else {'status': 'failed', 'error': error})}
 
     def effect(name, argv):
         nonlocal attempted
@@ -390,12 +431,15 @@ def restore(a, bundle, probe=False):
                 write_owner(record_path, records)
                 # Conservative: count from before the cache can be launched,
                 # never from observation or from the delivery job's startup.
-                if role == 'cache':
+                if deadline is None:
                     deadline = time.monotonic() + 30
                 r = effect('started:' + role, ['/bin/launchctl', 'kickstart', '-p', 'gui/' + str(os.getuid()) + '/' + label])
                 require(r.stdout.strip().isdigit(), 'credential job startup requires inspection')
                 pid = int(r.stdout)
-                require(same_process(pid, job['ProgramArguments'], deadline), 'credential process identity mismatch')
+                observation = {'role': role, 'pid': pid, 'status': 'not-observed'}
+                process_observations[role] = observation
+                write_owner(outcome_path, result(False, 'credential startup in progress'))
+                wait_for_process(label, pid, job['ProgramArguments'], deadline, observation)
                 remaining(deadline)
                 records[role]['pid'] = pid
                 write_owner(record_path, records)

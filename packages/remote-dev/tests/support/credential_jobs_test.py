@@ -16,7 +16,7 @@ jobs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(jobs)
 
 
-class RestoreTests(unittest.TestCase):
+class RestoreFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -81,6 +81,8 @@ class RestoreTests(unittest.TestCase):
     def restore(self):
         return jobs.restore(type('Args', (), {'credential_manifest': str(self.root / 'manifest.json'), 'credential_manifest_sha256': hashlib.sha256((self.root / 'manifest.json').read_bytes()).hexdigest()})(), self.bundle)
 
+
+class RestoreTests(RestoreFixture):
     def test_missing_prior_admission_refuses_without_launch(self):
         self.file(self.root / 'manifest.json', {})
         result = self.restore()
@@ -173,6 +175,141 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual(result['credentialEffects'], {
             'completed': ['registered:cache', 'registered:delivery', 'started:cache'],
             'uncertain': ['started:delivery']})
+
+
+class ProcessReadinessTests(RestoreFixture):
+    identity_check = staticmethod(jobs.same_process)
+
+    def setUp(self):
+        super().setUp()
+        self.ps_reads = {}
+        self.responses = []
+        p = patch.object(jobs.time, 'sleep', side_effect=self.advance)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def advance(self, duration):
+        self.now += duration
+
+    def with_process(self, response, listing=None):
+        def command(argv, *args, **kwargs):
+            if argv[0] != '/bin/ps':
+                return self.command(argv, *args, **kwargs)
+            pid = int(argv[3])
+            role = 'cache' if pid == 10 else 'delivery'
+            index = self.ps_reads.get(pid, 0)
+            self.ps_reads[pid] = index + 1
+            uid, program, words = response(role, index)
+            # Native ps format selected by the actual implementation. The old
+            # two-field command and proposed three-field command are both real.
+            line = f'{uid} {program} {words}' if 'ucomm=' in argv else f'{uid} {words}'
+            self.responses.append(line)
+            return subprocess.CompletedProcess(argv, 0, (line + '\n').encode())
+        with patch.object(jobs, 'same_process', self.identity_check), patch.object(jobs, 'command', side_effect=command):
+            if listing is None:
+                return self.restore()
+            with patch.object(jobs, 'jobs', side_effect=listing):
+                return self.restore()
+
+    def exact(self, role, index):
+        return os.getuid(), role, role + ' --fixture /unused/bun'
+
+    def assert_cache_stopped(self, result):
+        self.assertFalse(result['credentials'])
+        self.assertEqual(self.started, ['register:cache', 'start:cache'])
+        self.assertEqual(result['credentialEffects'], {
+            'completed': ['registered:cache'], 'uncertain': ['started:cache']})
+        owned = json.loads((self.root / 'owned-jobs.json').read_text())
+        self.assertIsNone(owned['cache']['pid'])
+        return json.loads((self.root / 'restore-result.json').read_text())
+
+    def test_fresh_proxy_transition_waits_for_exact_owner_without_relaunch(self):
+        def transition(role, index):
+            if role == 'cache' and index == 0:
+                # Synthetic documented launch stage, not reconstructed ps bytes.
+                owned = json.loads((self.root / 'owned-jobs.json').read_text())
+                self.assertIsNone(owned['cache']['pid'])
+                return 0, 'xpcproxy', '/usr/libexec/xpcproxy cache'
+            return self.exact(role, index)
+        result = self.with_process(transition)
+        self.assertTrue(result['credentials'])
+        self.assertGreater(self.now, 0)
+        self.assertEqual(self.started, ['register:cache', 'start:cache', 'register:delivery', 'start:delivery'])
+        observed = result['processObservations']['cache']
+        self.assertEqual(observed['firstInspection']['observedUid'], 0)
+        self.assertEqual(observed['firstInspection']['programClass'], 'launchd-proxy')
+        self.assertTrue(observed['identityMatches'])
+
+    def test_expected_command_under_other_uid_refuses_without_wait(self):
+        result = self.with_process(lambda role, index: (os.getuid() + 1, role, role + ' --fixture /unused/bun'))
+        self.assert_cache_stopped(result)
+        self.assertEqual(self.now, 0)
+
+    def test_expected_uid_wrong_arguments_refuses_and_never_persists_them(self):
+        result = self.with_process(lambda role, index: (os.getuid(), role, role + ' --credential=NEVER-PERSIST'))
+        saved = self.assert_cache_stopped(result)
+        self.assertNotIn('NEVER-PERSIST', json.dumps(saved))
+        self.assertEqual(self.now, 0)
+
+    def test_root_unexpected_program_refuses_without_wait(self):
+        self.assert_cache_stopped(self.with_process(lambda role, index: (0, 'other', '/fixture/unexpected')))
+        self.assertEqual(self.now, 0)
+
+    def test_proxy_under_unrelated_uid_refuses_without_wait(self):
+        self.assert_cache_stopped(self.with_process(lambda role, index: (os.getuid() + 1, 'xpcproxy', 'xpcproxy cache')))
+        self.assertEqual(self.now, 0)
+
+    def test_same_label_changed_pid_refuses_before_ps(self):
+        def listing(*args, **kwargs):
+            return {**self.pids, 'cache': 99} if 'cache' in self.pids else {}
+        self.assert_cache_stopped(self.with_process(self.exact, listing))
+        self.assertEqual(self.ps_reads, {})
+
+    def test_label_changes_during_successful_inspection_refuses(self):
+        def listing(*args, **kwargs):
+            return {**self.pids, 'cache': 99} if self.ps_reads else self.pids.copy()
+        self.assert_cache_stopped(self.with_process(self.exact, listing))
+        self.assertEqual(self.now, 0)
+
+    def test_proxy_cannot_extend_original_cache_deadline(self):
+        result = self.with_process(lambda role, index: (0, 'xpcproxy', 'xpcproxy cache'))
+        self.assert_cache_stopped(result)
+        self.assertIn('window expired', result['error'])
+        self.assertAlmostEqual(self.now, 30)
+
+    def test_late_exact_identity_still_refuses_delivery(self):
+        def late(role, index):
+            self.now = 31
+            return self.exact(role, index)
+        self.assert_cache_stopped(self.with_process(late))
+
+    def test_missing_process_retains_unverified_pid_and_ps_exit(self):
+        def command(argv, *args, **kwargs):
+            return subprocess.CompletedProcess(argv, 1, b'') if argv[0] == '/bin/ps' else self.command(argv)
+        with patch.object(jobs, 'same_process', self.identity_check), patch.object(jobs, 'command', side_effect=command):
+            result = self.restore()
+        saved = self.assert_cache_stopped(result)
+        self.assertEqual(saved['processObservations']['cache']['pid'], 10)
+        self.assertEqual(saved['processObservations']['cache']['psExitCode'], 1)
+        self.assertIsNone(saved['processObservations']['cache']['observedUid'])
+
+    def test_observation_timeout_retains_pid_without_owned_authority(self):
+        def command(argv, *args, **kwargs):
+            if argv[0] == '/bin/ps':
+                raise subprocess.TimeoutExpired(argv, 1)
+            return self.command(argv)
+        with patch.object(jobs, 'same_process', self.identity_check), patch.object(jobs, 'command', side_effect=command):
+            result = self.restore()
+        saved = self.assert_cache_stopped(result)
+        self.assertEqual(saved['processObservations']['cache'], {'role': 'cache', 'pid': 10, 'status': 'not-observed'})
+
+    def test_existing_proxy_is_not_adopted_as_healthy_owner(self):
+        self.assertTrue(self.restore()['credentials'])
+        self.started.clear()
+        result = self.with_process(lambda role, index: (0, 'xpcproxy', 'xpcproxy cache'))
+        self.assertFalse(result['credentials'])
+        self.assertEqual(self.started, [])
+        self.assertEqual(self.now, 0)
 
 
 class CommandTests(unittest.TestCase):
