@@ -1,6 +1,6 @@
 ---
 name: verify-ecosystem-review
-description: Verify the ecosystem-review briefing through fresh read-only Codex sessions, candidate plugin discovery, and retained evidence. Use when changing the skill or qualifying its behavior in Dotfiles.
+description: Verify the ecosystem-review briefing through fresh native conversations, bounded A2/A4 artifact journeys, candidate discovery, and retained evidence. Use when changing the skill or qualifying its behavior in Dotfiles.
 ---
 
 # Verify ecosystem-review
@@ -9,6 +9,8 @@ The user touches an agent conversation. There is no application server, port,
 container, or database to start. Use the native Codex CLI and its development
 marketplace. Read [the feature map](features/README.md) before selecting a journey.
 Keep live Linear read-only. Use supplied offline records for adverse evidence.
+Ordinary briefing journeys remain read-only; only the printable journey writes
+its declared local artifacts.
 
 ## Launch
 
@@ -133,6 +135,10 @@ run_exit=$?
 printf '%s\n' "$run_exit" > "$run_dir/exit.txt"
 ```
 
+Use [daily focus](features/daily-focus.md) for serial multi-turn conversation
+and [printables](features/printables.md) for the separately bounded A2/A4
+artifact drive. Do not apply artifact-write permissions to ordinary reviews.
+
 Use [the offline journey](features/evidence.md) for supplied evidence, and
 [the comparison journey](features/comparison.md) for a baseline. Use
 [the delivery journey](features/delivery.md) to verify stage recognition and a
@@ -163,7 +169,10 @@ Capture the exact candidate skill and feature sources, hashes, CLI version,
 working directory, command, prompt, start/end time, exit, and final completeness.
 Keep raw records in the private run directory. Refresh no remote state. Inspect
 events for attempted writes, dispatch, or unrelated exploration. Read-only
-sandboxing protects shell writes; it does not authorize connector mutations.
+sandboxing protects ordinary shell writes; it does not authorize connector
+mutations. Printable runs permit their declared final output directory, private
+receipt files, and native image-tool-managed originals at the returned paths.
+Inspect all observed writes against that allowlist.
 Record final Git status and compare it with the pre-run status. Report the
 limits of remote side-effect observation when no audit route is available.
 

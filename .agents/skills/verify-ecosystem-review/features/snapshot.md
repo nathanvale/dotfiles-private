@@ -8,6 +8,8 @@ A user receives an ecosystem briefing through the canonical planning owners.
 - S1b: Resolve the canonical initiative from the startup owner without supplied IDs.
 - S2: Read the root, outcome overview, glossary, and each outcome's owning issues.
 - S3: Preserve proposed horizons and open human choices in a compact linked briefing.
+- S4: An ordinary review reads neither optional reference and invokes no image,
+  PDF or extended questioning workflow.
 
 ## How to get to it (user POV)
 

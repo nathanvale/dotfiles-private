@@ -105,3 +105,15 @@ the exact refusal and repair owner. A quota response after init proves no
 briefing behavior. Add no credential, account, model substitution, connection,
 or permission to get a pass. Follow the verifier's process cleanup and protected
 selection comparison, and retain the evidence after teardown.
+
+## Image and PDF capability evidence
+
+For printable journeys, retain the actually offered image tool schema and the
+current imagegen/pdf skill reads. Record whether native size controls exist,
+which route ran, returned original paths, pixel dimensions and PDF inspection
+commands/results. The native tool may own generated originals outside the final
+artifact folder; preserve that custody and copy selected outputs as directed.
+A CLI startup failure or missing image route cannot prove rendering. Keep
+foreground source-driven artifact proof, installed CLI routing and physical
+printing separate. High-resolution intent alone grants no API fallback or
+credential authority. Report any untested route and its exact prerequisite.
