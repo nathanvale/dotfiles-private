@@ -355,7 +355,9 @@ this source change does not modify a prepared or live manifest. Its fields are:
   Operator review must correlate the retained result with those logs and
   journal snapshots. Hash matching alone does not establish their meaning.
 
-Healthy recorded owners are reused without re-admitting evolving journals.
+Healthy recorded owners are reused without a frozen journal inventory, but the
+pinned reader rechecks current pending intents and locks before accepting reuse.
+New failed/unknown delivery results or changed nonempty stderr require review.
 A failed or unfinished startup record still requires review even when both PIDs
 remain alive. Each registration/start intent is persisted before its native call,
 then advanced to confirmed after the reply and required identity checks. The

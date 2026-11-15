@@ -114,6 +114,20 @@ class RestoreTests(unittest.TestCase):
             self.assertFalse(self.restore()['credentials'])
         self.assertEqual(self.started, [])
 
+    def test_healthy_reuse_refuses_a_new_pending_native_journal(self):
+        self.assertTrue(self.restore()['credentials'])
+        self.started.clear()
+        with patch.object(jobs, 'command', return_value=subprocess.CompletedProcess([], 1, b'')):
+            self.assertFalse(self.restore()['credentials'])
+        self.assertEqual(self.started, [])
+
+    def test_healthy_reuse_refuses_a_new_failed_session_result(self):
+        self.assertTrue(self.restore()['credentials'])
+        self.file(Path(self.roles['delivery'][1]['StandardOutPath']), {'result': {
+            'commandIdentity': 'deployment.credential-serve', 'outcome': 'failed',
+            'transactionState': 'completed', 'effects': {'inventoryComplete': True, 'uncertain': []}}})
+        self.assertFalse(self.restore()['credentials'])
+
     def test_late_cache_inspection_cannot_launch_delivery(self):
         original = self.observe
         def slow(*args, **kwargs):

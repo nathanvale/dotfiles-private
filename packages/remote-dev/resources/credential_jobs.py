@@ -247,6 +247,20 @@ def admit_prior_outcomes(a, root, roles, configs, checkout):
             and {r['path'] for r in admission['logs']} == expected, 'prior result inventory changed')
     for row in admission['logs']:
         snapshot_matches(row)
+    inspect_native_journals(roles, configs, checkout)
+
+
+def inspect_native_journals(roles, configs, checkout, deadline=None):
+    directories = {c['stateDirectory'] for c in configs.values()}
+    require(len(directories) == 3, 'prior journal owners changed')
+    for name in directories:
+        path = Path(name)
+        info = path.lstat()
+        require(path.resolve() == path and stat.S_ISDIR(info.st_mode)
+                and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
+                'prior journal directory custody refused')
+        for entry in path.iterdir():
+            private_file(entry)
     # Reuse the exact pinned native journal reader. No claim, resolve, store or
     # token acquisition is performed. Locks and pending intents refuse startup.
     script = ("import { readdir } from 'node:fs/promises';import { join } from 'node:path';"
@@ -255,8 +269,38 @@ def admit_prior_outcomes(a, root, roles, configs, checkout):
               + "for (const name of await readdir(dir)) {if(name.endsWith('.journal.lock'))process.exit(1);"
               + "if(name.endsWith('.journal.jsonl') && await pendingJournalIntent(join(dir,name.slice(0,-14))))process.exit(1);}}")
     bun = roles['delivery'][1]['ProgramArguments'][2]
-    require(command([bun, '--no-env-file', '--eval', script]).returncode == 0,
+    require(command([bun, '--no-env-file', '--eval', script], deadline).returncode == 0,
             'native prior journal owner requires inspection')
+
+
+
+def inspect_current_outcomes(a, root, roles, configs, checkout, deadline):
+    # Healthy ownership does not make a later unknown delivery safe. Reuse
+    # checks live journal state, without freezing normal completed additions.
+    inspect_native_journals(roles, configs, checkout, deadline)
+    admission = json.loads(private_file(a.credential_manifest, a.credential_manifest_sha256))['priorOutcomes']
+    reviewed = {row['path']: row['sha256'] for row in admission['logs']}
+    for key in ['StandardOutPath', 'StandardErrorPath']:
+        path = Path(roles['delivery'][1][key])
+        if not os.path.lexists(path):
+            continue
+        data = private_file(path)
+        if not data.strip():
+            continue
+        digest = hashlib.sha256(data).hexdigest()
+        if key == 'StandardErrorPath':
+            require(reviewed.get(str(path)) == digest, 'new delivery diagnostic requires inspection')
+            continue
+        for line in data.decode().splitlines():
+            prior = json.loads(line)['result']
+            require(prior['commandIdentity'] == 'deployment.credential-serve'
+                    and prior['outcome'] in ['success', 'failed', 'refused']
+                    and prior['effects']['inventoryComplete'] is True
+                    and not prior['effects']['uncertain']
+                    and prior['transactionState'] in ['completed', 'unchanged'],
+                    'current delivery outcome is unresolved')
+            require(prior['outcome'] == 'success' or reviewed.get(str(path)) == digest,
+                    'new failed delivery outcome requires inspection')
 
 
 def probe_ready(a, root, roles, configs, checkout, listing, seen):
@@ -378,6 +422,8 @@ def restore(a, bundle, probe=False):
                 ready = lease_ready(configs, started_at if effects['completed'] else None)
                 remaining(deadline)
                 if seen['cachePresent'] and len(seen['eventListeners']) == 2 and ready:
+                    inspect_current_outcomes(a, root, roles, configs, checkout, deadline)
+                    remaining(deadline)
                     outcome = result(True)
                     if attempted or admitted:
                         write_owner(outcome_path, outcome)
