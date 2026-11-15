@@ -126,6 +126,10 @@ const Target = z.strictObject({
     kind: z.literal("shepherdr-pilot"),
     claudeOAuthRef: z.string().regex(/^op:\/\/[^\r\n\0]+$/),
     shepherdrVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
+    credentialJobs: z.strictObject({
+      manifest: z.string().startsWith("/").regex(SAFE_LOCAL_PATH),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    }).optional(),
   }).optional(),
   role: z.enum(["development", "ui-pilot"]),
   serviceLog: z.string().regex(SAFE_REMOTE_PATH).optional(),

@@ -303,3 +303,43 @@ They do not prove any of these:
 - that the board is available
 - reconnection
 - adoption on the real Mac, or guide placement in the real pilot
+
+### Proposed credential startup integration
+
+Source candidate only. The installed launcher and running pilot are unchanged.
+A target's existing `restore` object may opt into `credentialJobs` with an
+absolute `manifest` path and its exact `sha256`. Keep that manifest, native
+job definitions and credential-owner coordinates in private runtime state.
+Never put tokens or machine-specific authentication stores in the configuration.
+
+`start` validates the profile before restoring credentials. After the existing
+Core, Tailscale and Shepherdr readiness checks, it uses two on-demand per-user
+macOS launchd jobs: the existing native Git cache command and the existing
+pinned deployment CLI's `credential serve` command. It then requires native
+cache custody, two event listeners and a completed, current cache lease before
+opening VS Code. `open` remains connection-only; closing VS Code stops neither
+job. No task, agent, sign-in or provider selection is performed by startup.
+
+The exact profile binds the container, transport, source revision and input-file
+hashes. Healthy recorded jobs are reused without a restart. Unknown, substituted
+or stopped registered jobs are refused for operator inspection. There is no
+KeepAlive policy, credential-write retry or automatic orphan adoption. The
+helper uses documented legacy `launchctl list` columns and `kickstart -p` PID
+output; it does not parse the unsupported `launchctl print` format.
+
+The credential jobs require the selected Mac GUI login. They do not provide a
+logged-out or cloud-host process owner. The agent image remains independent of
+this Mac-specific startup adapter. Git's empty-cache grace period is a native
+30-second startup constraint; it does not change the approved 900-second lease
+or 600-second refill policy.
+
+Activation requires review and approval of the exact source, private manifest
+and two property lists. Rollback removes only the added `credentialJobs` leaf
+and boots out those verified jobs, delivery first, after inspecting pending
+writes. Inspect the dedicated remote Git daemon separately before its native
+exit; SSH termination alone does not prove it stopped. Retain journals, logs,
+profiles and authentication. Do not restore stale credentials or stop the pilot.
+
+Source process tests cover argument binding, editor gating and refusal behavior.
+They do not prove launchd activation, credential custody in that process context,
+provider authentication, cold-start recovery or the full engineering workflow.

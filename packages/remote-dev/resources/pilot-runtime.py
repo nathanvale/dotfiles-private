@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Reuse the pilot's native startup and existing credential delivery owner."""
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -119,7 +120,13 @@ def options():
     p.add_argument('--service-log', default='/home/agent/.local/state/pilot-runtime/remote-dev/service.log')
     for key in ['ssh', 'alias', 'docker', 'endpoint', 'container', 'version', 'wrapper', 'reference']:
         p.add_argument('--' + key, required=True)
+    p.add_argument('--credential-manifest')
+    p.add_argument('--credential-manifest-sha256')
     a = p.parse_args()
+    if bool(a.credential_manifest) != bool(a.credential_manifest_sha256):
+        p.error('both credential manifest arguments are required')
+    if a.credential_manifest_sha256 and not re.fullmatch('[a-f0-9]{64}', a.credential_manifest_sha256):
+        p.error('credential manifest digest refused')
     if not re.fullmatch('[a-f0-9]{64}', a.container):
         p.error('full container identity required')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', a.alias):
@@ -136,36 +143,52 @@ def remote(a, action, secret=None):
     return subprocess.run(ssh, input=secret, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=240)
 
 
-def emit(p):
+def emit(p, a=None):
     try:
         data = json.loads(p.stdout)
         if not isinstance(data, dict) or data.get('status') not in ['ready', 'missing', 'failed']:
             raise ValueError()
     except ValueError:
         data = {'status': 'failed', 'attempted': True, 'started': [], 'error': 'remote restore result is unknown'}
+    if a is not None and a.credential_manifest and p.returncode == 0 and data.get('status') == 'ready':
+        outcome = a.credential_module.restore(a, a.credential_bundle, probe=a.action == 'probe')
+        data = {**data, **outcome, 'attempted': data.get('attempted', False) or outcome.get('attempted', False)}
+        if not data.get('credentials'):
+            data['status'] = 'failed' if a.action != 'probe' else 'missing'
     print(json.dumps(data))
     return 0 if p.returncode == 0 and data.get('status') != 'failed' else 1
 
 
 def main():
     a = options()
+    if a.credential_manifest:
+        try:
+            sys.dont_write_bytecode = True
+            spec = importlib.util.spec_from_file_location('credential_jobs', Path(__file__).with_name('credential_jobs.py'))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            a.credential_bundle = module.validate(a)
+            a.credential_module = module
+        except Exception:
+            print(json.dumps({'status': 'failed', 'attempted': False, 'started': [], 'error': 'credential profile validation failed'}))
+            return 1
     if a.action == 'deliver':
         secret = sys.stdin.buffer.read(65537)
         if not 1 <= len(secret) <= 65536 or any(x in secret for x in (0, 10, 13)):
             print(json.dumps({'status': 'failed', 'attempted': False, 'error': 'credential shape refused', 'started': []}))
             return 1
-        return emit(remote(a, 'restore', b'CLAUDE_CODE_OAUTH_TOKEN=' + secret + b'\n'))
+        return emit(remote(a, 'restore', b'CLAUDE_CODE_OAUTH_TOKEN=' + secret + b'\n'), a)
     probe = remote(a, 'probe')
     try:
         s = json.loads(probe.stdout)
         if not isinstance(s, dict) or s.get('status') not in ['ready', 'missing', 'failed'] or not isinstance(s.get('core'), bool) and s.get('status') != 'failed':
             raise ValueError()
     except ValueError:
-        return emit(probe)
+        return emit(probe, a)
     if a.action == 'probe' or probe.returncode != 0 or s.get('status') == 'ready':
-        return emit(probe)
+        return emit(probe, a)
     if s.get('core') is True:
-        return emit(remote(a, 'restore'))
+        return emit(remote(a, 'restore'), a)
     argv = [sys.executable, str(Path(__file__).resolve()), 'deliver', *sys.argv[2:]]
     p = subprocess.run([a.wrapper, 'inject-stdin', a.reference, '--', *argv], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=240)
     if not p.stdout:

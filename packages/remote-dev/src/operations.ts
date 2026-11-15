@@ -295,7 +295,8 @@ async function restoreTarget(
     "--docker", host.dockerPath, "--endpoint", host.dockerHost, "--container", target.containerId,
     "--version", target.restore.shepherdrVersion, "--wrapper", join(home, "code/dotfiles/bin/with-one-password-token"),
     "--reference", target.restore.claudeOAuthRef,
-  ], { HOME: home, PATH: environment.PATH ?? "/usr/bin:/bin", SSH_AUTH_SOCK: "" });
+    ...(target.restore.credentialJobs === undefined ? [] : ["--credential-manifest", target.restore.credentialJobs.manifest, "--credential-manifest-sha256", target.restore.credentialJobs.sha256]),
+  ], { HOME: home, PATH: environment.PATH ?? "/usr/bin:/bin", SSH_AUTH_SOCK: "" }, target.restore.credentialJobs !== undefined);
   const blockedReason = completed.length > 0 ? "services-incomplete" : "services-blocked";
   if (!restored.ok) {
     const runtime = `services-restore:${targetId}`;

@@ -74,3 +74,54 @@ test("the reviewed stdin transport delivers a nonsecret sentinel without secret 
   expect(logged).toContain('"deliveredSentinel":true');
   expect(logged).not.toContain("NONSECRET_RESTORE_SENTINEL");
 });
+
+function withCredentialJobs(config: ReturnType<typeof baseConfig>) {
+  admitted(config);
+  const restore = config.targets[0]?.restore;
+  if (typeof restore !== "object" || restore === null) throw new Error("fixture restore missing");
+  Object.assign(restore, { credentialJobs: { manifest: "/private/fixture/credential-jobs.json", sha256: "a".repeat(64) } });
+  return config;
+}
+
+test("configured credential jobs bind the exact manifest before editor dispatch", async () => {
+  const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { output: JSON.stringify({ status: "ready", attempted: true, started: [], credentials: true, credentialsChanged: true }) } }, withCredentialJobs);
+  const result = run(world, ["start", "pilot", "--json"]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe("");
+  expect((await calls(world)).map((call) => call.tool)).toEqual(["ssh", "ssh", "pilotRuntime", "ssh", "code"]);
+  expect((await calls(world, "pilotRuntime"))[0]?.argv.slice(-4)).toEqual(["--credential-manifest", "/private/fixture/credential-jobs.json", "--credential-manifest-sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+  expect(envelopeOf(result).result.effects).toEqual({ completed: ["editor-window:pilot", "services-restore:pilot"], remaining: [], uncertain: [], inventoryComplete: true });
+});
+
+test.each([undefined, false])("configured credentials cannot pass on service readiness alone (%s)", async (credentials) => {
+  const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { output: JSON.stringify({ status: "ready", attempted: false, started: [], credentials }) } }, withCredentialJobs);
+  const result = run(world, ["start", "pilot", "--json"]);
+  expect(result.exitCode).toBe(3);
+  expect(envelopeOf(result).result).toMatchObject({ transactionState: "unchanged", retryable: false });
+  expect(await calls(world, "code")).toEqual([]);
+  expect(await calls(world, "pilotRuntime")).toHaveLength(1);
+});
+
+test("uncertain credential startup retains its effect and never opens or retries", async () => {
+  const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { exit: 1, output: JSON.stringify({ status: "failed", attempted: true, started: [], credentials: false }) } }, withCredentialJobs);
+  const result = run(world, ["start", "pilot", "--json"]);
+  expect(result.exitCode).toBe(1);
+  expect(envelopeOf(result).result.effects).toEqual({ completed: [], uncertain: ["services-restore:pilot"], remaining: ["editor-window:pilot"], inventoryComplete: true });
+  expect(await calls(world, "code")).toEqual([]);
+  expect(await calls(world, "pilotRuntime")).toHaveLength(1);
+});
+
+test("open never restores configured credential jobs", async () => {
+  const world = await makeWorld({ ssh: { ps: [RUNNING] } }, withCredentialJobs);
+  expect(run(world, ["open", "pilot", "--json"]).exitCode).toBe(0);
+  expect(await calls(world, "pilotRuntime")).toEqual([]);
+});
+
+test("native startup helper refuses an unbound credential manifest before remote access", async () => {
+  const world = await makeWorld({ ssh: { ps: [RUNNING] } });
+  const p = Bun.spawnSync(["/usr/bin/python3", "resources/pilot-runtime.py", "restore", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", "--wrapper", "/unused/wrapper", "--reference", "op://fixture/existing/credential", "--credential-manifest", world.configPath, "--credential-manifest-sha256", "a".repeat(64)], { cwd: join(import.meta.dir, "../.."), env: world.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  expect(p.exitCode).toBe(1);
+  expect(p.stderr.toString()).toBe("");
+  expect(JSON.parse(p.stdout.toString())).toEqual({ status: "failed", attempted: false, started: [], error: "credential profile validation failed" });
+  expect(await calls(world)).toEqual([]);
+});
