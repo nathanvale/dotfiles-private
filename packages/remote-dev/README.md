@@ -330,8 +330,38 @@ output; it does not parse the unsupported `launchctl print` format.
 The credential jobs require the selected Mac GUI login. They do not provide a
 logged-out or cloud-host process owner. The agent image remains independent of
 this Mac-specific startup adapter. Git's empty-cache grace period is a native
-30-second startup constraint; it does not change the approved 900-second lease
+30-second startup constraint. One monotonic deadline starts before cache
+`kickstart`; native calls use its remaining time, and late readiness is refused.
+The deadline is never reset for delivery startup. This does not change the approved 900-second lease
 or 600-second refill policy.
+
+Before a new owner starts, the hash-bound private manifest must additionally
+contain `priorOutcomes`. Existing manifests without it fail closed at startup;
+this source change does not modify a prepared or live manifest. Its fields are:
+
+- `decision: "reviewed-new-owner"`: an explicit proposed operator admission,
+  requiring approval before activation, not an automatically generated verdict.
+- `result: {path, sha256}`: the retained deployment `credential serve` result
+  envelope. It must report a complete inventory, no uncertain effects, and a
+  completed or unchanged transaction. A known failed session needs this exact
+  reviewed admission; an unknown result cannot be acknowledged into success.
+- `states: [{path, files: [{name, sha256}]}]`: exact nonsecret inventories of
+  all three configured credential state directories. Added, changed, missing,
+  unowned or nonprivate files refuse admission. The pinned deployment source's
+  `pendingJournalIntent` reader rejects pending writes; any retained journal
+  lock also requires inspection. This adapter does not resolve journals.
+- `logs: [{path, sha256}]`: the exact delivery stdout/stderr and this adapter's
+  `restore-result.json`. Use `null` only for independently verified absence.
+  Operator review must correlate the retained result with those logs and
+  journal snapshots. Hash matching alone does not establish their meaning.
+
+Healthy recorded owners are reused without re-admitting evolving journals.
+A failed or unfinished startup record still requires review even when both PIDs
+remain alive. Each registration/start intent is persisted before its native call,
+then advanced to confirmed after the reply and required identity checks. The
+private `restore-result.json` and public CLI result preserve separate completed
+and uncertain per-job effects. Neither is permission to retry or clean up blindly.
+A missing or malformed native effect inventory stays unknown, not complete.
 
 Activation requires review and approval of the exact source, private manifest
 and two property lists. Rollback removes only the added `credentialJobs` leaf

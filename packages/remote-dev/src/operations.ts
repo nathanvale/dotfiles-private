@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { restoreServices } from "./service-restore.ts";
+import { restoreServices, type ServiceRestore } from "./service-restore.ts";
 import { rememberLaunch } from "./recents.ts";
 import type { Reason } from "./branch-station-catalog.ts";
 import type {
@@ -297,16 +297,21 @@ async function restoreTarget(
     "--reference", target.restore.claudeOAuthRef,
     ...(target.restore.credentialJobs === undefined ? [] : ["--credential-manifest", target.restore.credentialJobs.manifest, "--credential-manifest-sha256", target.restore.credentialJobs.sha256]),
   ], { HOME: home, PATH: environment.PATH ?? "/usr/bin:/bin", SSH_AUTH_SOCK: "" }, target.restore.credentialJobs !== undefined);
-  const blockedReason = completed.length > 0 ? "services-incomplete" : "services-blocked";
-  if (!restored.ok) {
-    const runtime = `services-restore:${targetId}`;
-    return resultFor(command, restored.attempted ? "services-unconfirmed" : blockedReason, {
-      effects: { completed, inventoryComplete: true, remaining: [`editor-window:${targetId}`, ...(restored.attempted ? [] : [runtime])].sort(), uncertain: restored.attempted ? [runtime] : [] },
-      resource: targetId,
-    });
-  }
+  completed.push(...restored.effects.completed.map((effect) => `credential-${effect}:${targetId}`));
+  const credentialUncertain = restored.effects.uncertain.map((effect) => `credential-${effect}:${targetId}`);
+  if (!restored.ok) return restoreFailure(command, targetId, completed, credentialUncertain, restored);
   if (restored.changed) completed.push(`services-restore:${targetId}`);
   return null;
+}
+
+function restoreFailure(command: string, targetId: string, completed: string[], credentialUncertain: string[], restored: Extract<ServiceRestore, { ok: false }>): OperationResult {
+  const runtime = `services-restore:${targetId}`;
+  const uncertain = [...credentialUncertain, ...(restored.attempted ? [runtime] : [])].sort();
+  const blockedReason = completed.length > 0 ? "services-incomplete" : "services-blocked";
+  return resultFor(command, uncertain.length > 0 ? "services-unconfirmed" : blockedReason, {
+    effects: { completed: completed.sort(), inventoryComplete: restored.effects.inventoryComplete, remaining: [`editor-window:${targetId}`, ...(uncertain.length > 0 ? [] : [runtime])].sort(), uncertain },
+    resource: targetId,
+  });
 }
 
 function finishOpen(command: string, targetId: string, completed: string[], opened: OperationResult): OperationResult {

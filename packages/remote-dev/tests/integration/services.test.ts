@@ -84,13 +84,13 @@ function withCredentialJobs(config: ReturnType<typeof baseConfig>) {
 }
 
 test("configured credential jobs bind the exact manifest before editor dispatch", async () => {
-  const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { output: JSON.stringify({ status: "ready", attempted: true, started: [], credentials: true, credentialsChanged: true }) } }, withCredentialJobs);
+  const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { output: JSON.stringify({ status: "ready", attempted: true, started: [], credentials: true, credentialsChanged: true, credentialEffects: { completed: ["registered:cache", "registered:delivery", "started:cache", "started:delivery"], uncertain: [] } }) } }, withCredentialJobs);
   const result = run(world, ["start", "pilot", "--json"]);
   expect(result.exitCode).toBe(0);
   expect(result.stderr).toBe("");
   expect((await calls(world)).map((call) => call.tool)).toEqual(["ssh", "ssh", "pilotRuntime", "ssh", "code"]);
   expect((await calls(world, "pilotRuntime"))[0]?.argv.slice(-4)).toEqual(["--credential-manifest", "/private/fixture/credential-jobs.json", "--credential-manifest-sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
-  expect(envelopeOf(result).result.effects).toEqual({ completed: ["editor-window:pilot", "services-restore:pilot"], remaining: [], uncertain: [], inventoryComplete: true });
+  expect(envelopeOf(result).result.effects).toEqual({ completed: ["credential-registered:cache:pilot", "credential-registered:delivery:pilot", "credential-started:cache:pilot", "credential-started:delivery:pilot", "editor-window:pilot", "services-restore:pilot"], remaining: [], uncertain: [], inventoryComplete: true });
 });
 
 test.each([undefined, false])("configured credentials cannot pass on service readiness alone (%s)", async (credentials) => {
@@ -106,7 +106,7 @@ test("uncertain credential startup retains its effect and never opens or retries
   const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { exit: 1, output: JSON.stringify({ status: "failed", attempted: true, started: [], credentials: false }) } }, withCredentialJobs);
   const result = run(world, ["start", "pilot", "--json"]);
   expect(result.exitCode).toBe(1);
-  expect(envelopeOf(result).result.effects).toEqual({ completed: [], uncertain: ["services-restore:pilot"], remaining: ["editor-window:pilot"], inventoryComplete: true });
+  expect(envelopeOf(result).result.effects).toEqual({ completed: [], uncertain: ["services-restore:pilot"], remaining: ["editor-window:pilot"], inventoryComplete: false });
   expect(await calls(world, "code")).toEqual([]);
   expect(await calls(world, "pilotRuntime")).toHaveLength(1);
 });
@@ -124,4 +124,19 @@ test("native startup helper refuses an unbound credential manifest before remote
   expect(p.stderr.toString()).toBe("");
   expect(JSON.parse(p.stdout.toString())).toEqual({ status: "failed", attempted: false, started: [], error: "credential profile validation failed" });
   expect(await calls(world)).toEqual([]);
+});
+
+test("native credential restore contract handles prior outcomes, deadlines and durable partial effects offline", () => {
+  const p = Bun.spawnSync(["/usr/bin/python3", "-I", "-B", "tests/support/credential_jobs_test.py"], { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" });
+  expect(p.stderr.toString()).toContain("Ran 11 tests");
+  expect(p.stderr.toString()).not.toContain("FAILED");
+  expect(p.exitCode).toBe(0);
+});
+
+test("credential partial effects survive the public CLI result without an aggregate replacing them", async () => {
+  const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { exit: 1, output: JSON.stringify({ status: "failed", attempted: true, started: [], credentials: false, credentialEffects: { completed: ["registered:cache", "started:cache"], uncertain: ["registered:delivery"] } }) } }, withCredentialJobs);
+  const result = run(world, ["start", "pilot", "--json"]);
+  expect(result.exitCode).toBe(1);
+  expect(envelopeOf(result).result.effects).toEqual({ completed: ["credential-registered:cache:pilot", "credential-started:cache:pilot"], uncertain: ["credential-registered:delivery:pilot"], remaining: ["editor-window:pilot"], inventoryComplete: true });
+  expect(await calls(world, "code")).toEqual([]);
 });
