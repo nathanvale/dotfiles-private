@@ -25,13 +25,21 @@ Use separate fresh native routing sessions for ordinary A2, high resolution
 and "Make my daily sheet" with no supplied answers. The last case must retain
 blank answers and select A4 without inventing a focus.
 Capture installed candidate and optional-reference reads and actual tool
-availability. A tool inventory written by the model alone is unknown evidence.
+availability in the [native trace](../references/native-capabilities.md), not
+only stdout. Require actual image-return results for each selected PNG
+reference before passing visual inspection; Markdown descriptions and file
+existence checks do not establish image reads. A tool inventory written by the
+model alone is unknown evidence.
 
 Actual rendering uses the current Harness's supported imagegen and pdf skills.
 If unavailable in the CLI, perform the artifact drive in the foreground with the
 exact candidate source/hash and confirmed fixture summary. Label source-driven
 artifact proof separately from installed fresh-session discovery. Existing read
-journeys keep their no-write policy. Declare the writable final artifact folder
+journeys keep their no-write policy. For a CLI artifact drive, inspect current
+help and use `-s workspace-write` with `--add-dir` for the declared final and
+private artifact directories. Keep source writes forbidden in the prompt;
+compare source hashes and Git state before and after because the worktree is
+also writable in that sandbox mode. Declare the writable final artifact folder
 under this session's visualization location and private prompt/receipt folder
 under the verifier run_dir before generation. Include native imagegen originals
 under its tool-managed output location, recording the actual returned paths;

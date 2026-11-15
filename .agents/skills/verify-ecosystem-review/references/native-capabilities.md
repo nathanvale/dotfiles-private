@@ -1,16 +1,68 @@
 # Capture native capability proof
 
-Use this with Doctor and the snapshot/partial journeys. Keep evidence scoped
-to the Harness and session that received the tools. This is a read workflow;
-no setup, sign-in, permission change, or new client is part of the check.
+Use this with Doctor and the selected journey's evidence checks. Keep evidence
+scoped to the Harness and session that received the tools. Capability discovery
+and trace inspection require no setup, sign-in, permission change or new
+client. Artifact writes remain governed by the printable journey.
+
+## Retain native tool records
+
+Run Codex without `--ephemeral` when qualifying tool use. On codex-cli 0.169.0,
+`--json` retains shell executions and final prose but can omit `functions.exec`
+calls, runtime tool-discovery results and image payloads. Missing stdout events
+therefore establish neither an absent call nor its success. Keep the stdout
+stream and stderr, then copy only this completed run's native rollout:
+
+```sh
+python3 - <<'PYTRACE'
+import json, os, pathlib, subprocess, hashlib
+root = pathlib.Path(os.environ['run_dir'])
+events = [json.loads(line) for line in (root/'events.jsonl').read_text().splitlines()]
+assert any(e['type'] == 'turn.completed' for e in events)
+thread_id = next(e['thread_id'] for e in events if e['type'] == 'thread.started')
+home = pathlib.Path(os.environ.get('CODEX_HOME', pathlib.Path.home()/'.codex'))
+paths = subprocess.check_output([
+    'rg', '--files', '--hidden', str(home/'sessions'),
+    '-g', '*'+thread_id+'*.jsonl',
+], text=True).splitlines()
+assert len(paths) == 1, paths
+source = pathlib.Path(paths[0])
+meta = json.loads(source.open().readline())
+assert meta['type'] == 'session_meta' and meta['payload']['id'] == thread_id
+raw = source.read_bytes()
+with (root/'rollout.jsonl').open('xb') as stream:
+    stream.write(raw)
+(root/'rollout-receipt.json').write_text(json.dumps({
+    'thread_id': thread_id, 'source': str(source),
+    'sha256': hashlib.sha256(raw).hexdigest(),
+}, indent=2)+'\n')
+PYTRACE
+```
+
+Wait for process exit before copying. If the native location or format differs,
+resolve it through current CLI diagnostics and the session owner; preserve the
+gap instead of selecting another chat. Retain native originals. Cleanup removes
+only owned candidate registration, not session history.
+
+Judge tool-call/result pairs and offered definitions, not private reasoning.
+Match each `custom_tool_call` or `function_call` to its result by `call_id`.
+For code-mode discovery, inspect the executed code and runtime `ALL_TOOLS`
+result. Its scope covers that router, not separately offered namespaces or
+undiscovered integration operations. Preserve relevant runtime declarations;
+never replace them with a schema quoted in final prose. Require image-return
+payloads for visual-read proof and compare them with the intended input hashes.
+Keep raw traces private; publish only sanitized conclusions and pointers.
 
 ## Codex capability evidence
 
 Ask the fresh session to discover its available Linear read route and supported
-native browser. Capture actual discovery and read results in `events.jsonl`.
+native browser. Capture stdout in `events.jsonl` and discovery/read results
+in the retained native trace.
 A configured plugin, successful install, or model-written tool list establishes
-neither offered operations nor successful reads. Record an unexposed route as
-unknown or unavailable in that session, with the supporting discovery result.
+neither offered operations nor successful reads. When operational discovery or
+offered definitions are not independently recorded, classify callable exposure
+as unknown. Record observed route failures
+separately, with their supporting results.
 Keep startup failure diagnostics and the missing prerequisite.
 
 Permit both routes in the live prompt. A connector-only prompt proves behavior
