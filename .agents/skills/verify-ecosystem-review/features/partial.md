@@ -35,6 +35,10 @@ Do not revoke production permissions to manufacture a failure.
   An unrecorded offered-tool inventory remains unknown; a model-written list
   cannot prove zero tools. It claims no live health score, empty backlog, or
   automatic acceptance.
+  Keep a native pipe failure, authenticated chat-access assertion refusal,
+  unknown tool exposure and website sign-in as separate observations. A browser
+  refusal names the eligible desktop-chat prerequisite; it does not justify
+  repeated executable-path changes or imply that Nathan's site login failed.
 
 ## Gotchas
 

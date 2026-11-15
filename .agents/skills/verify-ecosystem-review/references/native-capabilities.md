@@ -55,6 +55,13 @@ Keep raw traces private; publish only sanitized conclusions and pointers.
 
 ## Codex capability evidence
 
+Check [current Browser availability](https://learn.chatgpt.com/docs/browser)
+before selecting a live route. The documentation checked on 15 November 2026
+excludes Browser from Codex CLI and directs local browser work to the desktop
+app. Offered CUA tools and inherited desktop configuration alone do not make a
+fresh CLI chat eligible. Full CLI live coverage needs an operational connected
+read route; qualify native-browser coverage in an eligible desktop chat.
+
 Ask the fresh session to discover its available Linear read route and supported
 native browser. Capture stdout in `events.jsonl` and discovery/read results
 in the retained native trace.
@@ -69,6 +76,21 @@ Permit both routes in the live prompt. A connector-only prompt proves behavior
 under that restriction, not absence of Chrome. If read-only discovery offers a
 plugin install or connection rather than an operational read, stop that route
 and record it; do not accept new access to manufacture coverage.
+
+For a native pipe failure, compare the documented shell launch with the failing
+launcher using the same executable, prompt, cwd, sandbox and session overrides.
+Retain actual native calls/results for both. A changed response is diagnostic
+evidence, not proof of browser access. The direct CLI probes on 15 November 2026
+returned `Local browser access is unavailable for this chat`. The installed
+browser service authenticates its access response before checking the expected
+allowed assertion; that refusal is distinct from a closed pipe and website
+sign-in. It does not establish why another launcher lost its connection.
+
+Stop browser retries after a concrete chat-access refusal. Mark that route
+verified-unreachable with the eligible desktop-chat prerequisite, while keeping
+full CLI live coverage unqualified. Preserve inherited endpoint and identity
+values, native authorization checks and production configuration. A desktop
+read remains separate proof under the candidate-source/hash boundary below.
 
 For the desktop's already available native browser, follow the runtime's current
 entry documentation and use `cua.getState()` for surface inventory. Choose the
