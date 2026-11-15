@@ -134,14 +134,25 @@ def jobs(labels, deadline=None):
     return found
 
 
+WRAPPER = ['/usr/bin/caffeinate', '-dimsu']
+
+
+def owner_argv(argv):
+    # caffeinate keeps the launchd job PID for its wrapped utility and holds
+    # the assertion in a forked child, so that PID's owner is the utility.
+    wrapped = len(argv) > 2 and argv[:2] == WRAPPER
+    return (argv[2:] if wrapped else argv), wrapped
+
+
 def same_process(pid, argv, deadline=None, observation=None):
     if not isinstance(pid, int) or pid < 1:
         return False
+    owner, wrapped = owner_argv(argv)
     seen = command(['/bin/ps', '-ww', '-p', str(pid), '-o', 'uid=',
                     '-o', 'ucomm=', '-o', 'args='], deadline)
     values = seen.stdout.decode().strip().split(None, 2)
     complete = seen.returncode == 0 and len(values) == 3 and values[0].isdecimal()
-    matched = complete and values[0] == str(os.getuid()) and values[2] == ' '.join(argv)
+    matched = complete and values[0] == str(os.getuid()) and values[2] == ' '.join(owner)
     if observation is not None:
         # Keep numeric/accounting metadata and digests, never untrusted argv.
         program = values[1] if complete else None
@@ -150,9 +161,11 @@ def same_process(pid, argv, deadline=None, observation=None):
                             'fieldCount': len(values),
                             'observedUid': int(values[0]) if complete else None,
                             'programClass': ('launchd-proxy' if program == 'xpcproxy' else
-                                             'expected' if program == Path(argv[0]).name else 'other'),
+                                             'launch-wrapper' if wrapped and program == Path(argv[0]).name else
+                                             'expected' if program == Path(owner[0]).name else 'other'),
                             'uidMatches': bool(complete and values[0] == str(os.getuid())),
-                            'argvMatches': bool(complete and values[2] == ' '.join(argv)),
+                            'argvMatches': bool(complete and values[2] == ' '.join(owner)),
+                            'wrapperArgvMatches': bool(wrapped and complete and values[2] == ' '.join(argv)),
                             'identityMatches': bool(matched)})
     return bool(matched)
 
@@ -170,12 +183,16 @@ def wait_for_process(label, pid, argv, deadline, observation):
         remaining(deadline)
         if matched:
             return
-        # xpcproxy is a documented pre-exec stage, never an accepted owner.
-        # No changed PID, arbitrary command, other UID or observation error waits.
+        # xpcproxy is a documented pre-exec stage. The exact caffeinate image
+        # before it execs the wrapped utility is inferred from launchd running
+        # ProgramArguments[0]. Neither is ever an accepted owner. No changed
+        # PID, arbitrary command, other UID or observation error waits.
+        stage = observation.get('programClass')
         require(observation.get('psExitCode') == 0
                 and observation.get('fieldCount') == 3
-                and observation.get('programClass') == 'launchd-proxy'
-                and observation.get('observedUid') in {0, os.getuid()},
+                and (stage == 'launchd-proxy' and observation.get('observedUid') in {0, os.getuid()}
+                     or stage == 'launch-wrapper' and observation.get('uidMatches')
+                     and observation.get('wrapperArgvMatches')),
                 'credential process identity mismatch')
         time.sleep(min(0.2, remaining(deadline)))
 

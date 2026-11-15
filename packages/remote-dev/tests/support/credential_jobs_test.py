@@ -23,7 +23,9 @@ class RestoreFixture(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.root.chmod(0o700)
         self.roles = {role: ({'sha256': role, 'path': role + '.plist'}, {
-            'Label': role, 'ProgramArguments': [role, '--fixture', '/unused/bun'],
+            # Delivery carries the real caffeinate wrapper prefix; cache is unwrapped.
+            'Label': role, 'ProgramArguments': (['/usr/bin/caffeinate', '-dimsu'] if role == 'delivery' else [])
+            + [role, '--fixture', '/unused/bun'],
             'StandardOutPath': str(self.root / (role + '.out')),
             'StandardErrorPath': str(self.root / (role + '.err'))}) for role in ['cache', 'delivery']}
         self.configs = {}
@@ -330,6 +332,147 @@ class ProcessReadinessTests(RestoreFixture):
         self.assertFalse(observed['uidMatches'])
         self.assertTrue(observed['argvMatches'])
         self.assertFalse(observed['identityMatches'])
+
+    # Independent literal: the full delivery ProgramArguments seen before caffeinate execs.
+    WRAPPER_STAGE = '/usr/bin/caffeinate -dimsu delivery --fixture /unused/bun'
+
+    def delivery_shows(self, stage):
+        return lambda role, index: self.exact(role, index) if role == 'cache' else stage(index)
+
+    def assert_delivery_stopped(self, result):
+        self.assertFalse(result['credentials'])
+        self.assertEqual(self.started, ['register:cache', 'start:cache', 'register:delivery', 'start:delivery'])
+        self.assertEqual(result['credentialEffects'], {
+            'completed': ['registered:cache', 'registered:delivery', 'started:cache'],
+            'uncertain': ['started:delivery']})
+        owned = json.loads((self.root / 'owned-jobs.json').read_text())
+        self.assertEqual(owned, {'cache': {'sha256': 'cache', 'pid': 10},
+                                 'delivery': {'sha256': 'delivery', 'pid': None}})
+        return json.loads((self.root / 'restore-result.json').read_text())
+
+    def assert_delivery_refused_at_once(self, shown):
+        result = self.with_process(self.delivery_shows(lambda index: shown))
+        saved = self.assert_delivery_stopped(result)
+        self.assertEqual(result['error'], 'credential process identity mismatch')
+        self.assertEqual(self.now, 0)
+        self.assertEqual(self.ps_reads, {10: 1, 11: 1})
+        self.assertFalse(saved['processObservations']['delivery']['identityMatches'])
+
+    def test_wrapped_delivery_owner_is_the_utility_under_its_native_name(self):
+        # Native: the job PID runs ProgramArguments[2:] as bun.exe; caffeinate is a child.
+        result = self.with_process(self.delivery_shows(
+            lambda index: (os.getuid(), 'bun.exe', 'delivery --fixture /unused/bun')))
+        self.assertTrue(result['credentials'])
+        self.assertEqual(self.now, 0)
+        self.assertEqual(self.started, ['register:cache', 'start:cache', 'register:delivery', 'start:delivery'])
+        self.assertEqual(result['credentialEffects'], {'completed': [
+            'registered:cache', 'registered:delivery', 'started:cache', 'started:delivery'], 'uncertain': []})
+        owned = json.loads((self.root / 'owned-jobs.json').read_text())
+        self.assertEqual(owned, {'cache': {'sha256': 'cache', 'pid': 10},
+                                 'delivery': {'sha256': 'delivery', 'pid': 11}})
+        observed = result['processObservations']['delivery']
+        self.assertTrue(observed['identityMatches'])
+        self.assertFalse(observed['wrapperArgvMatches'])
+
+    def test_wrapped_delivery_waits_through_proxy_and_wrapper_stages(self):
+        def stages(index):
+            if index == 0:
+                return 0, 'xpcproxy', '/usr/libexec/xpcproxy delivery'
+            if index == 1:
+                return os.getuid(), 'caffeinate', self.WRAPPER_STAGE
+            return os.getuid(), 'bun.exe', 'delivery --fixture /unused/bun'
+        result = self.with_process(self.delivery_shows(stages))
+        self.assertTrue(result['credentials'])
+        self.assertGreater(self.now, 0)
+        self.assertGreaterEqual(self.ps_reads[11], 3)
+        self.assertEqual(self.started, ['register:cache', 'start:cache', 'register:delivery', 'start:delivery'])
+        observed = result['processObservations']['delivery']
+        self.assertEqual(observed['firstInspection']['programClass'], 'launchd-proxy')
+        self.assertTrue(observed['identityMatches'])
+        owned = json.loads((self.root / 'owned-jobs.json').read_text())
+        self.assertEqual(owned['delivery'], {'sha256': 'delivery', 'pid': 11})
+
+    def test_wrapper_stage_is_never_accepted_and_expires_with_the_window(self):
+        result = self.with_process(self.delivery_shows(
+            lambda index: (os.getuid(), 'caffeinate', self.WRAPPER_STAGE)))
+        saved = self.assert_delivery_stopped(result)
+        self.assertIn('window expired', result['error'])
+        self.assertAlmostEqual(self.now, 30)
+        observed = saved['processObservations']['delivery']
+        self.assertEqual(observed['programClass'], 'launch-wrapper')
+        self.assertTrue(observed['wrapperArgvMatches'])
+        self.assertFalse(observed['identityMatches'])
+
+    def test_registered_delivery_showing_the_wrapper_is_not_an_owner(self):
+        self.pids = {'cache': 10, 'delivery': 11}
+        self.file(self.root / 'owned-jobs.json', {'cache': {'sha256': 'cache', 'pid': 10},
+                                                  'delivery': {'sha256': 'delivery', 'pid': 11}})
+        result = self.with_process(self.delivery_shows(
+            lambda index: (os.getuid(), 'caffeinate', self.WRAPPER_STAGE)))
+        self.assertFalse(result['credentials'])
+        self.assertEqual(result['error'], 'existing or stopped credential job requires operator inspection')
+        self.assertEqual(self.started, [])
+        self.assertEqual(self.now, 0)
+        self.assertEqual(self.ps_reads, {10: 1, 11: 1})
+
+    def test_wrapped_utility_under_other_uid_refuses_without_wait(self):
+        self.assert_delivery_refused_at_once((os.getuid() + 1, 'bun.exe', 'delivery --fixture /unused/bun'))
+
+    def test_wrapper_stage_under_root_refuses_without_wait(self):
+        self.assert_delivery_refused_at_once((0, 'caffeinate', self.WRAPPER_STAGE))
+
+    def test_wrapper_stage_under_other_uid_refuses_without_wait(self):
+        self.assert_delivery_refused_at_once((os.getuid() + 1, 'caffeinate', self.WRAPPER_STAGE))
+
+    def test_wrapper_stage_with_changed_argument_refuses_without_wait(self):
+        self.assert_delivery_refused_at_once(
+            (os.getuid(), 'caffeinate', '/usr/bin/caffeinate -dimsu delivery --fixture /other/bun'))
+
+    def test_wrapped_utility_with_changed_argument_refuses_without_wait(self):
+        self.assert_delivery_refused_at_once((os.getuid(), 'bun.exe', 'delivery --fixture /other/bun'))
+
+    def test_unwrapped_cache_gets_no_wrapper_stage(self):
+        result = self.with_process(lambda role, index: (
+            os.getuid(), 'caffeinate', '/usr/bin/caffeinate -dimsu cache --fixture /unused/bun'))
+        saved = self.assert_cache_stopped(result)
+        self.assertEqual(self.now, 0)
+        self.assertEqual(self.ps_reads, {10: 1})
+        observed = saved['processObservations']['cache']
+        self.assertEqual(observed['programClass'], 'other')
+        self.assertFalse(observed['wrapperArgvMatches'])
+
+    def test_delivery_pending_expires_at_the_original_cache_window(self):
+        delivery_started = []
+        def staged(role, index):
+            if role == 'cache':
+                # The cache spends part of the shared window in its proxy stage.
+                return (0, 'xpcproxy', '/usr/libexec/xpcproxy cache') if self.now < 5 else self.exact(role, index)
+            if index == 0:
+                delivery_started.append(self.now)
+            return 0, 'xpcproxy', '/usr/libexec/xpcproxy delivery'
+        result = self.with_process(staged)
+        self.assert_delivery_stopped(result)
+        self.assertGreaterEqual(delivery_started[0], 5)
+        self.assertIn('window expired', result['error'])
+        self.assertAlmostEqual(self.now, 30)
+
+    def test_root_with_exact_owner_arguments_refuses_without_wait(self):
+        self.assert_cache_stopped(self.with_process(lambda role, index: (0, role, role + ' --fixture /unused/bun')))
+        self.assertEqual(self.now, 0)
+        self.assertEqual(self.ps_reads, {10: 1})
+
+    def test_proxy_under_login_uid_is_a_pending_stage(self):
+        def transition(role, index):
+            if role == 'cache' and index == 0:
+                return os.getuid(), 'xpcproxy', '/usr/libexec/xpcproxy cache'
+            return self.exact(role, index)
+        result = self.with_process(transition)
+        self.assertTrue(result['credentials'])
+        self.assertGreater(self.now, 0)
+        self.assertEqual(self.started, ['register:cache', 'start:cache', 'register:delivery', 'start:delivery'])
+        first = result['processObservations']['cache']['firstInspection']
+        self.assertEqual(first['programClass'], 'launchd-proxy')
+        self.assertEqual(first['observedUid'], os.getuid())
 
     def test_late_exact_identity_still_refuses_delivery(self):
         def late(role, index):
