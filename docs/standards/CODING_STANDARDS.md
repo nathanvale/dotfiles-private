@@ -5,9 +5,21 @@ packages; a single-package rule lives in that package's `CODING_STANDARDS.md`,
 which points here instead of restating. Delete a rule the moment tooling and
 its configuration fully confess it.
 
-Evidence archive: the `receipts/standards-research*.md` files (issue-55 feature
-branch until merge). Candidates route through a fit review before entering this
-file or any package standards file.
+[Lessons](lessons.md) records each rule's admitting evidence, and names the
+rules that have none recorded yet. A candidate
+enters this file or a package standards file through a reviewed pull request
+that adds its witnesses to `lessons.md`.
+
+| Rule | Enforced by |
+| --- | --- |
+| Test execution | `test-runner` skill |
+| Independent oracle | Review; planted-fault RED/GREEN |
+| Observed evidence crosses a real boundary | Pinned covered/skipped counts |
+| Tests wait on events | Review |
+| One owner per sealed vocabulary and fake | Review |
+| Import aliases are resolver contracts | Typecheck plus architecture tooling |
+| Creation is not readiness | Review |
+| Exports, type leaks, complexity, suppressions | Fallow config and `fallow-gate.sh` |
 
 ## Rules
 
@@ -23,16 +35,13 @@ file or any package standards file.
   complete output, and pass focused proof for the changed cause.
 - Bun test, coverage, repair, or triage: use `test-runner`.
 
-### Fallow enforces
+### Fallow
 
-- Export only symbols another module imports; unused exports are errors.
-- Export every type that appears in a public signature; private type leaks are errors.
-- Keep functions at or below cyclomatic 20 and cognitive 15; extract by responsibility when a health threshold fails; never suppress it, because suppression hides complexity from the gate.
-- Declare every script invoked by a hook, `SKILL.md`, `package.json` script, launchd job, or shell as a runtime root in `.fallowrc.json` `entry`; never delete it as dead, because doing so breaks its invoking path.
-- Place committed build bundles under an `ignorePatterns` glob.
-- Give every inline `fallow-ignore` a human-readable reason; use it only for a genuine false positive.
-- Close out each code-changing turn per
-  [repository proof](../../CODING_STANDARDS.md#proof).
+Fallow's configuration and gate output are the rule. Judgement it cannot make:
+
+- Declare every script invoked by a hook, `SKILL.md`, `package.json` script, launchd job, or shell as a runtime root in `.fallowrc.json` `entry`; a dead-code report on it means a missing root, not dead code.
+- Extract by responsibility when a health threshold fails; a complexity suppression hides the problem from the gate.
+- Use an inline `fallow-ignore` only for a genuine false positive. The gate checks that it has a reason, not that the finding was false.
 
 ### Independent oracle: no tautological tests
 
@@ -49,14 +58,15 @@ collection must not pass a row-by-row check vacuously.
 
 Name the observable behavior each test proves and one plausible wrong behavior
 that makes it fail. A matching helper result or mock call count alone does not
-prove a public outcome. For a new or disputed proof claim, demonstrate RED with
-a disposable perturbation, then restore GREEN in the same harness.
+prove a public outcome. For a regression test, or a new or disputed proof
+claim, demonstrate RED with a disposable perturbation (or on the unfixed code),
+then restore GREEN in the same harness.
 
-Lesson: four packages carried this defect on one audit day. ASMG review caught
-a hoist that replaced a test's literal list with the predicate under test;
-vault-git and warm-chrome each compared a catalog to itself through copied
-expected fields; browser-connect recomputed expectations by calling the
-production function.
+### Tests wait on events
+
+Drive time with a fake clock, or wait on a ready file, log line, or barrier.
+A sleep or a wall-clock tolerance passes on an idle machine and races under
+load. Treat a flaky test as a race to fix, never as a retry to add.
 
 ### Observed evidence crosses a real boundary
 
@@ -65,21 +75,11 @@ values. Scaffolds default to a non-covered status; each skip carries a
 rationale the test asserts non-empty; covered and skipped counts are pinned
 exactly, so downgrading a proven row is a reviewable edit.
 
-Lesson: warm-chrome shipped an eighteen-station manifest reporting full
-observed coverage with zero processes run, on its public API. browser-connect
-solved the identical problem honestly with real spawns, pinned counts, and
-per-skip rationales.
-
 ### One owner per sealed vocabulary and per test fake
 
 A sealed list, fixture, or fake exists once; every consumer imports it. Treat
 a second copy as a defect: copies drift, and each consumer then proves a
 different contract while claiming the same one.
-
-Lesson: ASMG declared its baseline exit codes in two files and restated a
-sealed mutation list in three fixtures; browser-connect's two copies of one
-fake runtime drifted on probe stderr; browser-use-security duplicated a
-manifest byte-for-byte across two test files.
 
 ### Import aliases are resolver contracts
 
@@ -101,10 +101,3 @@ through an owned observable, or treat the dependency's structured "not ready"
 rejection as a bounded same-identity retry, admitted only with evidence the
 rejection is pre-launch and side-effect-free. A rejection that outlives the
 bound is a classified failure, never an unknown outcome.
-
-Lesson: frontier-runner called `herdr agent start` 8ms after `pane split`
-returned ok; the split proved the pane existed, not that its shell was at a
-prompt. The same pane was ready in 5ms in one run and 220ms in another, so the
-race passed every local check and failed a native receipt-backed run with a
-misclassified unknown startup effect. (Admitted with single-package evidence
-on Nathan's instruction, 2026-08-24; two call sites witnessed.)

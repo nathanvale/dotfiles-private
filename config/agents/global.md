@@ -9,9 +9,12 @@
   clarify structure.
 - Explain the reason when a decision, trade-off, or unfamiliar step matters.
 - Prefer clarity when terse wording would hide risk or meaning.
-- Confusion or repeated misunderstanding: stop, restate the current state in
-  plain language, acknowledge the mismatch, and offer one next step. Treat
+- Restate unprompted when Nathan asks "what are we doing", asks for the next
+  safe action, repeats a question, or swears: stop, restate the current state
+  in plain language, acknowledge the mismatch, and offer one next step. Treat
   frustration as feedback about the workflow, not a problem with Nathan.
+- Technical decision for Nathan: explain it in plain words with a short
+  TypeScript example; spell out every acronym and project label on first use.
 - Support Nathan's ADHD with one visible objective and one decision at a time.
   Lead with the outcome or recommendation; make detail available when useful.
 - Correct obvious voice-transcription errors from context. Clarify only when
@@ -83,10 +86,9 @@
 - Agent-facing writing: read
   `$HOME/code/dotfiles/docs/agents/instruction-maintenance.md` before changing
   `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to.
-- Skill or plugin creation, review, editing, installation, update, enablement,
-  source, live address, migration, retirement, or CLI and runtime routing,
-  including Matt Pocock, pstack and Pi: read
-  `$HOME/code/dotfiles/docs/agents/skills.md` and follow its owner map.
+- Skill or plugin authoring, installation, or routing (personal, Matt Pocock,
+  pstack, Pi): read `$HOME/code/dotfiles/docs/agents/skills.md` and follow its
+  owner map.
 - Generated file: edit its named source, then regenerate the output.
 - New or relocated code, repository, project packet, note, plan,
   specification, ticket, research, finding, proof, or runtime evidence: read
@@ -124,8 +126,10 @@
   the SDK `AGENTS.md` owner routes for creation and cleanup. A generic stray
   report on a verified native task worktree requires an ownership check;
   it does not authorize relocation, renaming or deletion.
-- Never force-push, hard-reset, run `git clean -f`, restore an entire working
-  tree, or stage with `git add .` or `git add -A`.
+- Never force-push, hard-reset, run `git clean -f`, restore the entire working
+  tree, force-switch branches, or stage with `git add .` or `git add -A`. When
+  Claude Code's `git-safety` hook is installed, it refuses these and prints the
+  safer command.
 - Dirty or untracked work: treat it as owned until proven disposable. Preserve
   it before removing a worktree or branch.
 - For Homebrew changes, follow the package instructions in
@@ -137,19 +141,12 @@
 - Google service operation supported by `gog`: use the `gog` CLI and the
   corresponding `gog-*` skill when available, even when a connector or browser
   exists.
-
-- Use `ghh` for GitHub CLI work.
-- Herdr CLI or plugin installation or updates; desktop typed or spoken requests
-  to a project coordinator; Herdr Projects tasks, completion or settings; or
-  Herdr sessions, workspaces, tabs, panes or agents: read
+- GitHub CLI: `ghh exec --account <login> -- <gh arguments>`, where the login
+  is the account with access (`nathanvale` for personal repositories);
+  `ghh check --account <login>` verifies it.
+- Herdr or Herdr Projects (installation, coordinators, tasks, sessions, panes,
+  agents, a defect report, or any change to its source): read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
-- Treat Herdr Projects as third-party software, not our maintenance responsibility.
-  Use supported precompiled releases and documented interfaces. Never modify its
-  source, build custom fixes, or open or submit pull requests for it.
-- Report Herdr Projects defects only through issues in its verified upstream
-  repository, backed by a reproducible failure, exact version and environment,
-  expected versus actual behavior, and sanitized evidence. Use a documented
-  workaround or report the blocker; keep our project focused on its delivery goal.
 - Ovis or Home Assistant browser access, home network or WireGuard access to
   the Mini, or cross-device previews of local apps, Storybook or Herdr review
   pages: read
@@ -162,7 +159,6 @@
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.
 - Accessible email question: read
   `$HOME/code/dotfiles/docs/agents/email.md` before answering.
-
 - Long unattended local run on a sleep-capable Mac: launch it under
   `caffeinate -dimsu`, then prove the process completed. This does not protect
   a closed laptop lid.
@@ -206,5 +202,4 @@
 - Use existing contract and discovery owners. Keep throwaway probes outside
   repositories; never invent placeholder commands, states, or interfaces to
   make a test pass.
-- Prefer a gate over a clause when the rule must hold late in a long session.
 - Every failure names its cause and its repair path, or the handoff replacing it.
