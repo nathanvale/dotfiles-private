@@ -1151,6 +1151,7 @@ describe('narrow mode', () => {
 		['git rebase --exec "git clean -fd" main', 'forced-clean'],
 		["git rebase -x 'git reset --hard' main", 'hard-reset'],
 		['git rebase --exec="git push --force" main', 'force-push'],
+		["git rebase -x'git clean -fd' main", 'forced-clean'],
 		['git restore --staged --worktree .', 'whole-tree-discard'],
 		['git restore -SW .', 'whole-tree-discard'],
 		['git restore -W :/', 'whole-tree-discard'],
@@ -1212,6 +1213,7 @@ describe('narrow mode', () => {
 		['git switch main'],
 		['git switch -c feat/z'],
 		['git rebase -x "bun test" main'],
+		["git rebase -x'bun test' main"],
 		['git clean -n'],
 		['echo "git push --force"'],
 		[

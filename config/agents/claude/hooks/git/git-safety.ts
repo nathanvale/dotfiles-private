@@ -703,6 +703,7 @@ function extractRebaseExecCommand(
 	idx: number,
 ): string | undefined {
 	if (arg === '--exec' || arg === '-x') return args[idx + 1]
+	if (arg.startsWith('-x')) return arg.slice(2)
 	if (!arg.startsWith('--exec=')) return undefined
 	let val = arg.slice('--exec='.length)
 	if (
