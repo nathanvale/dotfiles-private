@@ -66,6 +66,9 @@ export function isDependencyTool(value: string): value is DependencyTool {
 	return (DEPENDENCY_TOOLS as readonly string[]).includes(value);
 }
 
+// A declared tool this platform deliberately replaces; never true on macOS.
+export const notRequiredOnPlatform = (name: string): boolean => (ALL_TOOLS as readonly string[]).includes(name) && !isDependencyTool(name);
+
 export function dependencyStatus(env: EnvironmentSource, tools: readonly DependencyTool[]): DependencyStatus[] {
 	const root = stateRoot(env);
 	return tools.map((tool) => {

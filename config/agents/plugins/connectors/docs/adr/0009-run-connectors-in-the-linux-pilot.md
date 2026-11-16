@@ -52,6 +52,12 @@ Credentials on Linux:
 NotebookLM needs a logged-in desktop browser profile and a launchd route; it
 is left out of the pilot until a persistent browser profile exists there.
 
+Notion uses no shared credential: each account's grant comes
+from MCPorter's attended OAuth login, whose callback lands on the
+container's loopback. It can complete only in a browser inside the
+container (the task browser), with Nathan signing in; that login is not yet
+proven, so it stays on the live-proof list.
+
 ## Proposed decision
 
 `pilot/build.ts` (`bun run build:pilot`) builds a directory marketplace on the
@@ -85,4 +91,5 @@ answers whoever can reach its socket as this user, as git's own cache does.
 the lockfile pin, receiver reads, and the packaged build with a real git
 receiver holding a sentinel. Live proof: in a fresh pilot Claude Code session
 the Skills list, keyless Context7 and Firecrawl reads succeed, and Context7
-account mode reads with the delivered key. macOS CI keeps `bun run test`.
+account mode reads with the delivered key. A Notion attended login and read
+in the task browser remains to be proven. macOS CI keeps `bun run test`.

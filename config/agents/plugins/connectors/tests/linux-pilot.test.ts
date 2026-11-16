@@ -20,7 +20,6 @@
 // account, or a hosted endpoint.
 import { afterAll, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { readDeliveredItem, receiverHost, receiverSocket, type ReceiverRun } from "../bin/delivered-credential.ts";
 import { platformDependencyTools } from "../bin/dependency-status.ts";
@@ -36,7 +35,9 @@ const SENTINEL = "linux-pilot-sentinel-key-7d1f";
 const NODE = "/opt/node/bin/node";
 const onLinux = process.platform === "linux";
 
-const scratch = mkdtempSync(path.join(os.tmpdir(), "connectors-linux-pilot-"));
+// A short root: a macOS temp folder would push the receiver socket path past
+// the 104-byte Unix socket limit.
+const scratch = mkdtempSync("/tmp/cxlp-");
 chmodSync(scratch, 0o700);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -122,7 +123,10 @@ test("receiver read: a key passes only from a private receiver naming the regist
 		expect(seen).toEqual([JSON.stringify({ argv: ["credential-cache", "--socket"], input: `protocol=https\nhost=${receiverHost("context7")}\nusername=${ITEM}\n\n`, env: ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT", "HOME", "PATH"] })]);
 		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(""))).toEqual({ ok: false, cause: "credential-not-delivered" });
 		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(`username=${OTHER_ITEM}\npassword=${SENTINEL}\n`))).toEqual({ ok: false, cause: "credential-invalid" });
-		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(`username=${ITEM}\npassword=${SENTINEL}\nhost=x\n`))).toEqual({ ok: false, cause: "credential-invalid" });
+		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(`username=${ITEM}\npassword=${SENTINEL}\npassword_expiry_utc=2000000000\ncapability[]=authtype\n`))).toEqual({ ok: true, item: { id: ITEM, fields: [{ label: "credential", value: SENTINEL }] } });
+		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(`username=${ITEM}\npassword=${SENTINEL}\npassword=other\n`))).toEqual({ ok: false, cause: "credential-invalid" });
+		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(`password=${SENTINEL}\n`))).toEqual({ ok: false, cause: "credential-invalid" });
+		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(`username=${ITEM}\nnot-an-attribute\npassword=${SENTINEL}\n`))).toEqual({ ok: false, cause: "credential-invalid" });
 		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers(`username=${ITEM}\npassword=\n`))).toEqual({ ok: false, cause: "credential-invalid" });
 		expect(readDeliveredItem("context7", ITEM, { HOME: home }, answers("", 128))).toEqual({ ok: false, cause: "receiver-invalid" });
 		expect(readDeliveredItem("context7", "not-an-item", { HOME: home }, recording)).toEqual({ ok: false, cause: "receiver-invalid" });
@@ -134,26 +138,25 @@ test("receiver read: a key passes only from a private receiver naming the regist
 });
 
 // The real git credential-cache receiver, as the operator's sender fills it.
-function deliver(home: string, item: string): void {
-	const store = Bun.spawnSync(["/usr/bin/git", "credential-cache", "--timeout", "120", "--socket", receiverSocket(home, "context7"), "store"], {
-		stdin: Buffer.from(`protocol=https\nhost=${receiverHost("context7")}\nusername=${item}\npassword=${SENTINEL}\n\n`),
-		env: { HOME: home, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+const GIT_ENV = (home: string) => ({ HOME: home, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
+
+function deliver(home: string, item: string, connector = "context7"): void {
+	const directory = path.dirname(receiverSocket(home, connector));
+	mkdirSync(directory, { recursive: true, mode: 0o700 });
+	chmodSync(directory, 0o700);
+	const store = Bun.spawnSync(["/usr/bin/git", "credential-cache", "--timeout", "120", "--socket", receiverSocket(home, connector), "store"], {
+		stdin: Buffer.from(`protocol=https\nhost=${receiverHost(connector)}\nusername=${item}\npassword=${SENTINEL}\n\n`),
+		env: GIT_ENV(home),
 	});
 	if (store.exitCode !== 0) throw new Error("credential-cache store failed");
 }
 
-function revoke(home: string): void {
-	Bun.spawnSync(["/usr/bin/git", "credential-cache", "--socket", receiverSocket(home, "context7"), "exit"], { env: { HOME: home, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
-}
-
-function receiverDirectoryIn(home: string): void {
-	mkdirSync(path.dirname(receiverSocket(home, "context7")), { recursive: true, mode: 0o700 });
-	chmodSync(path.dirname(receiverSocket(home, "context7")), 0o700);
+function revoke(home: string, connector = "context7"): void {
+	Bun.spawnSync(["/usr/bin/git", "credential-cache", "--socket", receiverSocket(home, connector), "exit"], { env: GIT_ENV(home) });
 }
 
 test.skipIf(!onLinux)("receiver read: the real git credential-cache receiver answers only for the registered item", () => {
 	const home = fresh("receiver-git");
-	receiverDirectoryIn(home);
 	expect(readDeliveredItem("context7", ITEM, { HOME: home })).toEqual({ ok: false, cause: "credential-not-delivered" });
 	deliver(home, ITEM);
 	try {
@@ -187,19 +190,36 @@ test.skipIf(!onLinux || process.arch !== "arm64")(
 		expect((run("list").result.data?.connectors as { id: string }[]).map((entry) => entry.id).sort()).toEqual(ADMITTED);
 		const deps = run("deps", "status").result.data?.dependencies as { tool: string; ready: boolean }[];
 		expect(deps.map((row) => [row.tool, row.ready])).toEqual([["mcporter", true]]);
+		const evidence = (run("status", "context7").result.data?.connectors as { evidence: Record<string, { verdict: string; custody?: { mode: string } }> }[])[0]!.evidence;
+		expect(evidence.localReady!.verdict).toBe("proven");
 		const setup = run("setup").result;
 		expect(setup.causeCode).toBe("DOMAIN_SETUP_FAILED_UNCHANGED");
 		expect(setup.repairAction).toContain("Nothing to set up on Linux");
 		expect(run("auth", "configure", "context7", "--input", JSON.stringify({ item: ITEM })).result.causeCode).toBe("SUCCESS_RUN_RECORDED");
 		const undelivered = run("auth", "check", "context7").result;
 		expect([undelivered.causeCode, undelivered.data?.connectorCause]).toEqual(["DOMAIN_ADAPTER_REFUSED", "credential-not-delivered"]);
-		receiverDirectoryIn(home);
+		const custody = (run("status", "context7").result.data?.connectors as { evidence: Record<string, { custody?: { mode: string } }> }[])[0]!.evidence.custodyChecked!.custody;
+		expect(custody?.mode).toBe("delivered-receiver-below-mcporter");
 		deliver(home, OTHER_ITEM);
 		try {
 			expect(run("auth", "check", "context7").result.data?.connectorCause).toBe("credential-not-delivered");
 			deliver(home, ITEM);
 			const checked = run("auth", "check", "context7").result;
 			expect([checked.causeCode, checked.data?.custodyChecked]).toEqual(["SUCCESS_UNCHANGED", true]);
+		} finally {
+			revoke(home);
+		}
+		// Mermaid's own Provider reads its own receiver, never Context7's.
+		expect(run("auth", "configure", "mermaid", "--input", JSON.stringify({ item: ITEM })).result.causeCode).toBe("SUCCESS_RUN_RECORDED");
+		deliver(home, ITEM);
+		try {
+			expect(run("auth", "check", "mermaid").result.data?.connectorCause).toBe("credential-not-delivered");
+			deliver(home, ITEM, "mermaid");
+			try {
+				expect(run("auth", "check", "mermaid").result.causeCode).toBe("SUCCESS_UNCHANGED");
+			} finally {
+				revoke(home, "mermaid");
+			}
 		} finally {
 			revoke(home);
 		}

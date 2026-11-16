@@ -25,8 +25,9 @@ export type PackagedFailure = "packaged-mcporter-missing" | "packaged-mcporter-i
 export type PackagedSelection = { ok: true; binary: string } | { ok: false; cause: PackagedFailure };
 
 // The one launcher text the build writes. It runs the package's own CLI with
-// the absolute Node recorded at build time, relative to the launcher's real
-// location, so a copied plugin keeps working.
+// the absolute Node recorded at build time, relative to the path the launcher
+// was invoked by (the front door always uses its absolute path), so a copied
+// plugin keeps working.
 export const launcherText = (node: string): string => `#!/bin/sh\nexec '${node}' "\${0%/*}/node_modules/mcporter/dist/cli.js" "$@"\n`;
 
 // A safe absolute Node path: single-quoted in the launcher, so no quote.

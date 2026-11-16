@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isItemId } from "./account-key/registration.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 
 const RECEIVER_GIT = "/usr/bin/git";
@@ -37,7 +38,6 @@ const nativeRun: ReceiverRun = (argv, input, env) => {
 };
 
 const CONNECTOR_ID = /^[a-z][a-z0-9-]{0,31}$/;
-const ITEM_ID = /^[a-z0-9]{26}$/;
 
 // The receiver directory must be this user's own private 0700 directory, as
 // the operator's sender requires before it stores anything.
@@ -60,24 +60,30 @@ function socketPresent(socket: string): "absent" | "socket" | "invalid" {
 }
 
 // git credential-cache answers a get with key=value lines, or nothing when no
-// live entry matches. Only the registered username and one password pass.
+// live entry matches. As git's credential protocol requires, attributes this
+// reader does not use (an expiry, capabilities) are ignored. Exactly one
+// username, the registered item ID, and exactly one nonempty password pass.
 function deliveredValue(stdout: string, itemId: string): { kind: "empty" } | { kind: "value"; value: string } | { kind: "invalid" } {
 	if (stdout === "") return { kind: "empty" };
 	const lines = stdout.endsWith("\n") ? stdout.slice(0, -1).split("\n") : stdout.split("\n");
-	const entries = lines.map((line) => {
+	const usernames: string[] = [];
+	const passwords: string[] = [];
+	for (const line of lines) {
 		const at = line.indexOf("=");
-		return at < 1 ? null : ([line.slice(0, at), line.slice(at + 1)] as const);
-	});
-	if (entries.some((entry) => entry === null) || entries.length !== 2) return { kind: "invalid" };
-	const record = new Map(entries as (readonly [string, string])[]);
-	const value = record.get("password");
-	if (record.size !== 2 || record.get("username") !== itemId || value === undefined || value === "") return { kind: "invalid" };
+		if (at < 1) return { kind: "invalid" };
+		const key = line.slice(0, at);
+		if (key === "username") usernames.push(line.slice(at + 1));
+		else if (key === "password") passwords.push(line.slice(at + 1));
+	}
+	const [username] = usernames;
+	const [value] = passwords;
+	if (usernames.length !== 1 || passwords.length !== 1 || username !== itemId || !value) return { kind: "invalid" };
 	return { kind: "value", value };
 }
 
 export function readDeliveredItem(connectorId: string, itemId: string, env: EnvironmentSource, run: ReceiverRun = nativeRun): DeliveredRead {
 	const home = env.HOME ?? "";
-	if (!CONNECTOR_ID.test(connectorId) || !ITEM_ID.test(itemId) || !path.isAbsolute(home)) return { ok: false, cause: "receiver-invalid" };
+	if (!CONNECTOR_ID.test(connectorId) || !isItemId(itemId) || !path.isAbsolute(home)) return { ok: false, cause: "receiver-invalid" };
 	const directory = privateDirectory(receiverDirectory(home, connectorId));
 	if (directory === "absent") return { ok: false, cause: "credential-not-delivered" };
 	if (directory === "invalid") return { ok: false, cause: "receiver-invalid" };
@@ -100,6 +106,7 @@ export function readDeliveredItem(connectorId: string, itemId: string, env: Envi
 export function deliveredRepair(cause: string, label: string, connectorId: string, itemId: string): string | null {
 	if (cause === "credential-not-delivered") return `the pilot operator has not delivered the ${label} key for 1Password item ${itemId}, or its lease expired; ask the operator to deliver it to the ${connectorId} Connectors receiver, then retry. Connectors never reads 1Password in the pilot`;
 	if (cause === "receiver-invalid") return `the ${label} Connectors receiver is not this user's private 0700 directory holding a live socket; ask the pilot operator to restore delivery for ${connectorId}, then retry`;
+	if (cause === "credential-invalid" && usesDeliveredCredentials()) return `the ${label} receiver did not answer with one usable key for 1Password item ${itemId}; ask the pilot operator to check that item's credential field and deliver it again`;
 	return null;
 }
 

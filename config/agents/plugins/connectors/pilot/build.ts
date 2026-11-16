@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Build the Linux pilot's Connectors marketplace: a directory marketplace
 // holding one plugin copy for Linux arm64, ready for the pilot's
-// /opt/plugin-sources. It leaves the macOS build and the source tree
+// /opt/plugin-sources. It leaves the macOS build and every tracked file
 // unchanged. Read docs/adr/0009-run-connectors-in-the-linux-pilot.md first.
 //
 //   bun run build:pilot [--out <empty directory>]
@@ -13,7 +13,8 @@
 //   dependencies, installed only by the committed lockfile's integrity, with
 //   a launcher bound to this host's Node.
 //
-// It writes only under --out, which must be absent or empty. It installs
+// It writes only under --out (default: the gitignored dist/pilot here),
+// which must be absent or empty, plus Bun's own package cache. It installs
 // nothing into the pilot and never reads a credential.
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
