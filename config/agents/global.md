@@ -126,9 +126,10 @@
   the SDK `AGENTS.md` owner routes for creation and cleanup. A generic stray
   report on a verified native task worktree requires an ownership check;
   it does not authorize relocation, renaming or deletion.
-- Never force-push, hard-reset, run `git clean -f`, restore or force-switch
-  over the working tree, or stage with `git add .` or `git add -A`. In Claude
-  Code the `git-safety` hook refuses these and prints the safer command.
+- Never force-push, hard-reset, run `git clean -f`, restore the entire working
+  tree, force-switch branches, or stage with `git add .` or `git add -A`. When
+  Claude Code's `git-safety` hook is installed, it refuses these and prints the
+  safer command.
 - Dirty or untracked work: treat it as owned until proven disposable. Preserve
   it before removing a worktree or branch.
 - For Homebrew changes, follow the package instructions in
@@ -144,7 +145,7 @@
   is the account with access (`nathanvale` for personal repositories);
   `ghh check --account <login>` verifies it.
 - Herdr or Herdr Projects (installation, coordinators, tasks, sessions, panes,
-  agents, or a defect report): read
+  agents, a defect report, or any change to its source): read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md`.
 - Ovis or Home Assistant browser access, home network or WireGuard access to
   the Mini, or cross-device previews of local apps, Storybook or Herdr review

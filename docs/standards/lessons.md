@@ -34,7 +34,7 @@ on Nathan's instruction, 2026-08-24; two call sites witnessed.)
 
 bun-typescript-template PR #6 repaired sleep and load races in b077b0b,
 4386b03 and 2b2907a (a race test caught its planted fault in 48 of 50 runs).
-Nathan asked for flaky-test repairs in four other sessions across Monash SDK
+Nathan asked for flaky-test repairs in four other sessions across work SDK
 and Herdr work. A laptop at load 38 to 120 failed timing bounds that a quiet
 Mac mini passed.
 

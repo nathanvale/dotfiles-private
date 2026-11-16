@@ -39,6 +39,7 @@ Fallow's configuration and gate output are the rule. Judgement it cannot make:
 
 - Declare every script invoked by a hook, `SKILL.md`, `package.json` script, launchd job, or shell as a runtime root in `.fallowrc.json` `entry`; a dead-code report on it means a missing root, not dead code.
 - Extract by responsibility when a health threshold fails; a complexity suppression hides the problem from the gate.
+- Use an inline `fallow-ignore` only for a genuine false positive. The gate checks that it has a reason, not that the finding was false.
 
 ### Independent oracle: no tautological tests
 
