@@ -382,14 +382,13 @@ describe('installed hook declarations', () => {
 		)
 	})
 
-	test('Codex runs the git safety gate in narrow mode on Bash', () => {
+	test('Codex declares no checkout safety gate', () => {
+		// bc209ae6 removed the git-safety declaration from the Codex hooks
+		// file and left only Codex-specific gates. Pin that so re-adding it
+		// is a reviewed change rather than a silent one.
 		const codex = readDeclarations('../../../codex/hooks.json')
-		const gate = findGitSafetyGate(codex)
 
-		expect(gate?.matcher).toBe('^Bash$')
-		expect(gate?.hooks?.[0]?.command).toBe(
-			'CLAUDE_GIT_SAFETY_MODE=narrow bun run "$HOME/.claude/hooks/git/git-safety.ts"',
-		)
+		expect(findGitSafetyGate(codex)).toBeUndefined()
 	})
 })
 
