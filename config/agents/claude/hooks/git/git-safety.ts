@@ -987,7 +987,12 @@ interface NarrowRule {
 	readonly saferWay: string
 }
 
-const WHOLE_TREE_PATHSPECS: ReadonlySet<string> = new Set(['.', './', ':/'])
+const WHOLE_TREE_PATHSPECS: ReadonlySet<string> = new Set([
+	'.',
+	'./',
+	':/',
+	':(top)',
+])
 
 function hasWholeTreePathspec(args: readonly string[]): boolean {
 	return args.some((arg) => WHOLE_TREE_PATHSPECS.has(arg))
@@ -1080,6 +1085,45 @@ export type NarrowVerdict =
  * mode would deny, including input the tokenizer cannot balance, comes back
  * as a warning so the command still runs.
  */
+type NarrowRefusal = Extract<NarrowVerdict, { decision: 'refuse' }>
+
+function refusal(rule: NarrowRule): NarrowRefusal {
+	return {
+		decision: 'refuse',
+		ruleId: rule.id,
+		reason: rule.reason,
+		saferWay: rule.saferWay,
+	}
+}
+
+function rebaseExecSegments(invocation: GitInvocation): string[][] {
+	if (invocation.subcommand !== 'rebase') return []
+	const bodies = invocation.args
+		.map((arg, idx) => extractRebaseExecCommand(arg, invocation.args, idx))
+		.filter((body): body is string => Boolean(body))
+	return bodies
+		.map((body) => splitShellSegments(body))
+		.filter((nested) => !nested.unbalanced)
+		.map((nested) => nested.segments)
+}
+
+/** `git rebase --exec` runs its body after each commit, so check that body too. */
+function findNarrowRefusal(
+	segments: string[],
+	depth: number,
+): NarrowRefusal | undefined {
+	for (const invocation of collectGitInvocations(segments)) {
+		const rule = NARROW_RULES.find((candidate) => candidate.matches(invocation))
+		if (rule) return refusal(rule)
+		if (depth >= 4) continue
+		for (const nested of rebaseExecSegments(invocation)) {
+			const found = findNarrowRefusal(nested, depth + 1)
+			if (found) return found
+		}
+	}
+	return undefined
+}
+
 export function checkNarrowCommand(command: string): NarrowVerdict {
 	const { segments, unbalanced } = splitShellSegments(command)
 	if (unbalanced) {
@@ -1090,17 +1134,8 @@ export function checkNarrowCommand(command: string): NarrowVerdict {
 			],
 		}
 	}
-	for (const invocation of collectGitInvocations(segments)) {
-		const rule = NARROW_RULES.find((candidate) => candidate.matches(invocation))
-		if (rule) {
-			return {
-				decision: 'refuse',
-				ruleId: rule.id,
-				reason: rule.reason,
-				saferWay: rule.saferWay,
-			}
-		}
-	}
+	const found = findNarrowRefusal(segments, 0)
+	if (found) return found
 	const strict = checkParsedSegments(segments, 0)
 	return {
 		decision: 'allow',
