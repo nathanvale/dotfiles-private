@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,11 @@ sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('jobs', Path(__file__).parents[2] / 'resources/credential_jobs.py')
 jobs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(jobs)
+
+# Independent oracles: resolved client config in OpenSSH `ssh -G` shape. Real
+# OpenSSH omits the controlpath line when ControlPath is none.
+UNSHARED = b'user agent\ncontrolmaster false\ncontrolpersist no\n'
+BASE_SOURCE = 'f' * 40
 
 
 class RestoreFixture(unittest.TestCase):
@@ -36,6 +42,8 @@ class RestoreFixture(unittest.TestCase):
         self.now = 0
         self.pids = {}
         self.started = []
+        self.resolved = []
+        self.transport = (0, UNSHARED)
         self.admission()
         self.bundle = (self.root, self.roles, self.configs, self.root)
         patches = [patch.object(jobs, 'jobs', side_effect=lambda *a, **k: self.pids.copy()),
@@ -78,6 +86,11 @@ class RestoreFixture(unittest.TestCase):
             self.pids[role] = 10 if role == 'cache' else 11
             self.started.append('start:' + role)
             return subprocess.CompletedProcess(argv, 0, str(self.pids[role]).encode())
+        if argv[1:2] == ['-G']:
+            self.resolved.append(argv)
+            return subprocess.CompletedProcess(argv, *self.transport)
+        if 'rev-parse' in argv:
+            return subprocess.CompletedProcess(argv, 0, (BASE_SOURCE + '\n').encode())
         return subprocess.CompletedProcess(argv, 0, b'')
 
     def restore(self):
@@ -509,6 +522,98 @@ class ProcessReadinessTests(RestoreFixture):
         self.assertFalse(result['credentials'])
         self.assertEqual(self.started, [])
         self.assertEqual(self.now, 0)
+
+
+class TransportValidationTests(RestoreFixture):
+    HOST = 'mac-mini'
+    DEDICATED = 'mac-mini-credentials'
+
+    def profile(self, job_alias=None, cache_host=None, sender_hosts=None):
+        host = job_alias or self.HOST
+        checkout = self.root / 'checkout'
+        transport = {'sshPath': '/usr/bin/ssh', 'dockerPath': '/fixture/docker',
+                     'dockerHost': 'unix:///fixture/docker.sock', 'containerId': 'c' * 64,
+                     'uid': 1000, 'home': '/home/agent'}
+        hosts = {role: host for role in ['claude', 'codex', 'bitbucket']} | (sender_hosts or {})
+        inputs, recipe = [], {'bitbucketPolicy': 'refresh-while-running'}
+        for role in ['claude', 'codex', 'bitbucket']:
+            config = {'transport': {**transport, 'sshHost': hosts[role]}, 'stateDirectory': str(self.root / role),
+                      'cache': {'gitPath': '/usr/bin/git', 'socket': '/home/agent/.cache/fixture/socket'}}
+            inputs.append(self.file(self.root / (role + '.json'), config))
+            recipe[role] = inputs[-1]['path']
+        inputs.append(self.file(self.root / 'recipe.json', recipe))
+        recipe_path = inputs[-1]['path']
+        native = ("/fixture/docker --host unix:///fixture/docker.sock exec -i --user 1000 --env HOME=/home/agent "
+                  + 'c' * 64 + ' /usr/bin/git credential-cache--daemon /home/agent/.cache/fixture/socket')
+        argv = {'cache': ['/usr/bin/ssh', '-o', 'ForwardAgent=no', '-o', 'BatchMode=yes', '-T', cache_host or host, native],
+                'delivery': ['/usr/bin/caffeinate', '-dimsu', '/fixture/bun', '--no-env-file', str(checkout / 'src/cli.ts'),
+                             'credential', 'serve', '--config', recipe_path, '--json']}
+        files, labels = [], {}
+        for role in ['cache', 'delivery']:
+            labels[role] = 'com.nathanvale.agents-pilot.fixture-' + role
+            job = {'Label': labels[role], 'ProgramArguments': argv[role], 'RunAtLoad': False, 'KeepAlive': False,
+                   'Umask': 63, 'EnvironmentVariables': {'HOME': str(Path.home()),
+                                                         'PATH': '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+                                                         'SSH_AUTH_SOCK': ''},
+                   'StandardOutPath': str(self.root / (role + '.out')), 'StandardErrorPath': str(self.root / (role + '.err')),
+                   **({'WorkingDirectory': str(checkout)} if role == 'delivery' else {})}
+            path = self.root / (role + '.plist')
+            path.write_bytes(plistlib.dumps(job))
+            path.chmod(0o600)
+            files.append({'role': role, 'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+        manifest = {'format': 1, 'container': 'c' * 64, 'base_source': BASE_SOURCE,
+                    'inputs': inputs, 'files': files, 'labels': labels}
+        if job_alias is not None:
+            manifest['credential_ssh_alias'] = job_alias
+        return self.file(self.root / 'profile.json', manifest)
+
+    def validate(self, row):
+        args = {'credential_manifest': row['path'], 'credential_manifest_sha256': row['sha256'],
+                'container': 'c' * 64, 'ssh': '/usr/bin/ssh', 'alias': self.HOST,
+                'docker': '/fixture/docker', 'endpoint': 'unix:///fixture/docker.sock'}
+        return jobs.validate(type('Args', (), args)())
+
+    def refusal(self, row):
+        with self.assertRaises(jobs.Refused) as caught:
+            self.validate(row)
+        return str(caught.exception)
+
+    def test_dedicated_job_alias_binds_cache_and_sender_transport(self):
+        self.validate(self.profile(self.DEDICATED))
+        self.assertEqual(self.resolved, [['/usr/bin/ssh', '-G', 'mac-mini-credentials']])
+
+    def test_job_left_on_the_host_alias_refuses_under_a_dedicated_alias(self):
+        with self.subTest('cache'):
+            self.assertEqual(self.refusal(self.profile(self.DEDICATED, cache_host=self.HOST)),
+                             'native cache job command changed')
+        with self.subTest('sender'):
+            self.assertEqual(self.refusal(self.profile(self.DEDICATED, sender_hosts={'codex': self.HOST})),
+                             'credential transport binding changed')
+
+    def test_shared_or_unproven_transport_refuses(self):
+        for name, output in [('master', b'controlmaster auto\ncontrolpath /fixture/cm-socket\n'),
+                             ('client of an existing master', b'controlmaster false\ncontrolpath /fixture/cm-socket\n'),
+                             ('master without a path line', b'controlmaster auto\n'),
+                             ('no controlmaster line', b'user agent\n')]:
+            with self.subTest(name):
+                self.transport = (0, output)
+                self.assertEqual(self.refusal(self.profile(self.DEDICATED)), 'credential job transport is shared')
+
+    def test_unresolved_transport_refuses(self):
+        self.transport = (255, UNSHARED)
+        self.assertEqual(self.refusal(self.profile(self.DEDICATED)), 'credential job transport is unresolved')
+
+    def test_malformed_job_alias_refuses_before_resolution(self):
+        for alias in ['-oProxyCommand=fixture', 'two words', '', '.hidden', 7]:
+            with self.subTest(alias=alias):
+                self.assertEqual(self.refusal(self.profile(alias)), 'credential job transport alias refused')
+        self.assertEqual(self.resolved, [])
+
+    def test_host_alias_default_still_requires_unshared_transport(self):
+        self.validate(self.profile())
+        self.assertEqual(self.resolved, [['/usr/bin/ssh', '-G', 'mac-mini']])
+        self.transport = (0, b'controlmaster auto\ncontrolpath /fixture/cm-socket\n')
+        self.assertEqual(self.refusal(self.profile()), 'credential job transport is shared')
 
 
 class CommandTests(unittest.TestCase):

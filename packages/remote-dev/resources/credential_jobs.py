@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shlex
 import stat
 import subprocess
@@ -46,11 +47,27 @@ def command(args, deadline=None):
                           stderr=subprocess.DEVNULL, timeout=remaining(deadline), check=False)
 
 
+def unshared(ssh, alias):
+    # A reset of a shared ControlMaster connection stops every job riding it.
+    # `ssh -G` only resolves client config; it never connects. OpenSSH omits
+    # the controlpath line when it is none.
+    resolved = command([ssh, '-G', alias])
+    require(resolved.returncode == 0, 'credential job transport is unresolved')
+    lines = resolved.stdout.decode().splitlines()
+    require('controlmaster false' in lines
+            and all(x == 'controlpath none' for x in lines if x.split(' ', 1)[0] == 'controlpath'),
+            'credential job transport is shared')
+
+
 def validate(a):
     data = private_file(a.credential_manifest, a.credential_manifest_sha256)
     manifest = json.loads(data)
     require(manifest['format'] == 1 and manifest['container'] == a.container,
             'credential profile targets another container')
+    alias = manifest.get('credential_ssh_alias', a.alias)
+    require(isinstance(alias, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', alias),
+            'credential job transport alias refused')
+    unshared(a.ssh, alias)
     root = Path(a.credential_manifest).parent
     require(root.resolve() == root and root.stat().st_uid == os.getuid()
             and stat.S_IMODE(root.stat().st_mode) == 0o700,
@@ -90,7 +107,7 @@ def validate(a):
     recipe = json.loads(inputs[argv[8]])
     require(recipe['bitbucketPolicy'] == 'refresh-while-running', 'credential cache policy changed')
     configs = {role: json.loads(inputs[recipe[role]]) for role in ['claude', 'codex', 'bitbucket']}
-    expected = {'sshPath': a.ssh, 'sshHost': a.alias, 'dockerPath': a.docker,
+    expected = {'sshPath': a.ssh, 'sshHost': alias, 'dockerPath': a.docker,
                 'dockerHost': a.endpoint, 'containerId': a.container,
                 'uid': 1000, 'home': '/home/agent'}
     require(all(c['transport'] == expected for c in configs.values()),
@@ -107,7 +124,7 @@ def validate(a):
               '--env', 'HOME=/home/agent', a.container, cache['cache']['gitPath'],
               'credential-cache--daemon', cache['cache']['socket']]
     require(roles['cache'][1]['ProgramArguments'] ==
-            [a.ssh, '-o', 'ForwardAgent=no', '-o', 'BatchMode=yes', '-T', a.alias, shlex.join(native)],
+            [a.ssh, '-o', 'ForwardAgent=no', '-o', 'BatchMode=yes', '-T', alias, shlex.join(native)],
             'native cache job command changed')
     return root, roles, configs, checkout
 

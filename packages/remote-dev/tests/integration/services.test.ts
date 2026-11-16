@@ -128,7 +128,7 @@ test("native startup helper refuses an unbound credential manifest before remote
 
 test("native credential restore contract handles prior outcomes, deadlines and durable partial effects offline", () => {
   const p = Bun.spawnSync(["/usr/bin/python3", "-I", "-B", "tests/support/credential_jobs_test.py"], { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" });
-  expect(p.stderr.toString()).toContain("Ran 41 tests");
+  expect(p.stderr.toString()).toContain("Ran 47 tests");
   expect(p.stderr.toString()).not.toContain("FAILED");
   expect(p.exitCode).toBe(0);
 });
