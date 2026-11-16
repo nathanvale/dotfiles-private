@@ -61,13 +61,14 @@ interface PreToolUseHookSpecificOutput {
 	permissionDecisionReason?: string
 }
 
-export type GitSafetyMode = 'strict' | 'commit-guard' | 'advisory'
+export type GitSafetyMode = 'strict' | 'commit-guard' | 'advisory' | 'narrow'
 
 /**
  * Reads git safety mode from env.
  * - strict: enforce all destructive-command and commit protections
  * - commit-guard: enforce protected-branch commit and --no-verify rules only
  * - advisory: never deny; emit warning events only
+ * - narrow: deny only the `NARROW_RULES` families; warn on everything else
  */
 export function getGitSafetyMode(
 	env: Record<string, string | undefined> = process.env,
@@ -75,6 +76,7 @@ export function getGitSafetyMode(
 	const raw = (env.CLAUDE_GIT_SAFETY_MODE || '').trim().toLowerCase()
 	if (raw === 'commit-guard') return 'commit-guard'
 	if (raw === 'advisory') return 'advisory'
+	if (raw === 'narrow') return 'narrow'
 	return 'strict'
 }
 
@@ -970,6 +972,120 @@ function checkParsedSegments(
 	return { blocked: false }
 }
 
+export type NarrowRuleId =
+	| 'force-push'
+	| 'hard-reset'
+	| 'forced-clean'
+	| 'whole-tree-discard'
+	| 'stage-everything'
+
+interface NarrowRule {
+	readonly id: NarrowRuleId
+	readonly matches: (invocation: GitInvocation) => boolean
+	readonly reason: string
+	readonly saferWay: string
+}
+
+const WHOLE_TREE_PATHSPECS: ReadonlySet<string> = new Set(['.', './', ':/'])
+
+function hasWholeTreePathspec(args: readonly string[]): boolean {
+	return args.some((arg) => WHOLE_TREE_PATHSPECS.has(arg))
+}
+
+const NARROW_RULES: readonly NarrowRule[] = [
+	{
+		id: 'force-push',
+		matches: ({ subcommand, args }) =>
+			subcommand === 'push' &&
+			(hasForceFlag(args) ||
+				args.some(
+					(arg) =>
+						arg.startsWith('--force-with-lease') ||
+						arg === '--force-if-includes' ||
+						arg.startsWith('+'),
+				)),
+		reason: 'Rewrites remote history that other clones may already have.',
+		saferWay:
+			'Integrate the remote first, then push without force: git pull --rebase && git push',
+	},
+	{
+		id: 'hard-reset',
+		matches: ({ subcommand, args }) =>
+			subcommand === 'reset' && args.includes('--hard'),
+		reason: 'Discards every uncommitted change with no way to recover it.',
+		saferWay:
+			'Keep local edits: git reset --keep <ref>, or save them first with git stash push',
+	},
+	{
+		id: 'forced-clean',
+		matches: ({ subcommand, args }) =>
+			subcommand === 'clean' && hasForceFlag(args),
+		reason: 'Permanently deletes untracked files that git cannot restore.',
+		saferWay: 'Preview with git clean -n, then remove named paths: rm <path>',
+	},
+	{
+		id: 'whole-tree-discard',
+		matches: ({ subcommand, args }) =>
+			(subcommand === 'restore' || subcommand === 'checkout') &&
+			hasWholeTreePathspec(args),
+		reason: 'Overwrites every path at once, including changes you meant to keep.',
+		saferWay:
+			'Restore named paths: git restore <path>, or save everything first with git stash push',
+	},
+	{
+		id: 'stage-everything',
+		matches: ({ subcommand, args }) =>
+			subcommand === 'add' &&
+			(hasWholeTreePathspec(args) ||
+				hasLongFlag(args, '--all') ||
+				hasShortFlag(args, 'A')),
+		reason: 'Stages every file, including ones you did not mean to commit.',
+		saferWay: 'Stage named paths: git add <path> <path>',
+	},
+]
+
+export type NarrowVerdict =
+	| {
+			readonly decision: 'refuse'
+			readonly ruleId: NarrowRuleId
+			readonly reason: string
+			readonly saferWay: string
+	  }
+	| { readonly decision: 'allow'; readonly warnings: readonly string[] }
+
+/**
+ * Narrow mode refuses only the `NARROW_RULES` families. Anything else strict
+ * mode would deny, including input the tokenizer cannot balance, comes back
+ * as a warning so the command still runs.
+ */
+export function checkNarrowCommand(command: string): NarrowVerdict {
+	const { segments, unbalanced } = splitShellSegments(command)
+	if (unbalanced) {
+		return {
+			decision: 'allow',
+			warnings: [
+				'Unbalanced shell input detected. Narrow mode could not check it.',
+			],
+		}
+	}
+	for (const invocation of collectGitInvocations(segments)) {
+		const rule = NARROW_RULES.find((candidate) => candidate.matches(invocation))
+		if (rule) {
+			return {
+				decision: 'refuse',
+				ruleId: rule.id,
+				reason: rule.reason,
+				saferWay: rule.saferWay,
+			}
+		}
+	}
+	const strict = checkParsedSegments(segments, 0)
+	return {
+		decision: 'allow',
+		warnings: strict.blocked && strict.reason ? [strict.reason] : [],
+	}
+}
+
 /**
  * Checks whether a file path targets a protected location (e.g., .env,
  * credentials, .git/) that agents should not modify directly.
@@ -1209,6 +1325,60 @@ async function denyAndExit(
 	process.exit(2)
 }
 
+/** Narrow mode keeps commit-policy findings visible without denying them. */
+async function narrowCommitPolicyWarnings(
+	command: string,
+	fallbackCwd: string,
+): Promise<string[]> {
+	const { segments } = splitShellSegments(command)
+	const warnings: string[] = []
+	if (hasProtectedBranchCommitAction(command, segments)) {
+		const branch = await getCurrentBranch(
+			resolveEffectiveGitCwd(command, fallbackCwd),
+		)
+		if (branch && PROTECTED_BRANCHES.includes(branch)) {
+			warnings.push(`Committing directly to protected branch ${branch}.`)
+		}
+	}
+	const commit = isCommitCommand(command, segments)
+	if (commit.hasNoVerify && !commit.hasWipMessage) {
+		warnings.push('--no-verify skips pre-commit hooks on a non-WIP commit.')
+	}
+	return warnings
+}
+
+async function runNarrowBashGate(
+	command: string,
+	input: PreToolUseHookInput,
+): Promise<never> {
+	const verdict = checkNarrowCommand(command)
+	if (verdict.decision === 'refuse') {
+		const message = `${verdict.reason}\nSafer: ${verdict.saferWay}`
+		process.stderr.write(`${message}\n`)
+		return await denyAndExit(message, input)
+	}
+	const warnings = [
+		...verdict.warnings,
+		...(await narrowCommitPolicyWarnings(command, input.cwd ?? process.cwd())),
+	]
+	for (const warning of warnings) {
+		process.stderr.write(`git-safety warning: ${warning}\n`)
+	}
+	if (warnings.length > 0) {
+		try {
+			await postEvent(input.cwd || process.cwd(), 'safety.warn', {
+				tool: input.tool_name,
+				mode: 'narrow',
+				reason: warnings.join('\n'),
+				command,
+			})
+		} catch {
+			// event emission is best-effort
+		}
+	}
+	process.exit(0)
+}
+
 if (import.meta.main) {
 	// Self-destruct timer: first executable line when run as entry point.
 	// FAIL-CLOSED: PreToolUse safety hook exits with code 2 (deny) on timeout.
@@ -1278,6 +1448,9 @@ if (import.meta.main) {
 				if (safetyMode === 'strict') {
 					await denyAndExit(fileResult.reason ?? 'Protected file.', input)
 				}
+				if (safetyMode === 'narrow') {
+					process.stderr.write(`git-safety warning: ${fileResult.reason}\n`)
+				}
 				try {
 					await postEvent(input.cwd || process.cwd(), 'safety.warn', {
 						tool: input.tool_name,
@@ -1297,6 +1470,9 @@ if (import.meta.main) {
 						isolation.reason ?? 'Edit targets the main checkout.',
 						input,
 					)
+				}
+				if (safetyMode === 'narrow') {
+					process.stderr.write(`git-safety warning: ${isolation.reason}\n`)
 				}
 				try {
 					await postEvent(input.cwd || process.cwd(), 'safety.warn', {
@@ -1321,6 +1497,10 @@ if (import.meta.main) {
 		const command = toolInput?.command
 		if (typeof command !== 'string') {
 			process.exit(0)
+		}
+
+		if (safetyMode === 'narrow') {
+			await runNarrowBashGate(command, input)
 		}
 
 		const commandResult = checkCommand(command)

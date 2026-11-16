@@ -1160,7 +1160,7 @@ describe('narrow mode', () => {
 		const verdict = checkNarrowCommand(command)
 		expect(verdict.decision).toBe('refuse')
 		if (verdict.decision !== 'refuse') return
-		expect(verdict.ruleId).toBe(ruleId)
+		expect<string>(verdict.ruleId).toBe(ruleId)
 		expect(verdict.reason.length).toBeGreaterThan(0)
 		expect(verdict.saferWay.length).toBeGreaterThan(0)
 	})
