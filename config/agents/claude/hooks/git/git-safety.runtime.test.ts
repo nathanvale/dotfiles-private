@@ -52,12 +52,14 @@ function runSafetyHook(params: {
 	filePath?: string
 	toolName?: 'Bash' | 'Write' | 'Edit'
 	cwd: string
-	mode: 'strict' | 'commit-guard' | 'advisory'
+	mode: 'strict' | 'commit-guard' | 'advisory' | 'narrow'
 	protectedBranches?: string
 	eventLogPath?: string
+	payload?: Record<string, unknown>
 }): HookRunResult {
 	const payload = JSON.stringify(
-		params.toolName === 'Write' || params.toolName === 'Edit'
+		params.payload ??
+		(params.toolName === 'Write' || params.toolName === 'Edit'
 			? {
 					tool_name: params.toolName,
 					tool_input: { file_path: params.filePath ?? '.env' },
@@ -67,7 +69,7 @@ function runSafetyHook(params: {
 					tool_name: params.toolName ?? 'Bash',
 					tool_input: { command: params.command ?? '' },
 					cwd: params.cwd,
-				},
+				}),
 	)
 	const scriptPath = join(import.meta.dir, 'git-safety.ts')
 	const proc = Bun.spawnSync([process.execPath, scriptPath], {
@@ -236,9 +238,119 @@ describe('git-safety runtime mode behavior', () => {
 	})
 })
 
+const NARROW_ADD_ALL_MESSAGE = [
+	'Stages every file, including ones you did not mean to commit.',
+	'Safer: Stage named paths: git add <path> <path>',
+].join('\n')
+
+function codexPayload(command: string, cwd: string): Record<string, unknown> {
+	return {
+		session_id: 'codex-session',
+		turn_id: 'turn-1',
+		transcript_path: join(cwd, 'rollout.jsonl'),
+		cwd,
+		hook_event_name: 'PreToolUse',
+		model: 'gpt-5',
+		permission_mode: 'default',
+		tool_name: 'Bash',
+		tool_use_id: 'call-1',
+		tool_input: { command },
+	}
+}
+
+describe('git-safety runtime narrow mode', () => {
+	test('refuses git add . from a Claude payload with the reason and safer way', () => {
+		const { cwd } = createTempRepo()
+		const result = runSafetyHook({ command: 'git add .', cwd, mode: 'narrow' })
+
+		expect(result.exitCode).toBe(2)
+		expect(result.stderr).toBe(`${NARROW_ADD_ALL_MESSAGE}\n`)
+		const output = JSON.parse(result.stdout) as {
+			hookSpecificOutput: { permissionDecisionReason: string }
+		}
+		expect(output.hookSpecificOutput.permissionDecisionReason).toBe(
+			NARROW_ADD_ALL_MESSAGE,
+		)
+	})
+
+	test('refuses git add . from a Codex payload with the reason and safer way', () => {
+		const { cwd } = createTempRepo()
+		const result = runSafetyHook({
+			cwd,
+			mode: 'narrow',
+			payload: codexPayload('git add .', cwd),
+		})
+
+		expect(result.exitCode).toBe(2)
+		expect(result.stderr).toBe(`${NARROW_ADD_ALL_MESSAGE}\n`)
+	})
+
+	test('allows staging a named path from Claude and Codex payloads', () => {
+		const { cwd } = createTempRepo()
+		const claude = runSafetyHook({
+			command: 'git add src/a.ts',
+			cwd,
+			mode: 'narrow',
+		})
+		const codex = runSafetyHook({
+			cwd,
+			mode: 'narrow',
+			payload: codexPayload('git add src/a.ts', cwd),
+		})
+
+		for (const result of [claude, codex]) {
+			expect(result.exitCode).toBe(0)
+			expect(result.stdout).not.toContain('"permissionDecision":"deny"')
+			expect(result.stderr).toBe('')
+		}
+	})
+
+	test('allows a command strict would deny and warns on stderr', () => {
+		const { cwd } = createTempRepo()
+		const eventLogPath = join(cwd, 'events.jsonl')
+		const result = runSafetyHook({
+			command: 'git branch -D old',
+			cwd,
+			mode: 'narrow',
+			eventLogPath,
+		})
+
+		expect(result.exitCode).toBe(0)
+		expect(result.stdout).not.toContain('"permissionDecision":"deny"')
+		expect(result.stderr).toContain('force-deletes a branch')
+		expect(readEventTypes(eventLogPath)).toContain('safety.warn')
+	})
+
+	test('allows unbalanced input and warns on stderr', () => {
+		const { cwd } = createTempRepo()
+		const result = runSafetyHook({
+			command: 'git commit -m "unterminated',
+			cwd,
+			mode: 'narrow',
+		})
+
+		expect(result.exitCode).toBe(0)
+		expect(result.stderr).toContain('Unbalanced shell input')
+	})
+
+	test('allows a commit on a protected branch and warns on stderr', () => {
+		const { cwd, branch } = createTempRepo()
+		const result = runSafetyHook({
+			command: 'git commit -m "feat: test"',
+			cwd,
+			mode: 'narrow',
+			protectedBranches: branch,
+		})
+
+		expect(result.exitCode).toBe(0)
+		expect(result.stdout).not.toContain('"permissionDecision":"deny"')
+		expect(result.stderr).toContain(branch)
+	})
+})
+
 interface PreToolUseDeclaration {
 	matcher?: string
-	hooks?: Array<{ command?: string }>
+	hooks?: Array<{ command?: string; timeout?: number }>
 }
 
 interface HookDeclarations {
@@ -260,12 +372,15 @@ function findGitSafetyGate(
 }
 
 describe('installed hook declarations', () => {
-	test('Claude declares no checkout safety gate', () => {
-		// e068c7a1 retired the unused git-safety declaration from Claude
-		// settings. Pin that absence so the retired hook stays retired.
+	test('Claude runs the git safety gate in narrow mode on Bash', () => {
 		const claude = readDeclarations('../../settings.json')
+		const gate = findGitSafetyGate(claude)
 
-		expect(findGitSafetyGate(claude)).toBeUndefined()
+		expect(gate?.matcher).toBe('Bash')
+		expect(gate?.hooks?.[0]?.timeout).toBe(30)
+		expect(gate?.hooks?.[0]?.command).toBe(
+			'CLAUDE_GIT_SAFETY_MODE=narrow bun run "$HOME/.claude/hooks/git/git-safety.ts"',
+		)
 	})
 
 	test('Codex declares no checkout safety gate', () => {

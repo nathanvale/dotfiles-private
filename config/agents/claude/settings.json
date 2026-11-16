@@ -153,6 +153,16 @@
             "command": "\"$HOME\"/.claude/hooks/fallow-gate.sh"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_GIT_SAFETY_MODE=narrow bun run \"$HOME/.claude/hooks/git/git-safety.ts\"",
+            "timeout": 30
+          }
+        ]
       }
     ]
   },
