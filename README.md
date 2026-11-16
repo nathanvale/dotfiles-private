@@ -118,7 +118,7 @@ HOMEBREW_DOTFILES_PROFILE=desktop brew bundle check --file=config/brew/Brewfile
 
 ### Toolchain ownership
 
-Mise is the selected source owner for Node 26.9.0, Bun 1.4.0, and Python
+Mise is the selected source owner for Node 26.9.0, Bun 1.4.4, and Python
 3.11.9. npm 11.19.1 declares Node as its parent. This
 canonical source declaration is inert until a verified revision is explicitly
 applied. Setup now declares and installs Mise, publishes one verified applied

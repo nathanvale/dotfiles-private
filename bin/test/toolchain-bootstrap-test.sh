@@ -96,7 +96,7 @@ chmod +x "$FAKE_BIN/pyenv"
 create_valid_state() {
   local revision_dir="$HOME_FIXTURE/.dotfiles_state/toolchain/revisions/$REVISION_ID"
   mkdir -p "$revision_dir" "$HOME_FIXTURE/.local/share/mise/shims"
-  printf '%s\n' '[tools]' 'node = "26.9.0"' 'bun = "1.4.0"' \
+  printf '%s\n' '[tools]' 'node = "26.9.0"' 'bun = "1.4.4"' \
     'python = "3.11.9"' '"github:gastownhall/beads" = "1.3.0"' >"$revision_dir/config.toml"
   ln -s "revisions/$REVISION_ID" "$HOME_FIXTURE/.dotfiles_state/toolchain/current"
 }
