@@ -20,17 +20,25 @@ Do not revoke production permissions to manufacture a failure.
 
 - Action: Run the evidence journey, then inspect E and F in the final answer.
 - Observe: E's inaccessible restore proof limits the conclusion. Neither
-  conflicting F comment becomes an accepted decision. The answer distinguishes
-  the open Pilot choice from F's missing acceptance evidence and C's research.
+  conflicting F comment becomes an accepted decision. Name the decision owner
+  to recover the canonical answer rather than ask for acceptance again. The
+  answer distinguishes the open Pilot choice from F's missing acceptance evidence and C's research.
 - Action: Inspect the normal snapshot's actual capability proof and read attempts
   through [the native route](../references/native-capabilities.md).
 - Observe: If unavailable, the answer names the missing route and unread sources,
   distinguishes prompt restrictions from absent tools or failed authentication,
   limits saved observations by date, and recommends access or evidence repair
   before deciding from an unread frontier. Saved open choices stay conditional.
+  Fail P3 when the final answer claims absent callable Linear tools without
+  native discovery or offered definitions establishing that claim, even when
+  browser transport failure is correctly reported.
   An unrecorded offered-tool inventory remains unknown; a model-written list
   cannot prove zero tools. It claims no live health score, empty backlog, or
   automatic acceptance.
+  Keep a native pipe failure, authenticated chat-access assertion refusal,
+  unknown tool exposure and website sign-in as separate observations. A browser
+  refusal names the eligible desktop-chat prerequisite; it does not justify
+  repeated executable-path changes or imply that Nathan's site login failed.
 
 ## Gotchas
 

@@ -1,6 +1,6 @@
 ---
 name: verify-ecosystem-review
-description: Verify the ecosystem-review briefing through fresh read-only Codex sessions, candidate plugin discovery, and retained evidence. Use when changing the skill or qualifying its behavior in Dotfiles.
+description: Verify the ecosystem-review briefing through fresh native conversations, bounded A2/A4 artifact journeys, candidate discovery, and retained evidence. Use when changing the skill or qualifying its behavior in Dotfiles.
 ---
 
 # Verify ecosystem-review
@@ -9,12 +9,14 @@ The user touches an agent conversation. There is no application server, port,
 container, or database to start. Use the native Codex CLI and its development
 marketplace. Read [the feature map](features/README.md) before selecting a journey.
 Keep live Linear read-only. Use supplied offline records for adverse evidence.
+Ordinary briefing journeys remain read-only; only the printable journey writes
+its declared local artifacts.
 
 ## Launch
 
 From the isolated task worktree root, inspect `codex exec --help`,
 `codex plugin marketplace add --help`, and `codex plugin add --help`. The recipe
-was exercised with codex-cli 0.166.0. If the installed interface differs, refresh
+was exercised with codex-cli 0.169.0. If the installed interface differs, refresh
 these commands before driving it. Follow the repository's skill owner for
 validation and production promotion. This recipe authorizes no promotion.
 
@@ -123,7 +125,7 @@ saved context from live evidence. Do not write files,
 save a review, reconnect services, drive Fable or Claude Desktop, or dispatch work.
 State which skill path you loaded.
 PROMPT
-caffeinate -dimsu codex exec -C "$candidate_root" -s read-only --ephemeral \
+caffeinate -dimsu codex exec -C "$candidate_root" -s read-only \
   -c 'plugins={"personal@personal"={enabled=false},"personal@ecosystem-review-dev"={enabled=true}}' --json \
   -o "$run_dir/final.txt" - < "$run_dir/prompt.txt" \
   > "$run_dir/events.jsonl" 2> "$run_dir/stderr.log" &
@@ -133,13 +135,19 @@ run_exit=$?
 printf '%s\n' "$run_exit" > "$run_dir/exit.txt"
 ```
 
+Use [daily focus](features/daily-focus.md) for serial multi-turn conversation
+and [printables](features/printables.md) for the separately bounded A2/A4
+artifact drive. Do not apply artifact-write permissions to ordinary reviews.
+
 Use [the offline journey](features/evidence.md) for supplied evidence, and
 [the comparison journey](features/comparison.md) for a baseline. Use
 [the delivery journey](features/delivery.md) to verify stage recognition and a
 read-only handoff recommendation. Keep each
 journey's files in a separate run directory. Reuse one owned registration
-sequentially, never double-drive the same browser session. A run ends when the
-process exits and a final answer plus `turn.completed` exist. Record an absent
+sequentially, never double-drive the same browser session. Retain the native
+tool trace through [capability proof](references/native-capabilities.md);
+`--json` alone omits some code-mode calls and image results. A run ends when
+the process exits and a final answer plus `turn.completed` exist. Record an absent
 final event as incomplete, even if the outer shell exits successfully.
 
 For project-local discovery, start a separate fresh session in this worktree
@@ -161,9 +169,14 @@ coverage, and attempted side effects, rather than matching phrases in prose.
 
 Capture the exact candidate skill and feature sources, hashes, CLI version,
 working directory, command, prompt, start/end time, exit, and final completeness.
-Keep raw records in the private run directory. Refresh no remote state. Inspect
-events for attempted writes, dispatch, or unrelated exploration. Read-only
-sandboxing protects shell writes; it does not authorize connector mutations.
+Keep raw records in the private run directory, including the selected native
+rollout copy. Allow normal harness-managed session persistence for evidence.
+Apply each journey's file-write restriction to model actions. Refresh no remote
+state. Inspect events for attempted writes, dispatch, or unrelated exploration. Read-only
+sandboxing protects ordinary shell writes; it does not authorize connector
+mutations. Printable runs permit their declared final output directory, private
+receipt files, and native image-tool-managed originals at the returned paths.
+Inspect all observed writes against that allowlist.
 Record final Git status and compare it with the pre-run status. Report the
 limits of remote side-effect observation when no audit route is available.
 

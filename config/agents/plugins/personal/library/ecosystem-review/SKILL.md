@@ -1,9 +1,23 @@
 ---
 name: ecosystem-review
-description: Brief Nathan on the agent ecosystem's current outcomes, evidence, blockers, and next human decision. Use for "where are we with the agent ecosystem?" or an ecosystem progress review. Return a read-only snapshot in chat.
+description: Brief Nathan on the agent ecosystem's current outcomes, evidence, blockers, and next human decision. Use for "where are we with the agent ecosystem?" or an ecosystem progress review. Default to a brief read-only snapshot in chat; also help choose a daily focus or create requested Inkwell A2 maps and A4 daily sheets.
 ---
 
 # Review the agent ecosystem
+
+## Choose the requested route
+
+Keep an ordinary review brief and source-linked, with one next recommendation.
+Load optional guidance only for the requested branch:
+
+- Daily focus or help choosing today's work: read [daily focus](references/daily-focus.md).
+- An A2 Inkwell map or A4 daily sheet: read [printables](references/printables.md).
+- Choose a focus and make a sheet: use daily focus first, then print the confirmed answers.
+
+Choosing a focus alone ends in chat. A printable request authorizes only its
+local artifacts, not planning mutations or downstream work. The evidence and
+handoff rules below apply to every route. Ordinary reviews load neither
+optional reference and start no rendering or extended questioning.
 
 ## Resolve the current map
 
@@ -27,7 +41,10 @@ unread owners. Avoid loading full historical archives to fill that gap.
 
 For missing live reads, distinguish a task-imposed restriction from an absent
 capability, authentication failure, or unread source. Use actual tool discovery
-or a supported read attempt to substantiate the limitation. When the current
+or a supported read attempt to substantiate the limitation. Discovery of an
+installed integration alone leaves callable-tool exposure unknown; say that a
+read route was not established. A browser transport error proves neither absent
+controls nor failed authentication. When the current
 decision frontier is unread, recommend the access or evidence repair first.
 Describe saved open choices conditionally instead of asking Nathan to decide
 them again as though their current state were known.
@@ -65,8 +82,9 @@ Read the source index's "Idea to delivery: how the four skills fit together"
 section for workflow ownership. Trace relevant intake receipts, accepted
 outcomes, spec versions and acceptance checks, proposed tickets and coverage,
 publication approvals, and linked native execution evidence. Retain the observed
-intake, outcome, spec, criterion and ticket identities and their coverage links
-in the briefing. A compact mapping is enough; create no new spec or tickets.
+intake, outcome, spec, criterion and ticket identities and their coverage links.
+Before returning, check that the compact mapping includes each observed stage
+identity and coverage link. Create no new spec or tickets.
 
 Distinguish outcome acceptance, spec acceptance, ticket publication, execution
 authorization, merge, and activation. Report missing proof as a gap, rather
@@ -94,8 +112,9 @@ Carry source revision or observation time, scope, privacy and exclusions,
 evidence gaps and their consequences, and the next responsible owner. When an
 allegedly existing acceptance is inaccessible or
 conflicting, recommend its decision owner recover the canonical answer. A clearly
-unaccepted draft awaits human review, not recovery of a prior acceptance. Keep
-source branch revision distinct from spec draft revision.
+unaccepted draft awaits human review, not recovery of a prior acceptance.
+When supplied, carry both the source branch revision and spec draft revision
+as separate values.
 Point to accepted facts in their existing owners rather than copying a decision
 store. Mark incomplete access or unresolved evidence as partial, with the repair
 route. A review grants no drafting, publication, readiness, or execution authority.
@@ -110,7 +129,8 @@ related outcomes only when each remains identifiable.
 
 Include:
 
-- Linked evidence for the material claims, with freshness and coverage. Use
+- Linked evidence for the material claims, with freshness and coverage.
+  Resolve every local source pointer to an existing absolute file before returning. Use
   Markdown links in the form `[source](/absolute/path)` for local sources,
   with optional `:line` in the target. Keep invisible
   formatting controls and heading fragments out of local link targets so chat

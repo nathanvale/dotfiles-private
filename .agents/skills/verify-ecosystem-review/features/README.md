@@ -10,6 +10,8 @@ Run Launch and Doctor in [the verifier](../SKILL.md) before a journey.
 | [Evidence interpretation](evidence.md) | Separate Done, accepted, merged, and usable, with real blocker direction. |
 | [Partial access](partial.md) | Disclose inaccessible or conflicting evidence without fabricated health. |
 | [Baseline comparison](comparison.md) | Use a supplied baseline or explicit dated window without invented history. |
+| [Daily focus](daily-focus.md) | Ask one question at a time; confirm one useful finish and first action without changing authority. |
+| [Printables](printables.md) | Generate and inspect actual A2/A4 PDFs; separate resolution routing from artifact proof. |
 | [Delivery handoff](delivery.md) | Recognize planning stages and recommend a source-linked handoff without invoking it. |
 
 Capture the user action and resulting briefing in a new native session per
