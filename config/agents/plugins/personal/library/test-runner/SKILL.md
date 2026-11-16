@@ -1,6 +1,6 @@
 ---
 name: test-runner
-description: "Prove or benchmark the skill-local Agent Runner."
+description: "Run Bun tests: pass/fail gates, coverage, repair of failures in files you are editing, and triage of broader suite failures. Also proves and benchmarks the runner itself."
 role: quality-gate
 ---
 
