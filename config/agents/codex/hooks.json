@@ -19,6 +19,16 @@
             "command": "cd \"./$(git rev-parse --show-cdup 2>/dev/null)\" && \"$HOME\"/.codex/hooks/fallow-gate.sh"
           }
         ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_GIT_SAFETY_MODE=narrow bun run \"$HOME/.claude/hooks/git/git-safety.ts\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionStart": [
