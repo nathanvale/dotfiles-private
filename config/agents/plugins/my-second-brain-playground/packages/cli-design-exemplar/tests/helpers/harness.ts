@@ -191,7 +191,7 @@ export interface Run {
 	stdout: string
 	stderr: string
 	exit: number
-	signal: string | null
+	signal: string | number | null
 }
 
 export interface RunOptions {

@@ -20,7 +20,7 @@ export interface Envelope {
 
 export interface StewardRun {
 	exitCode: number | null
-	signal: string | null
+	signal: string | number | null
 	stdout: string
 	stderr: string
 	envelope: Envelope | null

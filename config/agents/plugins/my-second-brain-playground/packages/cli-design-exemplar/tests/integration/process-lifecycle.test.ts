@@ -64,12 +64,12 @@ async function waitFor(path: string): Promise<void> {
 	}
 }
 
-async function result(child: ReturnType<typeof start>): Promise<{ stdout: string; stderr: string; exit: number; signal: string | null }> {
+async function result(child: ReturnType<typeof start>): Promise<{ stdout: string; stderr: string; exit: number; signal: string | number | null }> {
 	const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
 	return { stdout, stderr, exit, signal: child.signalCode }
 }
 
-async function boundedResult(child: ReturnType<typeof start>, timeoutMs: number): Promise<{ stdout: string; stderr: string; exit: number; signal: string | null; blocked: boolean }> {
+async function boundedResult(child: ReturnType<typeof start>, timeoutMs: number): Promise<{ stdout: string; stderr: string; exit: number; signal: string | number | null; blocked: boolean }> {
 	let blocked = false
 	const timer = setTimeout(() => { blocked = true; child.kill("SIGKILL") }, timeoutMs)
 	try {
