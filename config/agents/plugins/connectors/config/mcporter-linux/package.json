@@ -1,0 +1,7 @@
+{
+	"name": "connectors-mcporter-linux",
+	"private": true,
+	"dependencies": {
+		"mcporter": "0.14.0"
+	}
+}

@@ -8,6 +8,7 @@ import { configureAccount, CREDENTIAL_VAULT, isItemId, ITEM_ID_REPAIR, registere
 import { payloadDigest, receipt, receipts, reserve, runId, validRunId } from "./scripts/ledger.ts";
 import { runProvider } from "./scripts/provider.ts";
 import { accountCaller, providerPreflight } from "./scripts/transport.ts";
+import { accountCustodyMode } from "../../bin/credential-item.ts";
 const REPAIR = "Inspect connectors recover jev; uncertain paid inference is never replayed automatically or unlocked";
 function refused(kind: AdapterRefusal["kind"], connectorCause: string, repair = REPAIR): Prepared {
 	return { kind: "refused", refusal: { kind, connectorCause, repair } };
@@ -208,7 +209,7 @@ export const jevAdapter: Adapter = {
 			return {
 				kind: "resolved",
 				effective: {
-					mode: "1password-below-mcporter",
+					mode: accountCustodyMode(),
 					source: "plugin-state:registration",
 				},
 				notYetEffective: null,
@@ -227,7 +228,7 @@ export const jevAdapter: Adapter = {
 					kind: "resolved",
 					effective: null,
 					notYetEffective: {
-						mode: "1password-below-mcporter",
+						mode: accountCustodyMode(),
 						source: "plugin-state:registration-absent",
 					},
 					subject: null,

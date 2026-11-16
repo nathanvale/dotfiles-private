@@ -6,6 +6,7 @@
 // nothing was sent. Only after MCPorter starts may a request have left, so
 // prepare() does everything before that and send() only starts MCPorter.
 import type { ExecutionCapabilities } from "../../../bin/adapters/contract.ts";
+import { deliveredRepair } from "../../../bin/delivered-credential.ts";
 import { MCPORTER_REPAIR_ACTION } from "../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute } from "../../../bin/provider-route.ts";
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../bin/safe-environment.ts";
@@ -26,6 +27,8 @@ export type Unsent = Extract<CallResult, { sent: false }>;
 export type SentResult = Exclude<CallResult, Unsent>;
 
 function preflightRepair(code: string, item: string): string {
+	const delivered = deliveredRepair(code, "Mermaid", "mermaid", item);
+	if (delivered !== null) return delivered;
 	switch (code) {
 		case "op-unavailable":
 			return OP_SETUP_REPAIR;

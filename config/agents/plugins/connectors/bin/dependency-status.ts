@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import requirements from "../requirements.json";
 import { inspectSelectedMcporter } from "./mcporter-custody.ts";
+import { PACKAGED_REPAIR, usesPackagedMcporter } from "./mcporter-packaged.ts";
 import { stateRoot } from "./private-state.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 import { inspectSelectedOp } from "./setup/op.ts";
@@ -16,8 +17,13 @@ import { inspectSelectedMise, inspectSelectedUv, type SelectionView } from "./se
 // revision, and never an upstream latest, is ever selected.
 export const REQUIREMENTS_REVISION = `sha256:${createHash("sha256").update(JSON.stringify(requirements)).digest("hex")}`;
 
-export const DEPENDENCY_TOOLS = ["mcporter", "op", "mise", "uv"] as const;
-export type DependencyTool = (typeof DEPENDENCY_TOOLS)[number];
+const ALL_TOOLS = ["mcporter", "op", "mise", "uv"] as const;
+export type DependencyTool = (typeof ALL_TOOLS)[number];
+// The tools this platform declares. The Linux pilot stages MCPorter in the
+// plugin and receives credentials from its operator, so it declares no op,
+// mise, or uv (docs/adr/0009-run-connectors-in-the-linux-pilot.md).
+export const platformDependencyTools = (platform: string): readonly DependencyTool[] => (usesPackagedMcporter(platform) ? ["mcporter"] : ALL_TOOLS);
+export const DEPENDENCY_TOOLS: readonly DependencyTool[] = platformDependencyTools(process.platform);
 
 export interface RepairRoute {
 	readonly commandIdentity: string;
@@ -51,6 +57,7 @@ const READERS: Readonly<Record<DependencyTool, (env: EnvironmentSource) => Selec
 // A fresh object per row: the envelope's JSON-safety check refuses a value
 // reached twice, so rows never share one route object.
 function repairFor(tool: DependencyTool, present: boolean): RepairRoute {
+	if (usesPackagedMcporter()) return { commandIdentity: "connectors.deps.status", command: PACKAGED_REPAIR };
 	if (tool === "mcporter" && !present) return { ...FIRST_USE };
 	return { commandIdentity: "connectors.deps.repair.preview", command: `connectors deps repair ${tool} --preview` };
 }
