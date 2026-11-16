@@ -24,6 +24,15 @@ When acting as a board coordinator, follow its app-generated role rules.
 Keep an existing task and its coordinator as the work owner. Use terminal
 control for supporting inspection or recovery, preserving board ownership.
 
+## Herdr Projects is third-party
+
+- Use supported precompiled releases and documented interfaces. Never modify
+  its source, build custom fixes, or open or submit pull requests for it.
+- Report defects only through issues in its verified upstream repository,
+  backed by a reproducible failure, exact version and environment, expected
+  versus actual behavior, and sanitized evidence. Use a documented workaround
+  or report the blocker; keep our project focused on its delivery goal.
+
 ## Verify effects
 
 - Refresh the selected owner and target before effects.
