@@ -119,14 +119,32 @@ def validate(a):
             and head.stdout.decode().strip() == manifest['base_source'] and not dirty.stdout,
             'deployment source revision changed')
     require(Path(argv[4]) == checkout / 'src/cli.ts', 'credential job source changed')
-    cache = configs['bitbucket']
-    native = [a.docker, '--host', a.endpoint, 'exec', '-i', '--user', '1000',
-              '--env', 'HOME=/home/agent', a.container, cache['cache']['gitPath'],
-              'credential-cache--daemon', cache['cache']['socket']]
-    require(roles['cache'][1]['ProgramArguments'] ==
-            [a.ssh, '-o', 'ForwardAgent=no', '-o', 'BatchMode=yes', '-T', alias, shlex.join(native)],
-            'native cache job command changed')
+    cache = configs['bitbucket']['cache']
+    entry = [a.docker, '--host', a.endpoint, 'exec', '-i', '--user', '1000',
+             '--env', 'HOME=/home/agent', a.container]
+    daemon = [cache['gitPath'], 'credential-cache--daemon', cache['socket']]
+    direct = [a.ssh, '-o', 'ForwardAgent=no', '-o', 'BatchMode=yes', '-T', alias, shlex.join(entry + daemon)]
+    program = roles['cache'][1]['ProgramArguments']
+    require(program == direct or program == held_argv(a.ssh, alias, entry, daemon, cache)
+            and holder_custody(), 'native cache job command changed')
     return root, roles, configs, checkout
+
+
+# The reconnecting form of the cache job: this package's holder keeps one PID
+# while it starts the same daemon command over the same transport, and
+# reattaches to that daemon (never starts another) after a lost route.
+HOLDER = Path(__file__).resolve().with_name('credential-cache-holder.sh')
+
+
+def held_argv(ssh, alias, entry, daemon, cache):
+    return ['/bin/sh', str(HOLDER), ssh, alias, shlex.join(entry), shlex.join(daemon),
+            shlex.quote(str(cache.get('pythonPath'))), shlex.quote(cache['socket'])]
+
+
+def holder_custody():
+    info = HOLDER.lstat()
+    return bool(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                and not info.st_mode & 0o022)
 
 
 def jobs(labels, deadline=None):

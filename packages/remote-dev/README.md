@@ -329,6 +329,16 @@ KeepAlive policy, credential-write retry or automatic orphan adoption. The
 helper uses documented legacy `launchctl list` columns and `kickstart -p` PID
 output; it does not parse the unsupported `launchctl print` format.
 
+The cache job's program is either that native command over ssh directly, or
+`resources/credential-cache-holder.sh` holding it: the same first command, but
+one launchd PID across a lost route. After ssh fails without naming a refusal
+the holder waits (1 second, doubling to 30) and reattaches to the daemon that
+still holds the socket in the container; it never starts a second daemon. It
+ends when that daemon ends (0), when none is listening on reattaching (3: the
+lease ran out while the route was away), on a refusal ssh names (255) or on a
+stop signal (143). The profile's exact holder words are validated like the
+direct command's, so the recorded PID stays the exact owner.
+
 The credential jobs require the selected Mac GUI login. They do not provide a
 logged-out or cloud-host process owner. The agent image remains independent of
 this Mac-specific startup adapter. Git's empty-cache grace period is a native

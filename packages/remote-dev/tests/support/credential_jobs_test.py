@@ -528,7 +528,19 @@ class TransportValidationTests(RestoreFixture):
     HOST = 'mac-mini'
     DEDICATED = 'mac-mini-credentials'
 
-    def profile(self, job_alias=None, cache_host=None, sender_hosts=None):
+    # Independent oracle: the holder form's exact words, restated here.
+    HOLDER = Path(__file__).parents[2] / 'resources/credential-cache-holder.sh'
+    EXEC = ("/fixture/docker --host unix:///fixture/docker.sock exec -i --user 1000 --env HOME=/home/agent "
+            + 'c' * 64)
+    DAEMON = '/usr/bin/git credential-cache--daemon /home/agent/.cache/fixture/socket'
+
+    def held(self, **changed):
+        words = {'shell': '/bin/sh', 'holder': str(self.HOLDER), 'ssh': '/usr/bin/ssh', 'alias': self.DEDICATED,
+                 'exec': self.EXEC, 'daemon': self.DAEMON, 'python': '/usr/bin/python3',
+                 'socket': '/home/agent/.cache/fixture/socket'} | changed
+        return list(words.values())
+
+    def profile(self, job_alias=None, cache_host=None, sender_hosts=None, cache_argv=None):
         host = job_alias or self.HOST
         checkout = self.root / 'checkout'
         transport = {'sshPath': '/usr/bin/ssh', 'dockerPath': '/fixture/docker',
@@ -538,14 +550,15 @@ class TransportValidationTests(RestoreFixture):
         inputs, recipe = [], {'bitbucketPolicy': 'refresh-while-running'}
         for role in ['claude', 'codex', 'bitbucket']:
             config = {'transport': {**transport, 'sshHost': hosts[role]}, 'stateDirectory': str(self.root / role),
-                      'cache': {'gitPath': '/usr/bin/git', 'socket': '/home/agent/.cache/fixture/socket'}}
+                      'cache': {'gitPath': '/usr/bin/git', 'socket': '/home/agent/.cache/fixture/socket',
+                                'pythonPath': '/usr/bin/python3'}}
             inputs.append(self.file(self.root / (role + '.json'), config))
             recipe[role] = inputs[-1]['path']
         inputs.append(self.file(self.root / 'recipe.json', recipe))
         recipe_path = inputs[-1]['path']
         native = ("/fixture/docker --host unix:///fixture/docker.sock exec -i --user 1000 --env HOME=/home/agent "
                   + 'c' * 64 + ' /usr/bin/git credential-cache--daemon /home/agent/.cache/fixture/socket')
-        argv = {'cache': ['/usr/bin/ssh', '-o', 'ForwardAgent=no', '-o', 'BatchMode=yes', '-T', cache_host or host, native],
+        argv = {'cache': cache_argv or ['/usr/bin/ssh', '-o', 'ForwardAgent=no', '-o', 'BatchMode=yes', '-T', cache_host or host, native],
                 'delivery': ['/usr/bin/caffeinate', '-dimsu', '/fixture/bun', '--no-env-file', str(checkout / 'src/cli.ts'),
                              'credential', 'serve', '--config', recipe_path, '--json']}
         files, labels = [], {}
@@ -589,6 +602,37 @@ class TransportValidationTests(RestoreFixture):
         with self.subTest('sender'):
             self.assertEqual(self.refusal(self.profile(self.DEDICATED, sender_hosts={'codex': self.HOST})),
                              'credential transport binding changed')
+
+    def test_reconnecting_holder_form_of_the_cache_job_is_admitted(self):
+        _, roles, _, _ = self.validate(self.profile(self.DEDICATED, cache_argv=self.held()))
+        self.assertEqual(roles['cache'][1]['ProgramArguments'][:2], ['/bin/sh', str(self.HOLDER)])
+
+    def test_holder_form_with_any_changed_word_refuses(self):
+        other = self.root / 'credential-cache-holder.sh'
+        other.write_bytes(self.HOLDER.read_bytes())
+        for name, changed in [('another holder', {'holder': str(other)}),
+                              ('another shell', {'shell': '/bin/bash'}),
+                              ('the host alias', {'alias': self.HOST}),
+                              ('another container', {'exec': self.EXEC.replace('c' * 64, 'd' * 64)}),
+                              ('another daemon command', {'daemon': self.DAEMON + ' --debug'}),
+                              ('another interpreter', {'python': '/tmp/python3'}),
+                              ('another socket', {'socket': '/tmp/socket'})]:
+            with self.subTest(name):
+                self.assertEqual(self.refusal(self.profile(self.DEDICATED, cache_argv=self.held(**changed))),
+                                 'native cache job command changed')
+        with self.subTest('an extra word'):
+            self.assertEqual(self.refusal(self.profile(self.DEDICATED, cache_argv=self.held() + ['more'])),
+                             'native cache job command changed')
+
+    def test_holder_others_can_write_refuses(self):
+        with patch.object(jobs, 'HOLDER', self.root / 'credential-cache-holder.sh'):
+            jobs.HOLDER.write_bytes(self.HOLDER.read_bytes())
+            jobs.HOLDER.chmod(0o775)
+            argv = self.held(holder=str(jobs.HOLDER))
+            self.assertEqual(self.refusal(self.profile(self.DEDICATED, cache_argv=argv)),
+                             'native cache job command changed')
+            jobs.HOLDER.chmod(0o755)
+            self.validate(self.profile(self.DEDICATED, cache_argv=argv))
 
     def test_shared_or_unproven_transport_refuses(self):
         for name, output in [('master', b'controlmaster auto\ncontrolpath /fixture/cm-socket\n'),

@@ -128,10 +128,17 @@ test("native startup helper refuses an unbound credential manifest before remote
 
 test("native credential restore contract handles prior outcomes, deadlines and durable partial effects offline", () => {
   const p = Bun.spawnSync(["/usr/bin/python3", "-I", "-B", "tests/support/credential_jobs_test.py"], { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" });
-  expect(p.stderr.toString()).toContain("Ran 47 tests");
+  expect(p.stderr.toString()).toContain("Ran 50 tests");
   expect(p.stderr.toString()).not.toContain("FAILED");
   expect(p.exitCode).toBe(0);
 });
+
+test("the cache job's holder keeps one owned process across a lost route and never starts a second daemon", () => {
+  const p = Bun.spawnSync(["/usr/bin/python3", "-I", "-B", "tests/support/credential_cache_holder_test.py"], { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" });
+  expect(p.stderr.toString()).toContain("Ran 13 tests");
+  expect(p.stderr.toString()).not.toContain("FAILED");
+  expect(p.exitCode).toBe(0);
+}, 120_000);
 
 test("credential partial effects survive the public CLI result without an aggregate replacing them", async () => {
   const world = await makeWorld({ ssh: { ps: [RUNNING] }, pilotRuntime: { exit: 1, output: JSON.stringify({ status: "failed", attempted: true, started: [], credentials: false, credentialEffects: { completed: ["registered:cache", "started:cache"], uncertain: ["registered:delivery"] } }) } }, withCredentialJobs);
