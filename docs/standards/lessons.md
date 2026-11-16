@@ -42,3 +42,11 @@ Mac mini passed.
 
 Nathan restated "prove regression tests fail before and pass after" for a bug
 fix that the new-or-disputed wording did not cover.
+
+## Rules with no recorded evidence
+
+Test execution, Import aliases are resolver contracts, and the Fallow
+judgement bullets predate this file and have no witnessed evidence recorded
+here. The Fallow rules restate what `.fallowrc.json` and `fallow-gate.sh`
+enforce. Record a witness here the next time one of these rules catches or
+misses a defect; until then, treat them as unproven.

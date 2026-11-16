@@ -5,8 +5,9 @@ packages; a single-package rule lives in that package's `CODING_STANDARDS.md`,
 which points here instead of restating. Delete a rule the moment tooling and
 its configuration fully confess it.
 
-Each rule's admitting evidence lives in [lessons](lessons.md). Candidates route
-through a fit review before entering this file or any package standards file.
+Each rule's admitting evidence lives in [lessons](lessons.md). A candidate
+enters this file or a package standards file through a reviewed pull request
+that adds its witnesses to `lessons.md`.
 
 | Rule | Enforced by |
 | --- | --- |
