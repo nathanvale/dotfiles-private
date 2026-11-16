@@ -6,6 +6,7 @@ import { PROTECTED_BRANCHES } from './git-policy.ts'
 import {
 	checkCommand,
 	checkFileEdit,
+	checkNarrowCommand,
 	checkWorktreeIsolation,
 	getGitSafetyMode,
 	hasImplicitProtectedBranchForceLeasePush,
@@ -1102,11 +1103,159 @@ describe('getGitSafetyMode', () => {
 		)
 	})
 
+	test('parses narrow', () => {
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'narrow' })).toBe(
+			'narrow',
+		)
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: ' NARROW ' })).toBe(
+			'narrow',
+		)
+	})
+
 	test('falls back to strict on unknown values', () => {
 		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'off' })).toBe('strict')
 		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'permissive' })).toBe(
 			'strict',
 		)
+	})
+})
+
+describe('narrow mode', () => {
+	test.each([
+		['git push --force', 'force-push'],
+		['git push -f origin feat/x', 'force-push'],
+		['git push -uf origin feat/x', 'force-push'],
+		['git push --force-with-lease', 'force-push'],
+		['git push --force-with-lease=feat/x:abc123 origin feat/x', 'force-push'],
+		['git push --force-if-includes origin feat/x', 'force-push'],
+		['git push origin +feat/x', 'force-push'],
+		['cd repo && git push --force-with-lease', 'force-push'],
+		['sh -c "git push --force origin feat/x"', 'force-push'],
+		['echo $(git push -f)', 'force-push'],
+		['git reset --hard', 'hard-reset'],
+		['git reset --hard origin/main', 'hard-reset'],
+		['git -C /x reset --hard HEAD~1', 'hard-reset'],
+		["bash -c 'git reset --hard'", 'hard-reset'],
+		['git clean -f', 'forced-clean'],
+		['git clean -fd', 'forced-clean'],
+		['git clean -xdf', 'forced-clean'],
+		['git clean --force -d', 'forced-clean'],
+		['git -C /x clean -fdx', 'forced-clean'],
+		['git restore .', 'whole-tree-discard'],
+		['git restore -- .', 'whole-tree-discard'],
+		['git restore :/', 'whole-tree-discard'],
+		['git restore --staged .', 'whole-tree-discard'],
+		['git restore --staged :/', 'whole-tree-discard'],
+		['git checkout .', 'whole-tree-discard'],
+		['git checkout -- .', 'whole-tree-discard'],
+		['cd repo && git checkout -- .', 'whole-tree-discard'],
+		['git add .', 'stage-everything'],
+		['git add -A', 'stage-everything'],
+		['git add --all', 'stage-everything'],
+		['git add :/', 'stage-everything'],
+		['git add -- .', 'stage-everything'],
+		['git -C /x add -A', 'stage-everything'],
+		['git status && git add -A && git commit -m "x"', 'stage-everything'],
+	])('refuses %s as %s', (command, ruleId) => {
+		const verdict = checkNarrowCommand(command)
+		expect(verdict.decision).toBe('refuse')
+		if (verdict.decision !== 'refuse') return
+		expect(verdict.ruleId).toBe(ruleId)
+		expect(verdict.reason.length).toBeGreaterThan(0)
+		expect(verdict.saferWay.length).toBeGreaterThan(0)
+	})
+
+	test('git add . carries its reason and safer way', () => {
+		const verdict = checkNarrowCommand('git add .')
+		expect(verdict).toMatchObject({
+			decision: 'refuse',
+			reason: 'Stages every file, including ones you did not mean to commit.',
+			saferWay: 'Stage named paths: git add <path> <path>',
+		})
+	})
+
+	test.each([
+		['git add src/a.ts'],
+		['git add src/a.ts src/b.ts'],
+		['git commit -am "x"'],
+		['git commit -a -m "x"'],
+		['git push'],
+		['git push -u origin feat/x'],
+		['git push --no-force-with-lease origin feat/x'],
+		['git branch -D old'],
+		['git worktree remove wt'],
+		['git stash drop'],
+		['rm -rf dist'],
+		['git reset --soft HEAD~1'],
+		['git reset HEAD src/a.ts'],
+		['git restore src/a.ts'],
+		['git restore --staged src/a.ts'],
+		['git checkout feat/x'],
+		['git checkout -b feat/y'],
+		['git clean -n'],
+		['echo "git push --force"'],
+		[
+			`git commit -F - <<'EOF'
+feat: x
+
+Never run git push --force, git add . or git reset --hard here.
+EOF`,
+		],
+		[
+			`git commit -m "$(cat <<'EOF'
+feat: x
+
+Never run git push --force, git add . or git reset --hard here.
+EOF
+)"`,
+		],
+	])('allows %s', (command) => {
+		expect(checkNarrowCommand(command).decision).toBe('allow')
+	})
+
+	test.each([
+		['git branch -D old', 'force-deletes a branch'],
+		['git stash drop', 'stash drop'],
+		['git checkout main -- src/a.ts', 'overwrites files without backup'],
+		['python3 -c "print(1)"', 'Inline interpreter execution'],
+	])('allows %s with the strict reason as a warning', (command, fragment) => {
+		const verdict = checkNarrowCommand(command)
+		expect(verdict.decision).toBe('allow')
+		if (verdict.decision !== 'allow') return
+		expect(verdict.warnings.join('\n')).toContain(fragment)
+	})
+
+	test('allows unbalanced input with a warning', () => {
+		const verdict = checkNarrowCommand('git commit -m "unterminated')
+		expect(verdict.decision).toBe('allow')
+		if (verdict.decision !== 'allow') return
+		expect(verdict.warnings.join('\n')).toContain('Unbalanced shell input')
+	})
+
+	test('ordinary commands carry no warnings', () => {
+		expect(checkNarrowCommand('git add src/a.ts')).toEqual({
+			decision: 'allow',
+			warnings: [],
+		})
+	})
+})
+
+describe('strict mode is unchanged by narrow mode', () => {
+	test.each([
+		['git add .'],
+		['git add -A'],
+		['git push --force-with-lease origin feat/x'],
+	])('still allows %s', (command) => {
+		expect(checkCommand(command).blocked).toBe(false)
+	})
+
+	test.each([
+		['git branch -D old'],
+		['git stash drop'],
+		['git commit -m "unterminated'],
+		['git reset --hard'],
+	])('still blocks %s', (command) => {
+		expect(checkCommand(command).blocked).toBe(true)
 	})
 })
 
