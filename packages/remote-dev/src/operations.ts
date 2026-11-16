@@ -293,7 +293,7 @@ async function restoreTarget(
   const restored = await restoreServices(toolPath(config, "pilotRuntime", home), [
     "restore", "--service-log", target.serviceLog ?? "", "--ssh", toolPath(config, "ssh", home), "--alias", host.sshAlias,
     "--docker", host.dockerPath, "--endpoint", host.dockerHost, "--container", target.containerId,
-    "--version", target.restore.shepherdrVersion, "--wrapper", join(home, "code/dotfiles/bin/with-one-password-token"),
+    "--version", target.restore.shepherdrVersion, "--core-version", target.restore.coreVersion, "--wrapper", join(home, "code/dotfiles/bin/with-one-password-token"),
     "--reference", target.restore.claudeOAuthRef,
     ...(target.restore.credentialJobs === undefined ? [] : ["--credential-manifest", target.restore.credentialJobs.manifest, "--credential-manifest-sha256", target.restore.credentialJobs.sha256]),
   ], { HOME: home, PATH: environment.PATH ?? "/usr/bin:/bin", SSH_AUTH_SOCK: "" }, target.restore.credentialJobs !== undefined);

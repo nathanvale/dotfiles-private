@@ -68,8 +68,8 @@ therefore offers **Restore services and open VS Code**.
 
 The profile keeps Jobs off. It never launches agents, tasks, a browser or a new
 sign-in. A missing retained Tailscale login or Shepherdr token fails closed.
-Healthy services and their terminals are left alone. Core0.1.20 recovery uses
-native kept-terminal recovery shells, not an agent resume command.
+Healthy services and their terminals are left alone. Core recovery (observed on
+0.1.20) uses native kept-terminal recovery shells, not an agent resume command.
 
 When Core is absent, the existing `with-one-password-token inject-stdin` owner
 delivers the profile's declared Claude OAuth field to Core only. The service-account
@@ -78,9 +78,11 @@ Tailscale and the web service do not inherit the Claude token. Codex keeps its
 existing exclusive authentication mount. No API-billing route is selected.
 
 A target without a `restore` profile keeps container-only startup. The profile
-is `{"kind":"shepherdr-pilot","shepherdrVersion":"3.1.33","claudeOAuthRef":"op://VAULT/EXISTING-ITEM/FIELD"}`.
-Keep its real credential reference in the private targets file. This profile
-expects the existing Core0.1.20 layout. `resources/pilot-runtime.py` owns its
+is `{"kind":"shepherdr-pilot","shepherdrVersion":"3.1.33","coreVersion":"0.1.21","claudeOAuthRef":"op://VAULT/EXISTING-ITEM/FIELD"}`.
+Keep its real credential reference in the private targets file. Both versions are
+required and name the releases the pilot image ships: restoration refuses before
+starting a missing service when the installed Shepherdr or `hc --version` differs.
+Update them together with the image. `resources/pilot-runtime.py` owns its
 startup, locking and sanitized readiness result. It reuses the previously
 reviewed stdin-to-Docker-env delivery pattern. It is not a cloud credential broker.
 

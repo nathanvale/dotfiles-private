@@ -6,7 +6,7 @@ afterEach(cleanupWorlds);
 const RUNNING = psOutput(PS.pilotRunning);
 const STOPPED = psOutput(PS.pilotStopped);
 function admitted(config: ReturnType<typeof baseConfig>) {
-  Object.assign(config.targets[0]!, { allowStart: true, restore: { kind: "shepherdr-pilot", claudeOAuthRef: "op://fixture/existing-claude/credential", shepherdrVersion: "3.1.33" } });
+  Object.assign(config.targets[0]!, { allowStart: true, restore: { kind: "shepherdr-pilot", claudeOAuthRef: "op://fixture/existing-claude/credential", shepherdrVersion: "3.1.33", coreVersion: "0.1.21" } });
   return config;
 }
 
@@ -17,7 +17,7 @@ test("start verifies services before editor dispatch and passes only existing cu
   expect(result.stderr).toBe("");
   const recorded = await calls(world);
   expect(recorded.map((x) => x.tool)).toEqual(["ssh", "ssh", "pilotRuntime", "ssh", "code"]);
-  expect(recorded[2]?.argv).toEqual(["restore", "--service-log", "/home/agent/.local/state/pilot-runtime/main-d57a0261/service.log", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", "--wrapper", join(world.dir, "code/dotfiles/bin/with-one-password-token"), "--reference", "op://fixture/existing-claude/credential"]);
+  expect(recorded[2]?.argv).toEqual(["restore", "--service-log", "/home/agent/.local/state/pilot-runtime/main-d57a0261/service.log", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", "--core-version", "0.1.21", "--wrapper", join(world.dir, "code/dotfiles/bin/with-one-password-token"), "--reference", "op://fixture/existing-claude/credential"]);
   expect(recorded[2]?.sshAuthSock).toBe("");
   expect(recorded[2]?.stdin).toBe("");
   expect(envelopeOf(result).result.effects).toEqual({ completed: ["editor-window:pilot"], remaining: [], uncertain: [], inventoryComplete: true });
@@ -67,7 +67,7 @@ test("plain open stays connection-only for a configured service profile", async 
 
 test("the reviewed stdin transport delivers a nonsecret sentinel without secret argv or output", async () => {
   const world = await makeWorld({ ssh: { logs: JSON.stringify({ status: "ready", attempted: true, started: ["core"] }) } });
-  const p = Bun.spawnSync(["/usr/bin/python3", "resources/pilot-runtime.py", "deliver", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", "--wrapper", "/unused/wrapper", "--reference", "op://fixture/existing/credential"], { cwd: join(import.meta.dir, "../.."), env: world.env, stdin: Buffer.from("NONSECRET_RESTORE_SENTINEL"), stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawnSync(["/usr/bin/python3", "resources/pilot-runtime.py", "deliver", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", "--core-version", "0.1.21", "--wrapper", "/unused/wrapper", "--reference", "op://fixture/existing/credential"], { cwd: join(import.meta.dir, "../.."), env: world.env, stdin: Buffer.from("NONSECRET_RESTORE_SENTINEL"), stdout: "pipe", stderr: "pipe" });
   expect(p.exitCode).toBe(0);
   expect(p.stdout.toString()).not.toContain("NONSECRET_RESTORE_SENTINEL");
   const logged = (await Bun.file(world.logPath).text());
@@ -119,7 +119,7 @@ test("open never restores configured credential jobs", async () => {
 
 test("native startup helper refuses an unbound credential manifest before remote access", async () => {
   const world = await makeWorld({ ssh: { ps: [RUNNING] } });
-  const p = Bun.spawnSync(["/usr/bin/python3", "resources/pilot-runtime.py", "restore", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", "--wrapper", "/unused/wrapper", "--reference", "op://fixture/existing/credential", "--credential-manifest", world.configPath, "--credential-manifest-sha256", "a".repeat(64)], { cwd: join(import.meta.dir, "../.."), env: world.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawnSync(["/usr/bin/python3", "resources/pilot-runtime.py", "restore", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", "--core-version", "0.1.21", "--wrapper", "/unused/wrapper", "--reference", "op://fixture/existing/credential", "--credential-manifest", world.configPath, "--credential-manifest-sha256", "a".repeat(64)], { cwd: join(import.meta.dir, "../.."), env: world.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   expect(p.exitCode).toBe(1);
   expect(p.stderr.toString()).toBe("");
   expect(JSON.parse(p.stdout.toString())).toEqual({ status: "failed", attempted: false, started: [], error: "credential profile validation failed" });
@@ -139,4 +139,52 @@ test("credential partial effects survive the public CLI result without an aggreg
   expect(result.exitCode).toBe(1);
   expect(envelopeOf(result).result.effects).toEqual({ completed: ["credential-registered:cache:pilot", "credential-started:cache:pilot"], uncertain: ["credential-registered:delivery:pilot"], remaining: ["editor-window:pilot"], inventoryComplete: true });
   expect(await calls(world, "code")).toEqual([]);
+});
+
+function runtime(world: Awaited<ReturnType<typeof makeWorld>>, version: string[]) {
+  return Bun.spawnSync(["/usr/bin/python3", "resources/pilot-runtime.py", "probe", "--ssh", join(world.dir, "bin", "ssh"), "--alias", "mac-mini", "--docker", "/opt/homebrew/bin/docker", "--endpoint", "unix:///Users/server/.orbstack/run/docker.sock", "--container", PILOT_ID, "--version", "3.1.33", ...version, "--wrapper", "/unused/wrapper", "--reference", "op://fixture/existing/credential"], { cwd: join(import.meta.dir, "../.."), env: world.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+}
+
+test.each([[[]], [["--core-version", "0.1"]], [["--core-version", "0.1.21 x"]], [["--core-version", "v0.1.21"]], [["--core-version", "0.1.21\n"]]])("the native startup helper refuses a missing or malformed Core version before remote access (%j)", async (version) => {
+  const world = await makeWorld({ ssh: { ps: [RUNNING] } });
+  const p = runtime(world, version);
+  expect(p.exitCode).toBe(2);
+  expect(p.stdout.toString()).toBe("");
+  expect(p.stderr.toString()).toMatch(version.length === 0 ? /--core-version/ : /invalid Core version/);
+  expect(await calls(world)).toEqual([]);
+});
+
+// Runs the shipped in-container program exactly as forwarded over ssh. Only the
+// container's filesystem and its `hc` command are stubbed; preconditions() is real.
+const CONTAINER_DRIVER = `
+import ast,json,pathlib,shlex,subprocess,sys
+from unittest import mock
+forwarded,reported=sys.argv[1:]
+parts=shlex.split(forwarded);i=parts.index('-c')
+tree=ast.parse(parts[i+1]);tree.body=[n for n in tree.body if not isinstance(n,ast.Try)]
+sys.argv=['-c',*parts[i+2:]];ns={'__name__':'__main__'}
+exec(compile(tree,'<container>','exec'),ns)
+def command(args):
+ if args!=['/usr/local/bin/hc','--version']:raise AssertionError(args)
+ return subprocess.CompletedProcess(args,0,reported,'')
+ns['command']=command
+with mock.patch.multiple(pathlib.Path,is_symlink=lambda s:False,resolve=lambda s,*a,**k:s,is_dir=lambda s:True,is_file=lambda s:True,read_text=lambda s,*a,**k:'{"version":"3.1.33"}'):
+ try:ns['preconditions']();outcome='accepted'
+ except RuntimeError as e:outcome=str(e)
+print(json.dumps({'argv':sys.argv[1:],'outcome':outcome}))
+`;
+
+test.each([
+  ["0.1.21", "hc 0.1.21\n", "accepted"],
+  ["0.1.20", "hc 0.1.20\n", "accepted"],
+  ["0.1.21", "hc 0.1.20\n", "unexpected Core version"],
+  ["0.1.20", "hc 0.1.21\n", "unexpected Core version"],
+  ["0.1.21", "", "unexpected Core version"],
+])("the in-container startup expects the configured Core version %s (reported %j)", async (configured, reported, outcome) => {
+  const world = await makeWorld({ ssh: { logs: JSON.stringify({ status: "missing", core: true, attempted: false, started: [] }) } });
+  expect(runtime(world, ["--core-version", configured]).exitCode).toBe(0);
+  const forwarded = (await calls(world, "ssh"))[0]?.argv.at(-1) ?? "";
+  const p = Bun.spawnSync(["/usr/bin/python3", "-I", "-B", "-c", CONTAINER_DRIVER, forwarded, reported], { stdout: "pipe", stderr: "pipe" });
+  expect(p.stderr.toString()).toBe("");
+  expect(JSON.parse(p.stdout.toString())).toEqual({ argv: ["probe", "3.1.33", "/home/agent/.local/state/pilot-runtime/remote-dev/service.log", configured], outcome });
 });

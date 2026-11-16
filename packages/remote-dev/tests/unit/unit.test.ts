@@ -52,6 +52,20 @@ test.each([
   expect(Config.safeParse(config).success).toBe(false);
 });
 
+function withRestore(restore: Record<string, unknown>) {
+  const config = baseConfig("/tmp/remote-dev");
+  Object.assign(config.targets[0]!, { restore: { kind: "shepherdr-pilot", claudeOAuthRef: "op://fixture/existing/credential", shepherdrVersion: "3.1.33", ...restore } });
+  return config;
+}
+
+test.each([[{}], [{ coreVersion: "0.1" }], [{ coreVersion: "v0.1.21" }], [{ coreVersion: "0.1.21;x" }], [{ coreVersion: 21 }]])("a restore profile without a well-formed Core version is rejected (%j)", (restore) => {
+  expect(Config.safeParse(withRestore(restore)).success).toBe(false);
+});
+
+test.each(["0.1.20", "0.1.21"])("a restore profile declares its Core version %s", (coreVersion) => {
+  expect(Config.safeParse(withRestore({ coreVersion })).success).toBe(true);
+});
+
 test("the fixture config itself is valid", () => {
   expect(Config.safeParse(baseConfig("/tmp/remote-dev")).success).toBe(true);
 });

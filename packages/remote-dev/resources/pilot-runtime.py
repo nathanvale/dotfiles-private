@@ -63,7 +63,7 @@ def preconditions():
   if not pathlib.Path(name).is_file():raise RuntimeError('retained service state or installed source is missing')
  if json.loads(pathlib.Path(WEB).parent.parent.joinpath('package.json').read_text()).get('version')!=sys.argv[2]:raise RuntimeError('unexpected installed Shepherdr version')
  p=command(['/usr/local/bin/hc','--version'])
- if p.returncode!=0 or p.stdout.strip().split()[-1:]!=['0.1.20']:raise RuntimeError('unexpected Core version')
+ if p.returncode!=0 or p.stdout.strip().split()[-1:]!=[sys.argv[4]]:raise RuntimeError('unexpected Core version')
 
 def wait(check,message):
  for _ in range(75):
@@ -118,7 +118,7 @@ def options():
     p = argparse.ArgumentParser()
     p.add_argument('action', choices=['probe', 'restore', 'deliver'])
     p.add_argument('--service-log', default='/home/agent/.local/state/pilot-runtime/remote-dev/service.log')
-    for key in ['ssh', 'alias', 'docker', 'endpoint', 'container', 'version', 'wrapper', 'reference']:
+    for key in ['ssh', 'alias', 'docker', 'endpoint', 'container', 'version', 'core-version', 'wrapper', 'reference']:
         p.add_argument('--' + key, required=True)
     p.add_argument('--credential-manifest')
     p.add_argument('--credential-manifest-sha256')
@@ -131,6 +131,8 @@ def options():
         p.error('full container identity required')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', a.alias):
         p.error('invalid SSH alias')
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', a.core_version):
+        p.error('invalid Core version')
     return a
 
 
@@ -138,7 +140,7 @@ def remote(a, action, secret=None):
     args = [a.docker, '--host', a.endpoint, 'exec', '--user', '1000:1001']
     if secret is not None:
         args += ['--env-file', '/dev/stdin']
-    args += [a.container, '/usr/bin/python3', '-I', '-c', CONTAINER, action, a.version, a.service_log]
+    args += [a.container, '/usr/bin/python3', '-I', '-c', CONTAINER, action, a.version, a.service_log, a.core_version]
     ssh = [a.ssh, '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ForwardAgent=no', '-o', 'ClearAllForwardings=yes', '--', a.alias, shlex.join(args)]
     return subprocess.run(ssh, input=secret, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=240)
 
