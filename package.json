@@ -5,7 +5,7 @@
 	"author": "",
 	"license": "ISC",
 	"private": true,
-	"packageManager": "bun@1.4.0",
+	"packageManager": "bun@1.4.4",
 	"workspaces": [
 		".agents/runtime/agent-native-state-machine-generator",
 		".agents/runtime/agent-worktree",
@@ -24,7 +24,7 @@
 		"apps/vscode/*"
 	],
 	"catalog": {
-		"@types/bun": "1.4.0",
+		"@types/bun": "1.4.4",
 		"typescript": "7.0.2"
 	},
 	"keywords": [],

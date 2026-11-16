@@ -56,6 +56,15 @@ first repair matched lock lines by text, which could not prove that the matched
 text was the structurally valid record Mise would consume, and its recovery
 regression failed on content identity before reaching the Beads predicate.
 
+On 16 November 2026 Nathan asked for every Bun pin to be updated; the target
+is release 1.4.4 (upstream tag `bun-v1.4.4`, 22 October 2026), the latest
+release, covering the Mise default, the repository `packageManager`, and the
+`@types/bun` catalog entry. Bun 1.4.0 cannot read a lockfile written by 1.4.4.
+Apply leaves the previously selected Bun 1.4.0 installed under Mise, so client
+rollback is toolchain recovery to the revision that selected it. Bun keeps no
+store whose format this update migrates. The source pin applies nothing; each
+host changes only through its own explicit apply.
+
 ## Decision Drivers
 
 - Keep one exact desired version and selected owner for each declared runtime.

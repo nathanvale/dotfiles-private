@@ -47,7 +47,7 @@ function observerOperation(arguments_: readonly string[]): RecoveryOperation {
 	return "usage"
 }
 
-function childOutcome(exitCode: number | null, signalCode: string | null): "succeeded" | "failed" | "signalled" {
+function childOutcome(exitCode: number | null, signalCode: string | number | null): "succeeded" | "failed" | "signalled" {
 	if (signalCode !== null) return "signalled"
 	return exitCode === 0 ? "succeeded" : "failed"
 }

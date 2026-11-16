@@ -68,7 +68,7 @@ async function runChecker(runRoot: string, checkerMain: string, timeoutMs = 5_00
 	stdout: string
 	stderr: string
 	timedOut: boolean
-	signal: string | null
+	signal: string | number | null
 	elapsedMs: number
 }> {
 	const startedAt = performance.now()

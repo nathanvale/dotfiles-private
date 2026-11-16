@@ -102,10 +102,10 @@ STUB
 chmod +x "$FAKE_BIN/mise"
 
 # Callers run it from a checkout; the default one pins a different manager,
-# as a dotfiles checkout does (bun@1.4.0).
+# as a dotfiles checkout does (bun@1.4.4).
 CALLER="$TEST_ROOT/caller"
 mkdir -p "$CALLER"
-printf '{"packageManager":"bun@1.4.0"}\n' >"$CALLER/package.json"
+printf '{"packageManager":"bun@1.4.4"}\n' >"$CALLER/package.json"
 
 # The applied shim chain is how the provisioner finds Mise, as the real shims do.
 ln -s "$FAKE_BIN/mise" "$HOME_FIXTURE/.local/share/mise/shims/node"

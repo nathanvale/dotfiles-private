@@ -34,7 +34,8 @@ zone graph this repository has not needed. Facts below were decided 2026-09-11.
 
 - Pins: Bun 1.4.0 via `packageManager`, `bunfig.toml` `auto = "disable"`;
   TypeScript 7.0.2 stable (nightly and preview rejected); `@types/bun` 1.4.0
-  via `catalog`; Biome exactly 2.4.15 (2.5 changed the schema); Fallow exactly
+  via `catalog` (both moved to 1.4.4 on 16 November 2026; see ADR 0007);
+  Biome exactly 2.4.15 (2.5 changed the schema); Fallow exactly
   3.19.0. TypeScript and Fallow move as a pair: Fallow's type-aware sidecar is
   `typescript-go` 7.0.2; drift is a hard `native-output-schema-mismatch`.
 - Compiler contract: one root `tsconfig.base.json` carries the kit's compiler
