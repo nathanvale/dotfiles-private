@@ -992,6 +992,13 @@ function hasWholeTreePathspec(args: readonly string[]): boolean {
 	return args.some((arg) => WHOLE_TREE_PATHSPECS.has(arg))
 }
 
+/** `git restore --staged` alone only unstages; working-tree edits survive. */
+function restoresOnlyTheIndex(args: string[]): boolean {
+	const staged = hasLongFlag(args, '--staged') || hasShortFlag(args, 'S')
+	const worktree = hasLongFlag(args, '--worktree') || hasShortFlag(args, 'W')
+	return staged && !worktree
+}
+
 const NARROW_RULES: readonly NarrowRule[] = [
 	{
 		id: 'force-push',
@@ -1026,7 +1033,8 @@ const NARROW_RULES: readonly NarrowRule[] = [
 	{
 		id: 'whole-tree-discard',
 		matches: ({ subcommand, args }) =>
-			(subcommand === 'restore' || subcommand === 'checkout') &&
+			((subcommand === 'restore' && !restoresOnlyTheIndex(args)) ||
+				subcommand === 'checkout') &&
 			hasWholeTreePathspec(args),
 		reason: 'Overwrites every path at once, including changes you meant to keep.',
 		saferWay:
