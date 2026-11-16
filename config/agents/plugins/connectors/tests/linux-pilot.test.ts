@@ -23,7 +23,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import path from "node:path";
 import { readDeliveredItem, receiverHost, receiverSocket, type ReceiverRun } from "../bin/delivered-credential.ts";
 import { platformDependencyTools } from "../bin/dependency-status.ts";
-import { launcherText, PACKAGED_MCPORTER_DIR, releaseRecord, selectPackagedMcporter } from "../bin/mcporter-packaged.ts";
+import { launcherText, PACKAGED_MCPORTER, PACKAGED_MCPORTER_DIR, releaseRecord, selectPackagedMcporter } from "../bin/mcporter-packaged.ts";
+import { MCPORTER_RELEASE } from "../bin/mcporter-release.ts";
 import { lockedIntegrity } from "../pilot/build.ts";
 
 // Independent oracles, restated rather than imported.
@@ -51,6 +52,13 @@ function fresh(name: string): string {
 test("platform tools: Linux declares MCPorter alone, macOS keeps all four", () => {
 	expect(platformDependencyTools("linux")).toEqual(["mcporter"]);
 	expect(platformDependencyTools("darwin")).toEqual(["mcporter", "op", "mise", "uv"]);
+});
+
+test("version: every MCPorter pin names the same release", () => {
+	const root = path.join(import.meta.dir, "..");
+	const requirements = JSON.parse(readFileSync(path.join(root, "requirements.json"), "utf8")) as { pins: { mcporter: string } };
+	const linuxPackage = JSON.parse(readFileSync(path.join(root, "config", "mcporter-linux", "package.json"), "utf8")) as { dependencies: { mcporter: string } };
+	expect([MCPORTER_RELEASE.version, PACKAGED_MCPORTER.version, linuxPackage.dependencies.mcporter]).toEqual([requirements.pins.mcporter, requirements.pins.mcporter, requirements.pins.mcporter]);
 });
 
 test("lockfile: the committed lock pins mcporter to the official release integrity", () => {
@@ -169,7 +177,7 @@ test.skipIf(!onLinux)("receiver read: the real git credential-cache receiver ans
 });
 
 interface Envelope {
-	result: { causeCode: string; repairAction: string | null; data: Record<string, unknown> | null };
+	result: { causeCode: string; repairAction: string | null; nextAction: string; data: Record<string, unknown> | null };
 }
 
 test.skipIf(!onLinux || process.arch !== "arm64")(
@@ -188,13 +196,14 @@ test.skipIf(!onLinux || process.arch !== "arm64")(
 			return JSON.parse(stdout) as Envelope;
 		};
 		expect((run("list").result.data?.connectors as { id: string }[]).map((entry) => entry.id).sort()).toEqual(ADMITTED);
-		const deps = run("deps", "status").result.data?.dependencies as { tool: string; ready: boolean }[];
-		expect(deps.map((row) => [row.tool, row.ready])).toEqual([["mcporter", true]]);
+		const deps = run("deps", "status").result.data?.dependencies as { tool: string; ready: boolean; selected: { executable: string } }[];
+		expect(deps.map((row) => [row.tool, row.ready, row.selected.executable])).toEqual([["mcporter", true, "vendor/mcporter/mcporter"]]);
 		const evidence = (run("status", "context7").result.data?.connectors as { evidence: Record<string, { verdict: string; custody?: { mode: string } }> }[])[0]!.evidence;
 		expect(evidence.localReady!.verdict).toBe("proven");
 		const setup = run("setup").result;
 		expect(setup.causeCode).toBe("DOMAIN_SETUP_FAILED_UNCHANGED");
 		expect(setup.repairAction).toContain("Nothing to set up on Linux");
+		expect(setup.nextAction).toBe("connectors.deps.status");
 		expect(run("auth", "configure", "context7", "--input", JSON.stringify({ item: ITEM })).result.causeCode).toBe("SUCCESS_RUN_RECORDED");
 		const undelivered = run("auth", "check", "context7").result;
 		expect([undelivered.causeCode, undelivered.data?.connectorCause]).toEqual(["DOMAIN_ADAPTER_REFUSED", "credential-not-delivered"]);
