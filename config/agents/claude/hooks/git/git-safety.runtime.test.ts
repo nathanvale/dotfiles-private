@@ -350,7 +350,7 @@ describe('git-safety runtime narrow mode', () => {
 
 interface PreToolUseDeclaration {
 	matcher?: string
-	hooks?: Array<{ command?: string }>
+	hooks?: Array<{ command?: string; timeout?: number }>
 }
 
 interface HookDeclarations {
@@ -377,6 +377,7 @@ describe('installed hook declarations', () => {
 		const gate = findGitSafetyGate(claude)
 
 		expect(gate?.matcher).toBe('Bash')
+		expect(gate?.hooks?.[0]?.timeout).toBe(30)
 		expect(gate?.hooks?.[0]?.command).toBe(
 			'CLAUDE_GIT_SAFETY_MODE=narrow bun run "$HOME/.claude/hooks/git/git-safety.ts"',
 		)

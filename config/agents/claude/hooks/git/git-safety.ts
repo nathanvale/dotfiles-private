@@ -977,6 +977,7 @@ export type NarrowRuleId =
 	| 'hard-reset'
 	| 'forced-clean'
 	| 'whole-tree-discard'
+	| 'forced-switch'
 	| 'stage-everything'
 
 interface NarrowRule {
@@ -994,8 +995,11 @@ function hasWholeTreePathspec(args: readonly string[]): boolean {
 
 /** `git restore --staged` alone only unstages; working-tree edits survive. */
 function restoresOnlyTheIndex(args: string[]): boolean {
-	const staged = hasLongFlag(args, '--staged') || hasShortFlag(args, 'S')
-	const worktree = hasLongFlag(args, '--worktree') || hasShortFlag(args, 'W')
+	const separator = args.indexOf('--')
+	const options = separator === -1 ? args : args.slice(0, separator)
+	const staged = hasLongFlag(options, '--staged') || hasShortFlag(options, 'S')
+	const worktree =
+		hasLongFlag(options, '--worktree') || hasShortFlag(options, 'W')
 	return staged && !worktree
 }
 
@@ -1009,6 +1013,7 @@ const NARROW_RULES: readonly NarrowRule[] = [
 					(arg) =>
 						arg.startsWith('--force-with-lease') ||
 						arg === '--force-if-includes' ||
+						arg === '--mirror' ||
 						arg.startsWith('+'),
 				)),
 		reason: 'Rewrites remote history that other clones may already have.',
@@ -1039,6 +1044,15 @@ const NARROW_RULES: readonly NarrowRule[] = [
 		reason: 'Overwrites every path at once, including changes you meant to keep.',
 		saferWay:
 			'Restore named paths: git restore <path>, or save everything first with git stash push',
+	},
+	{
+		id: 'forced-switch',
+		matches: ({ subcommand, args }) =>
+			(subcommand === 'checkout' || subcommand === 'switch') &&
+			(hasForceFlag(args) || hasLongFlag(args, '--discard-changes')),
+		reason: 'Switches branches by throwing away uncommitted changes.',
+		saferWay:
+			'Save the changes first with git stash push, then switch without force',
 	},
 	{
 		id: 'stage-everything',
