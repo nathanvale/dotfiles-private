@@ -3,7 +3,7 @@
 	"imports": [],
 	"mcpServers": {
 		"mermaid": {
-			"description": "Mermaid hosted MCP, keyless tier",
+			"description": "Mermaid hosted MCP, keyless tier (the hosted server has refused unauthenticated calls since 2026-11)",
 			"baseUrl": "https://mcp.mermaid.ai/mcp",
 			"allowedTools": ["validate_and_render_mermaid_diagram", "get_diagram_title", "get_diagram_summary", "search_mermaid_icons", "get_mermaid_syntax_document"]
 		},
@@ -14,7 +14,7 @@
 			"env": {
 				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
 			},
-			"allowedTools": ["list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "create_mermaid_chart_diagram", "update_mermaid_chart_diagram"]
+			"allowedTools": ["validate_and_render_mermaid_diagram", "get_diagram_title", "get_diagram_summary", "search_mermaid_icons", "get_mermaid_syntax_document", "list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "create_mermaid_chart_diagram", "update_mermaid_chart_diagram"]
 		}
 	}
 }

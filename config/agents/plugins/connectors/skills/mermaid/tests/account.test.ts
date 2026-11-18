@@ -34,7 +34,7 @@ import { chmodSync, readdirSync, readFileSync, realpathSync, renameSync, statSyn
 import path from "node:path";
 import { ACCOUNT_ENDPOINT } from "../scripts/endpoint.ts";
 import { AccountMachine, type Envelope, ITEM_ID, OFFICIAL_MCPORTER, PROVIDER_TOKEN, SERVICE_TOKEN } from "./fixtures/account-fixture.ts";
-import { type AccountStub, startAccountStub } from "./fixtures/account-stub.ts";
+import { type AccountStub, RENDER_TOOLS, startAccountStub } from "./fixtures/account-stub.ts";
 
 if (process.env.CI && !OFFICIAL_MCPORTER) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for the packaged Mermaid account proof");
 
@@ -66,6 +66,9 @@ const SEED = [{ documentID: "doc-1", title: "Seed", code: "flowchart LR\n  A -->
 // Independent oracle: the one hosted origin the Mermaid API token may reach.
 const HOSTED_ENDPOINT = "https://mcp.mermaid.ai/mcp";
 const CLIENT = "connectors";
+// Independent oracle: the account server's allow-list, the render and
+// reference tools first, then the account reads and writes.
+const ACCOUNT_SERVER_TOOLS = ["validate_and_render_mermaid_diagram", "get_diagram_title", "get_diagram_summary", "search_mermaid_icons", "get_mermaid_syntax_document", "list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "create_mermaid_chart_diagram", "update_mermaid_chart_diagram"];
 
 interface Context {
 	readonly machine: AccountMachine;
@@ -175,6 +178,38 @@ test.skipIf(!OFFICIAL_MCPORTER)("account custody gates on the registration and c
 
 		expect(statusEvidence(await run(["status", "mermaid"]))).toEqual(REGISTERED_UNPROVEN);
 	}, false);
+}, 120_000);
+
+// Reproduced defect (2026-11-19): the hosted server refuses the render and
+// reference tools without a token, so a registered account must send them,
+// and the live schema, through its Provider. Fails if a registered read still
+// takes the keyless route (the sandbox denies the hosted origin, so it fails),
+// if any request lacks the token, or if the schema admits a tool outside the
+// account allow-list.
+test.skipIf(!OFFICIAL_MCPORTER)("a registered account sends the render tools and the schema through its Provider with the token", async () => {
+	await withAccount(async ({ stub, run }) => {
+		const inputs: Readonly<Record<(typeof RENDER_TOOLS)[number], Record<string, unknown>>> = {
+			validate_and_render_mermaid_diagram: { prompt: "p", mermaidCode: "flowchart LR\n  A --> B", diagramType: "flowchart", clientName: CLIENT },
+			get_diagram_title: { diagramContent: "flowchart LR\n  A --> B", clientName: CLIENT },
+			get_diagram_summary: { diagramContent: "flowchart LR\n  A --> B", clientName: CLIENT },
+			search_mermaid_icons: { query: "database", limit: 3, clientName: CLIENT },
+			get_mermaid_syntax_document: { diagramType: "flowchart", clientName: CLIENT },
+		};
+		for (const tool of RENDER_TOOLS) {
+			const read = await run(["run", "mermaid", tool, "--input", JSON.stringify(inputs[tool])]);
+			expect({ tool, code: read.code, data: read.result.data }).toEqual({ tool, code: 0, data: { connector: "mermaid", operation: tool, tier: "account", result: { rendered: tool } } });
+		}
+		expect(stub.calls).toEqual(RENDER_TOOLS.map((name) => ({ name, arguments: inputs[name] })));
+
+		const schema = await run(["schema", "mermaid"]);
+		const data = schema.result.data ?? {};
+		expect({ code: schema.code, tier: data.tier, server: data.server, allowedTools: data.allowedTools, accountTools: data.accountTools }).toEqual({ code: 0, tier: "account", server: "mermaid-account", allowedTools: ACCOUNT_SERVER_TOOLS, accountTools: ACCOUNT_SERVER_TOOLS });
+		// The stub also lists repair_mermaid_chart_diagram, which the allow-list excludes.
+		expect(((data.schema as { tools: { name: string }[] }).tools.map((tool) => tool.name)).sort()).toEqual([...ACCOUNT_SERVER_TOOLS].sort());
+		expect(stub.calls).toHaveLength(RENDER_TOOLS.length);
+		expect(stub.authorized.length).toBeGreaterThan(0);
+		expect(stub.authorized.every(Boolean)).toBe(true);
+	});
 }, 120_000);
 
 test.skipIf(!OFFICIAL_MCPORTER)("writes apply only a fresh preview, once; an unknown effect blocks its object and settles only on found evidence", async () => {

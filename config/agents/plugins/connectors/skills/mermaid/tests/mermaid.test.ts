@@ -26,6 +26,13 @@ const KEYLESS_TOOLS = ["validate_and_render_mermaid_diagram", "get_diagram_title
 // 2026-09-26 receipt, three reads then two writes, and the whole catalogue
 // Ticket #94 declares, each with its tier and kind.
 const ACCOUNT_TOOLS = ["list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "create_mermaid_chart_diagram", "update_mermaid_chart_diagram"];
+// The account server admits the keyless tools too: since 2026-11 the hosted
+// server needs the token for every tool, so a registered account reaches them.
+const ACCOUNT_SERVER_TOOLS = [...KEYLESS_TOOLS, ...ACCOUNT_TOOLS];
+// Independent oracle: what a keyless read that ends without a result tells
+// the caller. It names the token the hosted server now requires, never a
+// login grant, which Mermaid does not have.
+const KEYLESS_FAILURE_REPAIR = `Mermaid's hosted server refuses calls without a Mermaid API token (HTTP 401 since 2026-11), so the keyless tier cannot reach it. Register the 1Password item that holds the token with connectors auth configure mermaid --input '{"item":"<id>"}', then connectors auth check mermaid, and run again: every Mermaid tool then goes through the account tier. If the server still answers, correct the operation or its --input before running again`;
 const CATALOGUE = [
 	...KEYLESS_TOOLS.map((name) => ({ name, tier: "keyless", kind: "read" })),
 	{ name: "list_mermaid_chart_projects", tier: "account", kind: "read" },
@@ -47,10 +54,10 @@ interface Fixture {
 	dispose(): void;
 }
 
-function mermaidFixture(): Fixture {
+function mermaidFixture(options: { requireToken?: boolean } = {}): Fixture {
 	const bundle = createBundle();
 	const hostile = createFakeMcporterBinDir();
-	const stub = startMermaidStub();
+	const stub = startMermaidStub(options);
 	cpSync(path.join(PLUGIN_ROOT, "skills", "mermaid", "config"), path.join(bundle.skillsRoot, "mermaid", "config"), { recursive: true });
 	const registry = path.join(bundle.skillsRoot, "mermaid", "config", "mcporter.json");
 	const parsed = JSON.parse(readFileSync(registry, "utf8"));
@@ -138,13 +145,33 @@ test.skipIf(!official)("schema returns the keyless tools the hosted server lists
 		expect((data.schema.tools as { name: string }[]).map((tool) => tool.name).sort()).toEqual([...KEYLESS_TOOLS].sort());
 		expect({ connector: data.connector, tier: data.tier, server: data.server }).toEqual({ connector: "mermaid", tier: "keyless", server: "mermaid" });
 		// Declared, not live-listed: the account schema needs the credential.
-		expect({ accountServer: data.accountServer, accountTools: data.accountTools, operations: data.operations }).toEqual({ accountServer: "mermaid-account", accountTools: ACCOUNT_TOOLS, operations: CATALOGUE });
+		expect({ accountServer: data.accountServer, accountTools: data.accountTools, operations: data.operations }).toEqual({ accountServer: "mermaid-account", accountTools: ACCOUNT_SERVER_TOOLS, operations: CATALOGUE });
 		expect(fixture.stub.calls).toEqual([]);
 		expectNoCredentialSent(fixture.stub);
 	} finally {
 		fixture.dispose();
 	}
 }, 60_000);
+
+// Reproduced defect (2026-11-19): the hosted server answers every
+// unauthenticated request with HTTP 401, and the keyless failure told the
+// caller to renew a login grant Mermaid does not have. Fails if the repair
+// names a grant or login, or if the keyless route started sending a credential.
+test.skipIf(!official)("a keyless read the hosted server refuses for want of a token names the token registration, not a login", async () => {
+	const fixture = mermaidFixture({ requireToken: true });
+	try {
+		for (const argv of [["run", "mermaid", "validate_and_render_mermaid_diagram", "--input", JSON.stringify({ prompt: "p", mermaidCode: "flowchart LR\n  A --> B", diagramType: "flowchart", clientName: "connectors" })], ["schema", "mermaid"]]) {
+			const result = await fixture.run(argv);
+			const envelope = onlyEnvelope(result).result;
+			expect({ argv, code: result.code, outcome: envelope.outcome, repair: envelope.repairAction, data: envelope.data }).toEqual({ argv, code: 3, outcome: "failed", repair: KEYLESS_FAILURE_REPAIR, data: null });
+			expect(envelope.causeCode).toMatch(/^DOMAIN_PROVIDER_CALL_FAILED(_AFTER_EFFECT)?$/);
+		}
+		expect(fixture.stub.calls).toEqual([]);
+		expectNoCredentialSent(fixture.stub);
+	} finally {
+		fixture.dispose();
+	}
+}, 90_000);
 
 test("undeclared tools, misphased or malformed writes, unsupported auth, and a credentialed registry refuse before any Provider contact", async () => {
 	const fixture = mermaidFixture();

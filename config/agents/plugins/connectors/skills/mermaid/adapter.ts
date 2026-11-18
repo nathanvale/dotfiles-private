@@ -2,8 +2,11 @@
 // `schema`, and `recover` commands (Ticket #94 under Spec #87). Two tiers:
 //
 // keyless: a read of one allow-listed hosted tool, planned through the shared
-// route with no selector, header, or credential.
-// account: the optional tier. `auth configure` records one 1Password item
+// route with no selector, header, or credential. Since 2026-11 the hosted
+// server answers every unauthenticated request with HTTP 401, so a keyless
+// read fails until an account item is registered; its repair says so.
+// account: the optional tier, and the route for every read once registered:
+// the render and reference tools then go through the account server too. `auth configure` records one 1Password item
 // ID; every other account command passes that registration first, before any
 // Keychain, 1Password, MCPorter, or Provider start. Its tools run through the
 // account server, whose stdio command is this adapter's Provider role, the
@@ -46,6 +49,10 @@ const REPAIR: Readonly<Record<RefusalKind, string>> = {
 const WRITE_INPUT_REPAIR = "create needs projectID, title, and clientName, with optional code; update needs documentID, projectID, clientName, and at least one of title or code; every value is a non-empty string and no other key is admitted";
 const WRITE_PHASE_REPAIR = "A Mermaid write needs --preview first, then --apply <previewId> with the identical --input";
 const READ_PHASE_REPAIR = "A Mermaid read takes neither --preview nor --apply; run it without them";
+// Static guidance for a keyless read that ended without a result. No grant or
+// login exists here: the hosted server wants a Mermaid API token.
+const KEYLESS_FAILURE_REPAIR = `Mermaid's hosted server refuses calls without a Mermaid API token (HTTP 401 since 2026-11), so the keyless tier cannot reach it. Register the 1Password item that holds the token with connectors auth configure mermaid --input '{"item":"<id>"}', then connectors auth check mermaid, and run again: every Mermaid tool then goes through the account tier. If the server still answers, correct the operation or its --input before running again`;
+const ACCOUNT_READ_REPAIR = "The Mermaid account read did not complete; check the input against connectors schema mermaid, then run it again";
 
 function refused(kind: RefusalKind, connectorCause: string, repair: string = REPAIR[kind]): Prepared {
 	return { kind: "refused", refusal: { kind, connectorCause, repair } };
@@ -73,7 +80,14 @@ function keylessRead(request: SchemaRequest, mcporterArgs: readonly string[], da
 		if (error instanceof RouteError) return refused(error.exitCode === 2 ? "usage" : "schema", `route-${error.code}`);
 		throw error;
 	}
-	return { kind: "transport", effect: "read", argv, env, data: { tier: "keyless", ...data }, commit: () => ({ refusal: null, completed: [] }), settle: () => [] };
+	return { kind: "transport", effect: "read", argv, env, data: { tier: "keyless", ...data }, unclassifiedReadRepair: KEYLESS_FAILURE_REPAIR, commit: () => ({ refusal: null, completed: [] }), settle: () => [] };
+}
+
+// A registration, or a registration file that does not parse, routes a read
+// to the account tier; there an invalid one refuses before anything starts.
+function accountRegistered(request: SchemaRequest): boolean {
+	const registered = registeredAccount(request.env);
+	return registered.ok || registered.cause === "registration-invalid";
 }
 
 // The registration gate, then an execute step holding the registered item.
@@ -90,7 +104,7 @@ function accountRead(request: SchemaRequest, operation: string, input: Readonly<
 		const result = await caller(request, item, capabilities).call(operation, input);
 		if (result.ok) return { kind: "success", data: { operation, tier: "account", result: result.data } };
 		if (!result.sent) return { kind: "refused", refusal: { kind: "domain", connectorCause: result.cause, repair: result.repair } };
-		return { kind: "failed", connectorCause: result.cause, repair: "The Mermaid account read did not complete; check the input against connectors schema, then run it again" };
+		return { kind: "failed", connectorCause: result.cause, repair: ACCOUNT_READ_REPAIR };
 	});
 }
 
@@ -102,6 +116,7 @@ function prepareRun(request: AdapterRequest, operation: string, input: Readonly<
 	if (spec.kind === "write") return refused("usage", "write-phase-required", WRITE_PHASE_REPAIR);
 	if (spec.tier === "account") return accountRead(request, operation, input ?? {});
 	if (!allowedTools.includes(operation)) return refused("operation-unknown", "operation-not-allowed");
+	if (accountRegistered(request)) return accountRead(request, operation, input ?? {});
 	const flags = input === null ? [] : ["--args", JSON.stringify(input)];
 	return keylessRead(request, ["call", operation, ...flags, "--output", "json"], {});
 }
@@ -183,15 +198,23 @@ function prepareRecover(request: RecoverRequest): Prepared {
 	});
 }
 
-// The live schema is the keyless server's, which needs no credential. The
-// account server's declared allow-list and the whole read and write
-// catalogue ride beside it, declared rather than live-listed.
+// Unregistered, the live schema is the keyless server's; registered, it is
+// the account server's, listed through the Provider. The account server's
+// declared allow-list and the whole read and write catalogue ride beside it.
 function prepareSchema(request: SchemaRequest): Prepared {
 	const servers = registryServers(request);
 	const allowedTools = keylessAllowedTools(request, servers);
 	if (allowedTools === null) return refused("schema", "registry-not-keyless");
-	const accountTools = servers[ACCOUNT_SERVER]?.allowedTools ?? [];
-	return keylessRead(request, ["list", "--schema", "--json"], { server: KEYLESS_SERVER, allowedTools, accountServer: ACCOUNT_SERVER, accountTools, operations: OPERATION_CATALOGUE });
+	const accountTools = (servers[ACCOUNT_SERVER]?.allowedTools ?? []) as readonly string[];
+	const declared = { accountServer: ACCOUNT_SERVER, accountTools, operations: OPERATION_CATALOGUE };
+	if (!accountRegistered(request)) return keylessRead(request, ["list", "--schema", "--json"], { server: KEYLESS_SERVER, allowedTools, ...declared });
+	// The envelope refuses a shared reference, so allowedTools is its own copy.
+	return accountPlan(request, async (item, capabilities) => {
+		const result = await caller(request, item, capabilities).schema();
+		if (result.ok) return { kind: "success", data: { tier: "account", server: ACCOUNT_SERVER, allowedTools: [...accountTools], ...declared, schema: result.data } };
+		if (!result.sent) return { kind: "refused", refusal: { kind: "domain", connectorCause: result.cause, repair: result.repair } };
+		return { kind: "failed", connectorCause: result.cause, repair: ACCOUNT_READ_REPAIR };
+	});
 }
 
 // The keyless tier is effective until an account registration exists; the
