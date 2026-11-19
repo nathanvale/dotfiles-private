@@ -19,6 +19,10 @@ const LISTED_TOOLS = [
 	"create_pr",
 ] as const;
 
+// The hosted server's reply to any unauthenticated request since 2026-11
+// (observed 2026-11-19): HTTP 401, a Bearer challenge, and a JSON-RPC error.
+const UNAUTHORIZED_BODY = { jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized", data: { error: "unauthorized", error_description: "Authentication required" } } };
+
 export interface MermaidStub {
 	readonly url: string;
 	readonly headers: readonly string[];
@@ -26,7 +30,8 @@ export interface MermaidStub {
 	stop(): void;
 }
 
-export function startMermaidStub(): MermaidStub {
+// requireToken: answer every request as the token-requiring hosted server does.
+export function startMermaidStub(options: { requireToken?: boolean } = {}): MermaidStub {
 	const headers: string[] = [];
 	const calls: { name: string; arguments: unknown }[] = [];
 	const server = Bun.serve({
@@ -35,6 +40,7 @@ export function startMermaidStub(): MermaidStub {
 		idleTimeout: 0,
 		async fetch(request) {
 			headers.push(JSON.stringify([...request.headers]));
+			if (options.requireToken) return Response.json(UNAUTHORIZED_BODY, { status: 401, headers: { "www-authenticate": 'Bearer realm="mcp"' } });
 			if (request.method !== "POST") return new Response(null, { status: 405 });
 			const message = (await request.json()) as { id?: number; method: string; params?: { protocolVersion?: string; name?: string; arguments?: unknown } };
 			if (message.id === undefined) return new Response(null, { status: 202 });

@@ -5,10 +5,13 @@ description: Render and validate Mermaid diagrams, title or summarize one, searc
 
 # Mermaid
 
-Two tiers behind the plugin's packaged front door. The keyless tier needs no
-credential. The optional account tier reads the Mermaid API token from one
-1Password item inside its own Provider process; the token never reaches
-MCPorter, an argument, a file, or any output. Keep native Harness MCP tools,
+Two tiers behind the plugin's packaged front door. The account tier reads the
+Mermaid API token from one 1Password item inside its own Provider process;
+the token never reaches MCPorter, an argument, a file, or any output. Once an
+item is registered, every tool in the table runs through the account tier.
+Without one, the `keyless` tools call the hosted server with no credential,
+which it has refused with HTTP 401 since 2026-11; register an item (Account
+setup below) before rendering. Keep native Harness MCP tools,
 raw MCPorter calls, and direct HTTP requests outside this route.
 
 Resolve the front door from this skill directory: no global `connectors`
@@ -26,6 +29,9 @@ Mermaid cause. Every tool requires `clientName`; pass `"connectors"`.
 
 ## Tools
 
+`Tier` names the lowest tier that admits the tool; `account` tools need a
+registration.
+
 | Tool | Tier | Kind | Use |
 | --- | --- | --- | --- |
 | `validate_and_render_mermaid_diagram` | keyless | read | Render code; a validation error comes back for fixing |
@@ -39,10 +45,11 @@ Mermaid cause. Every tool requires `clientName`; pass `"connectors"`.
 | `create_mermaid_chart_diagram` | account | write | New diagram: `projectID`, `title`, optional `code` |
 | `update_mermaid_chart_diagram` | account | write | Change `title` or `code` of `documentID` in `projectID` |
 
-## Keyless reads
+## Render and reference reads
 
-1. `"$CONNECTORS" schema mermaid` lists the keyless tools and their input
-   schemas in `result.data.schema.tools`.
+1. `"$CONNECTORS" schema mermaid` lists the live tools and their input
+   schemas in `result.data.schema.tools`: the account server's allow-list
+   when registered (`result.data.tier` is `account`), else the keyless one.
 2. Run one read with a JSON object:
 
 ```sh
@@ -100,6 +107,10 @@ died before its receipt existed sent nothing; `write-locked` names its
 
 ## Refusals
 
+- `DOMAIN_PROVIDER_CALL_FAILED` on a keyless read or schema: the hosted
+  server answered without a result, almost always its 401 for a missing
+  token. The repair names the registration; follow Account setup, then run
+  again.
 - `USAGE_OPERATION_UNKNOWN` (`operation-not-allowed`): the tool is outside
   the table. The hosted server also lists GitHub, Jira, Notion, and repair
   tools this route does not admit.

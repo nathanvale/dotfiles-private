@@ -65,13 +65,17 @@ export interface AccountCaller {
 	// The route, the Provider preflight, and MCPorter selection: nothing leaves.
 	prepare(tool: string, args: Readonly<Record<string, unknown>>): Promise<{ ok: true; send(): SentResult } | Unsent>;
 	call(tool: string, args: Readonly<Record<string, unknown>>): Promise<CallResult>;
+	// The account server's live tool list, filtered by its allow-list.
+	schema(): Promise<CallResult>;
 }
 
+type Prepare = (mcporterArgs: readonly string[]) => Promise<{ ok: true; send(): SentResult } | Unsent>;
+
 export function accountCaller(env: EnvironmentSource, skillsRoot: string, item: string, capabilities: ExecutionCapabilities): AccountCaller {
-	const prepare: AccountCaller["prepare"] = async (tool, args) => {
+	const prepareArgs: Prepare = async (mcporterArgs) => {
 		let plan: ReturnType<typeof planDispatcherRoute>;
 		try {
-			plan = planDispatcherRoute(["mermaid", "--provider", ACCOUNT_SERVER, "--", "call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS], skillsRoot, safeEnvironment(env), accountContext(item));
+			plan = planDispatcherRoute(["mermaid", "--provider", ACCOUNT_SERVER, "--", ...mcporterArgs, "--timeout", CALL_TIMEOUT_MS], skillsRoot, safeEnvironment(env), accountContext(item));
 		} catch {
 			return { ok: false, sent: false, cause: "route-invalid", repair: "Restore skills/mermaid/config/mcporter.json to the packaged account entry" };
 		}
@@ -87,11 +91,11 @@ export function accountCaller(env: EnvironmentSource, skillsRoot: string, item: 
 			},
 		};
 	};
+	const prepare: AccountCaller["prepare"] = (tool, args) => prepareArgs(["call", tool, "--args", JSON.stringify(args), "--output", "json"]);
+	const sendPrepared = async (ready: Awaited<ReturnType<Prepare>>): Promise<CallResult> => (ready.ok ? ready.send() : ready);
 	return {
 		prepare,
-		async call(tool, args) {
-			const ready = await prepare(tool, args);
-			return ready.ok ? ready.send() : ready;
-		},
+		call: async (tool, args) => sendPrepared(await prepare(tool, args)),
+		schema: async () => sendPrepared(await prepareArgs(["list", "--schema", "--json"])),
 	};
 }

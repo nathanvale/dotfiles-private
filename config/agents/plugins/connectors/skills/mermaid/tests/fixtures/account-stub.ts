@@ -1,7 +1,8 @@
 // A stateful Mermaid-account-shaped MCP server on 127.0.0.1, reached only by
 // the Provider's relay. It keeps one project's diagrams in memory, answers
 // the five admitted account tools in the reply shape scripts/diagrams.ts
-// assumes (one JSON text content), and records, per request, only whether
+// assumes (one JSON text content), answers the five render and reference
+// tools with a fixed JSON text naming the tool, and records, per request, only whether
 // the Authorization header equalled the expected token, never a value.
 // mode: normal; drop-write applies a write, then answers it with HTTP 502 so
 // the reply never arrives; lose-write answers a write with HTTP 502 and holds
@@ -27,9 +28,14 @@ export interface AccountStub {
 
 const text = (value: unknown) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
 const WRITES = new Set(["create_mermaid_chart_diagram", "update_mermaid_chart_diagram"]);
+// The hosted server's render and reference tools, which since 2026-11 also
+// need the token.
+export const RENDER_TOOLS = ["validate_and_render_mermaid_diagram", "get_diagram_title", "get_diagram_summary", "search_mermaid_icons", "get_mermaid_syntax_document"] as const;
+const RENDER: ReadonlySet<string> = new Set(RENDER_TOOLS);
 
 function answer(stub: AccountStub, name: string, args: Record<string, unknown>): unknown {
 	const found = stub.diagrams.find((diagram) => diagram.documentID === args.documentID);
+	if (RENDER.has(name)) return text({ rendered: name });
 	switch (name) {
 		case "list_mermaid_chart_projects":
 			return text([{ projectID: "proj-1", title: "Fixture project" }]);
@@ -79,7 +85,7 @@ export function startAccountStub(expectedToken: string, seed: StubDiagram[]): Ac
 			if (message.id === undefined) return new Response(null, { status: 202 });
 			const reply = (result: unknown) => Response.json({ jsonrpc: "2.0", id: message.id, result });
 			if (message.method === "initialize") return reply({ protocolVersion: message.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "mermaid-account-stub", version: "1" } });
-			if (message.method === "tools/list") return reply({ tools: [...WRITES, "list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "repair_mermaid_chart_diagram"].map((name) => ({ name, inputSchema: { type: "object", properties: {} } })) });
+			if (message.method === "tools/list") return reply({ tools: [...RENDER_TOOLS, ...WRITES, "list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "repair_mermaid_chart_diagram"].map((name) => ({ name, inputSchema: { type: "object", properties: {} } })) });
 			if (message.method !== "tools/call") return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "method not found" } });
 			const name = message.params?.name ?? "";
 			const args = message.params?.arguments ?? {};

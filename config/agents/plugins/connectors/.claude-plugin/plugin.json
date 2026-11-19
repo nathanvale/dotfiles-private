@@ -1,6 +1,6 @@
 {
   "name": "connectors",
-  "version": "0.8.7",
+  "version": "0.8.9",
   "description": "Nathan's service connectors for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
