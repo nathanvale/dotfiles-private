@@ -20,6 +20,26 @@ of the reproduced context and the exact delta used for the passing comparison.
 Check ownership and resource availability before a heavy run. Preserve foreign
 containers and the host's credential configuration.
 
+## Hosted macOS runner
+
+For a failure only on GitHub's hosted macOS runner, run the job's command on
+the Mac mini with that image's git and Bun through
+[`match-macos-runner.sh`](../scripts/match-macos-runner.sh). Its usage text
+lists the options; take `--git` and `--bun` from the failing job's image README
+and setup step. From this skill's directory:
+
+```sh
+ssh mac-mini 'bash -s -- --repo OWNER/NAME --ref REF -- "bun install --frozen-lockfile && bun run check"' \
+  < scripts/match-macos-runner.sh
+```
+
+- It matches git, Bun, the macOS major version, the clean global git config and
+  `CI=true`. It differs in CPU count (the runner has 3), macOS minor version,
+  Node, and a shared busy host. A pass here can hide a timing race; report that
+  as a reproduction gap.
+- OrbStack and Docker run Linux only. A Tart macOS VM is the next step and
+  needs Nathan's approval for its disk use.
+
 If the target cannot run locally, state why. Use the existing runner's supported
 diagnostics within current authority, or return a bounded reproduction gap.
 Never present an emulator, substitute service or retained-log replay as a fresh
