@@ -373,19 +373,21 @@ def discover_pid(pid_file: Path, seconds: float) -> Optional[int]:
         time.sleep(PANE_POLL_SECONDS)
 
 
-def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out: Path, cwd: Path,
+def run_in_pane(herdr: Herdr, argv: list[str], out: Path, cwd: Path,
                 timeout_seconds: int) -> tuple[bool, Optional[str], Optional[int], dict[str, object]]:
     """Run the same codex command in a new unfocused Herdr tab; close it once the result is captured."""
     q = shlex.quote
     exit_partial, exit_file, pid_file = out / f"{EXIT_CODE_FILE}.partial", out / EXIT_CODE_FILE, out / PID_FILE
-    # Names that describe a shell (SSH_CONNECTION, and the launcher's Herdr identity names) come from the
-    # pane's own shell, not the caller's: the 1Password wrapper reads the desktop keychain only in an SSH
-    # context, and the worker must not address its coordinator's pane.
-    from_pane = ["SSH_CONNECTION", *(name for name in load_launcher().CODEX_ENV_HOP_NAMES
-                                     if name.startswith("HERDR_") and name != "HERDR_AGENT")]
-    assignments = " ".join(q(f"{name}={value}") for name, value in environment.items()
-                           if name not in from_pane and name != "HERDR_AGENT")
-    assignments += "".join(f' ${{{name}:+"{name}=${name}"}}' for name in from_pane)
+    # The worker inherits the launcher's allowlisted names from the pane's own shell, written here as
+    # expansions so no value reaches the file (the repository's Secrets Pattern). The pane's values are
+    # the right ones anyway: the 1Password wrapper reads the desktop keychain only in the pane's SSH
+    # context, and the worker must address its own pane, never its coordinator's.
+    launcher = load_launcher()
+    from_pane = [name for name in (*launcher.WRAPPER_ENV_NAMES, *launcher.CODEX_ENV_HOP_NAMES,
+                                   "TERM", "SSH_CONNECTION") if name != "HERDR_AGENT"]
+    from_pane = list(dict.fromkeys(from_pane))
+    assignments = " ".join(f'${{{name}:+"{name}=${name}"}}' for name in from_pane)
+    assignments += f' "CODEX_HOME=$HOME/{WORKER_HOME_NAME}"'
     script = out / RUN_SCRIPT
     script.write_text("\n".join((
         "#!/bin/sh",
@@ -540,7 +542,7 @@ def run(args: argparse.Namespace) -> int:
             timed_out, start_error, exit_code = False, "codex is not on PATH", None
         else:
             timed_out, start_error, exit_code, pane_facts = run_in_pane(
-                herdr, argv, environment, out, cwd, args.timeout_seconds)
+                herdr, argv, out, cwd, args.timeout_seconds)
     else:
         timed_out, start_error, exit_code = run_exec(argv, codex, environment, out, args.timeout_seconds)
     launch = {

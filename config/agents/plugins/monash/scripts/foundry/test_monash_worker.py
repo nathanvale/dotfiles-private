@@ -652,5 +652,17 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertTrue(process_gone(child))
 
 
+    def test_pane_script_writes_no_environment_values(self) -> None:
+        # The repository's Secrets Pattern: no on-disk file projects a set of values into the environment.
+        code, _ = self.run_unit("--pane", message="HANDBACK: done",
+                                extra_env={"LANG": "C.monash-marker", "TERM": "xterm-marker"})
+        self.assertEqual(code, 0)
+        script = (self.out / "run.sh").read_text()
+        for value in ("C.monash-marker", "xterm-marker", str(self.home)):
+            self.assertNotIn(value, script)
+        names = set(json.loads(self.log.read_text())["env_names"])
+        self.assertTrue({"HOME", "PATH", "LANG", "TERM", "CODEX_HOME"} <= names, names)
+
+
 if __name__ == "__main__":
     unittest.main()
