@@ -6,6 +6,7 @@
 #   HOMEBREW_DOTFILES_PROFILE=desktop brew bundle --file=~/code/dotfiles/config/brew/Brewfile
 #   HOMEBREW_DOTFILES_PROFILE=server brew bundle --file=~/code/dotfiles/config/brew/Brewfile
 #   HOMEBREW_DOTFILES_PROFILE=desktop HOMEBREW_DOTFILES_VM_HOST=1 brew bundle --file=~/code/dotfiles/config/brew/Brewfile
+#   HOMEBREW_DOTFILES_PROFILE=server HOMEBREW_DOTFILES_VM_HOST=1 brew bundle --file=~/code/dotfiles/config/brew/Brewfile
 #
 # NOTE: Environment variables must be prefixed with HOMEBREW_ to be passed through
 # to Brewfile Ruby evaluation. Regular env vars are filtered out by Homebrew.
@@ -162,13 +163,18 @@ cask "superwhisper"            # Voice input anywhere
 cask "chatgpt"                 # OpenAI ChatGPT app
 
 # =============================================================================
+# VM HOST OPT-IN (any profile) - Tart macOS guests on a physical Mac
+# =============================================================================
+# A guest applies its profile without this opt-in, so the runner stays on the host.
+if vm_host == "1"
+  brew "openai/tools/softnet", trusted: true
+  brew "openai/tools/tart", trusted: true
+end
+
+# =============================================================================
 # DESKTOP PROFILE - GUI apps, communication, development
 # =============================================================================
 if profile == "desktop"
-  # Host-only VM runner. The guest uses the desktop profile without this opt-in.
-  brew "openai/tools/softnet", trusted: true if vm_host == "1"
-  brew "openai/tools/tart", trusted: true if vm_host == "1"
-
   # Desktop environment
   cask "cmux"                    # Multi-agent terminal and SSH workspaces
   cask "iterm2"                  # Terminal emulator
