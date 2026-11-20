@@ -103,6 +103,31 @@ receipt prints as one JSON line on stdout.
 6. Close the pane once the handback is captured:
    `herdr --session default pane close PANE`.
 
+## Units that end in a pull request
+
+Every pull request follows three rules (Nathan, 20 November 2026). A worker
+has no network, so it prepares and the coordinator publishes. Put the
+worker's half in the brief.
+
+Worker, in its unit worktree (`--sandbox workspace-write`):
+
+1. Run the `code-review` skill on the unit's diff and fix what it finds.
+   List each finding and its fix, or why it was left, in the handback.
+2. Write the pull request body with the `pr` skill: Summary, Evidence with
+   Before and After, Merge Danger with Door and Blast Radius. Put it in the
+   handback under a `## PR body` heading, above the `HANDBACK` line.
+
+Coordinator, after the checks in the next section pass:
+
+3. Commit and push the branch, then open the pull request ready for review
+   with that body. Ready, not draft: this replaces the draft default for
+   these pull requests.
+4. Drive it with pstack's Babysit playbook (`poteto-mode`
+   `playbooks/babysit.md`, mode `drive`) until the forge reports it
+   merge-ready. Merging stays Nathan's call.
+
+When the coordinator writes the change itself, it runs steps 1 and 2 too.
+
 ## Check before use
 
 1. Require `status: done` and, for exec, `route.model` equal to the requested
