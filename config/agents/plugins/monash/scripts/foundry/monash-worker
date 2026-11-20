@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -46,6 +47,13 @@ EVENTS_FILE = "events.jsonl"
 CODEX_LOG_FILE = "codex.log"
 HANDBACK_FILE = "last-message.md"
 RECEIPT_FILE = "receipt.json"
+# A pane run's own files: the script the pane runs, its process id, and codex's exit code.
+RUN_SCRIPT = "run.sh"
+PID_FILE = "worker.pid"
+EXIT_CODE_FILE = "exit-code"
+PANE_START_SECONDS = 30
+PANE_POLL_SECONDS = 0.2
+DEFAULT_HERDR_SESSION = "default"
 
 # The handback convention has one owner: every prompt ends with this text.
 HANDBACK_RULES = """
@@ -170,10 +178,21 @@ def read_route(codex_home: Path, thread_id: object) -> Optional[dict[str, object
     return route
 
 
+SESSION_ID_LINE = re.compile(r"^session id: (\S+)$")
+
+
 def read_events(out: Path) -> dict[str, object]:
     found: dict[str, object] = {"thread_id": None, "usage": None, "errors": []}
     path = out / EVENTS_FILE
     if not path.is_file():
+        # A pane run shows Codex's human output, whose header names the session.
+        log = out / CODEX_LOG_FILE
+        if log.is_file():
+            for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+                match = SESSION_ID_LINE.match(line.strip())
+                if match:
+                    found["thread_id"] = match.group(1)
+                    break
         return found
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
@@ -207,6 +226,8 @@ def judge(out: Path, model: str, launch: Optional[dict[str, object]],
             problems.append(f"codex did not start: {launch['start_error']}")
         elif launch["timed_out"]:
             problems.append(f"no handback within {launch['timeout_seconds']} seconds")
+        elif launch["exit_code"] is None:
+            problems.append(f"codex ended without an exit code (was its pane closed?); read {CODEX_LOG_FILE}")
         elif launch["exit_code"] != 0:
             problems.append(f"codex exited {launch['exit_code']}; read {CODEX_LOG_FILE}")
         if codex_home and route is None:
@@ -274,6 +295,131 @@ def stop(process: subprocess.Popen[bytes]) -> None:
     process.wait()
 
 
+class Herdr:
+    """The Herdr CLI for one named session; every call is explicit about its session."""
+
+    def __init__(self, session: str):
+        self.session = session
+        binary = shutil.which("herdr")
+        if binary is None:
+            raise UsageError("herdr is not on PATH; install Herdr, or run without --pane and say "
+                             "that no Herdr session was available")
+        self.binary = binary
+
+    def call(self, *args: str) -> dict[str, object]:
+        result = subprocess.run([self.binary, "--session", self.session, *args], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        if result.returncode != 0:
+            raise OSError(0, f"herdr {' '.join(args[:2])} exited {result.returncode}")
+        try:
+            value = json.loads(result.stdout) if result.stdout.strip() else {}
+        except json.JSONDecodeError as error:
+            raise OSError(0, f"herdr {' '.join(args[:2])} returned unreadable output") from error
+        return value if isinstance(value, dict) else {}
+
+    def require_running(self) -> None:
+        try:
+            server = self.call("status", "--json").get("server") or {}
+        except (OSError, subprocess.TimeoutExpired):
+            server = {}
+        if not (isinstance(server, dict) and server.get("running")):
+            raise UsageError(f"no Herdr session '{self.session}' is running; start Herdr (or name a running "
+                             "one with --herdr-session), or run without --pane and say that no Herdr "
+                             "session was available")
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stop_pane_group(pid: int) -> None:
+    """Stop the pane's worker job (its own process group under the pane's shell)."""
+    try:
+        group = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    for sig, grace in ((signal.SIGTERM, KILL_GRACE_SECONDS), (signal.SIGKILL, 0)):
+        try:
+            os.killpg(group, sig)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + grace
+        while alive(pid) and time.monotonic() < deadline:
+            time.sleep(PANE_POLL_SECONDS)
+
+
+def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out: Path, cwd: Path,
+                timeout_seconds: int) -> tuple[bool, Optional[str], Optional[int], dict[str, object]]:
+    """Run the same codex command in a new unfocused Herdr tab; close it once the result is captured."""
+    q = shlex.quote
+    exit_partial, exit_file, pid_file = out / f"{EXIT_CODE_FILE}.partial", out / EXIT_CODE_FILE, out / PID_FILE
+    assignments = " ".join(q(f"{name}={value}") for name, value in environment.items() if name != "SSH_CONNECTION")
+    # The pane's own SSH_CONNECTION (public metadata) tells the 1Password wrapper to use the desktop
+    # keychain, as the launcher route forwards it; the caller's value describes a different shell.
+    assignments += ' ${SSH_CONNECTION:+"SSH_CONNECTION=$SSH_CONNECTION"}'
+    script = out / RUN_SCRIPT
+    script.write_text("\n".join((
+        "#!/bin/sh",
+        f"# monash-worker pane unit: {out}",
+        f"echo $$ > {q(str(pid_file))}",
+        # env -i: the pane's own shell environment never reaches the worker.
+        f"( env -i {assignments} {' '.join(q(arg) for arg in argv)} < {q(str(out / PROMPT_FILE))}; "
+        f"echo $? > {q(str(exit_partial))} ) 2>&1 | tee {q(str(out / CODEX_LOG_FILE))}",
+        f"mv {q(str(exit_partial))} {q(str(exit_file))}",
+        "",
+    )), encoding="utf-8")
+    facts: dict[str, object] = {"session": herdr.session}
+    timed_out, start_error, exit_code, pid = False, None, None, None
+    started = time.monotonic()
+    try:
+        created = herdr.call("tab", "create", "--no-focus", "--label", f"sol: {out.name}", "--cwd", str(cwd))
+        result = created.get("result") or {}
+        facts["tab"] = (result.get("tab") or {}).get("tab_id")
+        facts["pane"] = (result.get("root_pane") or {}).get("pane_id")
+        if not facts["tab"] or not facts["pane"]:
+            raise OSError(0, "herdr tab create returned no tab or pane")
+        herdr.call("pane", "run", str(facts["pane"]), f"sh {q(str(script))}")
+        while True:
+            if exit_file.is_file():
+                exit_code = int(exit_file.read_text().strip() or "-1")
+                break
+            if pid is None and pid_file.is_file() and pid_file.read_text().strip():
+                pid = int(pid_file.read_text().strip())
+            now = time.monotonic()
+            if pid is None and now - started > min(PANE_START_SECONDS, timeout_seconds):
+                start_error = f"the pane did not start the worker within {PANE_START_SECONDS} seconds"
+                break
+            if pid is not None and not alive(pid):
+                if exit_file.is_file():
+                    continue
+                break
+            if now - started >= timeout_seconds:
+                timed_out = True
+                if pid is not None:
+                    stop_pane_group(pid)
+                break
+            time.sleep(PANE_POLL_SECONDS)
+    except OSError as error:
+        start_error = error.strerror or type(error).__name__
+    except BaseException:
+        if pid is not None:
+            stop_pane_group(pid)
+        raise
+    finally:
+        if facts.get("tab"):
+            try:
+                herdr.call("tab", "close", str(facts["tab"]))
+            except (OSError, subprocess.TimeoutExpired) as error:
+                facts["close_error"] = getattr(error, "strerror", None) or type(error).__name__
+    return timed_out, start_error, exit_code, facts
+
+
 def compose(brief_arg: str, out_arg: str, *, file_handback: bool) -> Path:
     """Copy the brief into a fresh out directory and write the prompt the worker receives."""
     brief = Path(brief_arg).expanduser()
@@ -311,15 +457,47 @@ def run(args: argparse.Namespace) -> int:
     codex_home = worker_home()
     require_private_home(codex_home)
     environment = worker_environment(codex_home)
+    herdr = Herdr(args.herdr_session) if args.pane else None
+    if herdr is not None:
+        herdr.require_running()  # refuse before any unit file exists; never fall back to exec
     out = compose(args.brief, args.out, file_handback=False)
 
     codex = shutil.which("codex")
     argv = [codex or "codex", "exec", "--profile", WORKER_PROFILE, "-m", args.model,
             "-c", f"model_reasoning_effort={args.effort}",
             *(("-s", args.sandbox) if args.sandbox else ()),
-            "-C", str(cwd), "--skip-git-repo-check", "--json",
+            "-C", str(cwd), "--skip-git-repo-check", *(() if herdr else ("--json",)),
             "-o", str(out / HANDBACK_FILE), "-"]
     started = time.monotonic()
+    pane_facts: Optional[dict[str, object]] = None
+    if herdr is not None:
+        if codex is None:
+            timed_out, start_error, exit_code = False, "codex is not on PATH", None
+        else:
+            timed_out, start_error, exit_code, pane_facts = run_in_pane(
+                herdr, argv, environment, out, cwd, args.timeout_seconds)
+    else:
+        timed_out, start_error, exit_code = run_exec(argv, codex, environment, out, args.timeout_seconds)
+    launch = {
+        "agent": "codex",
+        "shape": "pane" if herdr is not None else "exec",
+        **({"herdr": pane_facts} if pane_facts is not None else {}),
+        "codex_home": str(codex_home),
+        "profile": WORKER_PROFILE,
+        "effort": args.effort,
+        "sandbox": args.sandbox or "profile",
+        "cwd": str(cwd),
+        "exit_code": exit_code,
+        "start_error": start_error,
+        "timed_out": timed_out,
+        "timeout_seconds": args.timeout_seconds,
+        "duration_seconds": round(time.monotonic() - started, 1),
+    }
+    return write_receipt(out, judge(out, args.model, launch))
+
+
+def run_exec(argv: list[str], codex: Optional[str], environment: dict[str, str], out: Path,
+             timeout_seconds: int) -> tuple[bool, Optional[str], Optional[int]]:
     with (out / EVENTS_FILE).open("wb") as events, (out / CODEX_LOG_FILE).open("wb") as log, \
             (out / PROMPT_FILE).open("rb") as stdin:
         timed_out, start_error, exit_code = False, None, None
@@ -333,7 +511,7 @@ def run(args: argparse.Namespace) -> int:
             start_error = error.strerror or type(error).__name__
         else:
             try:
-                exit_code = process.wait(timeout=args.timeout_seconds)
+                exit_code = process.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
                 timed_out = True
                 stop(process)
@@ -342,20 +520,7 @@ def run(args: argparse.Namespace) -> int:
                 # The worker runs in its own session, so Ctrl-C would not reach it.
                 stop(process)
                 raise
-    launch = {
-        "agent": "codex",
-        "codex_home": str(codex_home),
-        "profile": WORKER_PROFILE,
-        "effort": args.effort,
-        "sandbox": args.sandbox or "profile",
-        "cwd": str(cwd),
-        "exit_code": exit_code,
-        "start_error": start_error,
-        "timed_out": timed_out,
-        "timeout_seconds": args.timeout_seconds,
-        "duration_seconds": round(time.monotonic() - started, 1),
-    }
-    return write_receipt(out, judge(out, args.model, launch))
+    return timed_out, start_error, exit_code
 
 
 def check(args: argparse.Namespace) -> int:
@@ -401,6 +566,10 @@ def parser() -> argparse.ArgumentParser:
     run_command.add_argument("--sandbox", choices=SANDBOXES,
                              help="default: the profile's workspace-write with network; read-only has no network")
     run_command.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    run_command.add_argument("--pane", action="store_true",
+                             help="run in a new unfocused Herdr tab Nathan can watch; refuses without Herdr")
+    run_command.add_argument("--herdr-session", default=DEFAULT_HERDR_SESSION,
+                             help="Herdr session for --pane (default: %(default)s)")
     run_command.set_defaults(handler=run)
     prepare_command = commands.add_parser(
         "prepare", help="write a pane worker's prompt and print the one line to send it")

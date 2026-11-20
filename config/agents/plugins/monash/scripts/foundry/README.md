@@ -786,8 +786,11 @@ boundary. Other native arguments retain their order and value.
 monash-sol` worker in the worker Codex home `~/.codex-monash-sol`, bounds it,
 and writes a receipt from the thread's session record. It passes Codex only
 this launcher's allowlisted environment names plus `CODEX_HOME`, and refuses a
-worker home that is a link, not owned, or not mode 700 (files 600). `prepare`
-and `check` serve Herdr pane workers. `install.py` creates that home's `config.toml` (the
+worker home that is a link, not owned, or not mode 700 (files 600). `run
+--pane` runs the same command in a new unfocused Herdr tab through `herdr pane
+run`, waits for its exit code, writes the same receipt and closes the tab; it
+refuses when the Herdr session is not running. `prepare` and `check` serve
+interactive `monash spawn` panes. `install.py` creates that home's `config.toml` (the
 provider block from `monash-codex-desktop`) and `monash-sol.config.toml`,
 refuses files it does not manage, a home that is not mode 700, and a home
 equal to or inside `~/.codex`, or inside an inherited `$CODEX_HOME` other than
