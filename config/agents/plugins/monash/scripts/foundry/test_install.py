@@ -34,6 +34,7 @@ EXPECTED_SOURCE_FILES = (
     "foundry",
     "monash-foundry",
     "monash",
+    "monash-worker",
     "monash_hosts.py",
     "monash_remote.py",
     "monash-codex-token",
@@ -43,7 +44,7 @@ EXPECTED_SOURCE_FILES = (
     "CODEX-CATALOG-LICENSE",
     "CODEX-CATALOG-NOTICE",
 )
-EXPECTED_COMMANDS = ("foundry", "monash-foundry", "monash")
+EXPECTED_COMMANDS = ("foundry", "monash-foundry", "monash", "monash-worker")
 
 # Independent oracle for the one historical config drift the installer migrates:
 # the Claude aliases, from the deployments they named when the snapshot was
@@ -137,6 +138,7 @@ EXPECTED_SOURCE_MODES = {
     "foundry": 0o500,
     "monash-foundry": 0o500,
     "monash": 0o500,
+    "monash-worker": 0o500,
     "monash_hosts.py": 0o600,
     "monash_remote.py": 0o500,
     "monash-codex-token": 0o500,

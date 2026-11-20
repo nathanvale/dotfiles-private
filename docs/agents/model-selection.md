@@ -73,6 +73,10 @@ Run the public-process regressions with `bun run test:model-selection`.
 
 ## Verify the actual session
 
+- To hand one bounded unit to a Monash Codex worker (Sol 6.1 by default),
+  use `monash-worker` through
+  [Monash workers](../../config/agents/plugins/monash/skills/monash-foundry/workers.md).
+  Its receipt checks the route's model on every run.
 - Use the selected provider's supported launcher and the installed Herdr or
   Herdr Projects contract. Inspect the effective role or task settings,
   including fallback settings, so a fallback cannot silently change the request.

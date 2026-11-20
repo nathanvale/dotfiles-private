@@ -152,8 +152,9 @@
   pages: read
   `$HOME/code/dotfiles/docs/agents/browser-automation.md#private-previews` before
   selecting the route.
-- Herdr or Herdr Projects coordinator/worker startup, resume, or model change:
-  read `$HOME/code/dotfiles/docs/agents/model-selection.md` before selecting or
+- Coordinator or worker startup, resume, or model change (Herdr, Herdr
+  Projects, or a Monash worker such as Sol 6.1): read
+  `$HOME/code/dotfiles/docs/agents/model-selection.md` before selecting or
   changing its model, provider, account or effort.
 - Prior shell activity: when recent terminal state may explain a task, use
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.

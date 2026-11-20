@@ -4,7 +4,7 @@ Monash is a private dotfiles plugin and the broad home for Nathan's Monash
 skills and tools. `monash-foundry` is its first skill; future Monash skills
 can live beside it under `skills/`.
 
-The package identity is `monash` at version `0.1.0`. Keep that identity and
+The package identity is `monash` at version `0.2.0`. Keep that identity and
 version aligned in both plugin manifests and the `personal` marketplace entry.
 The package is source-owned by the inline dotfiles marketplace. Installing the
 plugin exposes the skill; it does not run the Foundry launcher installer.
