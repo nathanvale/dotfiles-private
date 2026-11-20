@@ -77,6 +77,9 @@ Run the public-process regressions with `bun run test:model-selection`.
   use `monash-worker` through
   [Monash workers](../../config/agents/plugins/monash/skills/monash-foundry/workers.md).
   Its receipt checks the route's model on every run.
+- To hand one bounded unit to a Gemini 4 Neon worker on Nathan's Google AI
+  subscription, use `gemini-worker` (`bin/gemini-worker`; read its `--help`).
+  Its receipt checks the model and the subscription route on every run.
 - Use the selected provider's supported launcher and the installed Herdr or
   Herdr Projects contract. Inspect the effective role or task settings,
   including fallback settings, so a fallback cannot silently change the request.
