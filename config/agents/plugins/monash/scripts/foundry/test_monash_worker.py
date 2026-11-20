@@ -264,14 +264,22 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("malformed launch record", receipt["message"])
 
-    def test_documented_fan_out_example_runs_with_a_missing_out_parent(self) -> None:
+    def test_check_refuses_a_receipt_path_that_is_a_directory(self) -> None:
+        self.out.mkdir()
+        (self.out / "last-message.md").write_text("HANDBACK: done\n")
+        (self.out / "receipt.json").mkdir()
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("is not a readable receipt", receipt["message"])
+
+    def fan_out_example(self, out: Path, briefs: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        """Run the fan-out block from workers.md as written, with `monash-worker` on PATH."""
         text = WORKERS_DOC.read_text(encoding="utf-8")
         start = text.index("monash-worker run --brief a.md")
         block = text[text.rindex("```sh", 0, start) + len("```sh"):text.index("```", start)]
         script = "\n".join(line.strip() for line in block.strip().splitlines())
-        for name in ("a.md", "b.md"):
+        for name in briefs:
             (self.root / name).write_text("Count the files.\n", encoding="utf-8")
-        out = self.root / "not-yet" / "workers"
         # Run the example's `monash-worker` on the suite's qualified interpreter, as other tests do.
         shim_dir = self.root / "shim"
         shim_dir.mkdir()
@@ -281,9 +289,14 @@ class MonashWorkerTest(unittest.TestCase):
         env = dict(os.environ, PATH=f"{shim_dir}{os.pathsep}{os.environ['PATH']}", OUT=str(out),
                    REPO=str(self.cwd), WORKER_TEST_LOG=str(self.log), FAKE_MODE="ok",
                    FAKE_MESSAGE="Two files.\nHANDBACK: done\n")
-        result = subprocess.run(["sh", "-c", script], cwd=self.root, env=env, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, timeout=60)
+        return subprocess.run(["sh", "-c", script], cwd=self.root, env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, timeout=60)
+
+    def test_documented_fan_out_example_runs_with_a_missing_out_parent(self) -> None:
+        out = self.root / "not-yet" / "workers"
+        result = self.fan_out_example(out, ("a.md", "b.md"))
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
         for unit in ("a", "b"):
             self.assertEqual(json.loads((out / unit / "receipt.json").read_text())["status"], "done")
 
@@ -301,6 +314,11 @@ class MonashWorkerTest(unittest.TestCase):
         code, receipt = self.worker("check", "--out", str(self.out))
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"], ["no final message was written"])
+
+
+    def test_documented_fan_out_example_reports_a_failed_unit(self) -> None:
+        result = self.fan_out_example(self.root / "workers", ("a.md",))  # b.md is missing
+        self.assertIn("unit b exited 2", result.stderr)
 
 
 if __name__ == "__main__":

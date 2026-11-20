@@ -273,7 +273,7 @@ LAUNCH_KEYS = ("exit_code", "start_error", "timed_out", "timeout_seconds")
 def read_recorded_receipt(out: Path) -> Optional[dict[str, object]]:
     """An earlier receipt's launch facts and model stay part of every later judgement."""
     path = out / RECEIPT_FILE
-    if not path.is_file():
+    if not path.exists():  # A pane unit has no receipt until its first check.
         return None
     try:
         receipt = json.loads(path.read_text(encoding="utf-8"))

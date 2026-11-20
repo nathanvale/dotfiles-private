@@ -42,7 +42,8 @@ monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
   ```sh
   monash-worker run --brief a.md --out "$OUT/a" --cwd "$REPO" >/dev/null & a=$!
   monash-worker run --brief b.md --out "$OUT/b" --cwd "$REPO" >/dev/null & b=$!
-  wait $a; wait $b
+  wait $a || echo "unit a exited $?" >&2
+  wait $b || echo "unit b exited $?" >&2
   ```
 
   Each call creates its `--out`, parents included, and writes
@@ -68,8 +69,9 @@ Each `--out` holds `brief.md`, `prompt.md` (what the worker received),
 `events.jsonl` (Codex JSON events), `launcher.log` (the launcher's route line
 and errors), `last-message.md` (the handback) and `receipt.json`. The same
 receipt prints as one JSON line on stdout. Rerunning `check` on an exec unit
-keeps its recorded launch facts and requested model, so a timeout, launcher
-failure or wrong route stays in the verdict.
+keeps its recorded launch facts, so a timeout, launcher failure or wrong route
+stays in the verdict. It checks the route against the receipt's requested
+model unless `--model` names another.
 
 | Exit | `status` | Meaning |
 | --- | --- | --- |
