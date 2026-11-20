@@ -81,6 +81,10 @@ argv = sys.argv[1:]
 call = {'argv': argv}
 if 'tab' in argv and 'create' in argv and cfg.get('FAKE_HERDR_HANG_ON_CREATE'):
     time.sleep(60)
+if 'process-info' in argv and cfg.get('FAKE_HERDR_SLOW_INFO'):
+    time.sleep(float(cfg['FAKE_HERDR_SLOW_INFO']))
+if 'tab' in argv and 'close' in argv and cfg.get('FAKE_HERDR_HANG_ON_CLOSE'):
+    time.sleep(60)
 if 'tab' in argv and 'close' in argv and cfg.get('FAKE_HERDR_WATCH'):
     out = Path(cfg['FAKE_HERDR_WATCH'])
     call['handback_present'] = (out / 'last-message.md').exists()
@@ -612,6 +616,21 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"][0], "codex did not start: the pane's shell was not ready")
         self.assertNotIn("run", [call["argv"][3] for call in self.herdr_calls()])
+
+
+    def test_pane_readiness_probe_that_times_out_means_not_ready(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
+                                      extra_env={"FAKE_HERDR_SHELL_BUSY": True, "FAKE_HERDR_SLOW_INFO": 0.7})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0], "codex did not start: the pane's shell was not ready")
+
+    def test_pane_tab_close_that_hangs_stays_near_the_bound(self) -> None:
+        started = time.monotonic()
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "3", message="HANDBACK: done",
+                                      extra_env={"FAKE_HERDR_HANG_ON_CLOSE": True})
+        self.assertLess(time.monotonic() - started, 7)
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["launch"]["herdr"]["close_error"], "herdr tab close timed out")
 
 
 if __name__ == "__main__":
