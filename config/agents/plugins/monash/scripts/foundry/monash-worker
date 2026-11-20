@@ -139,19 +139,23 @@ def worker_environment(codex_home: Path) -> dict[str, str]:
 
 
 def read_route(codex_home: Path, thread_id: object) -> Optional[dict[str, object]]:
-    """The settings Codex applied to the thread, from its session record in the worker home."""
+    """The settings Codex last applied to the thread, and any model reroutes, from its session record."""
     if not isinstance(thread_id, str) or not re.fullmatch(r"[0-9A-Za-z-]+", thread_id):
         return None
+    route: Optional[dict[str, object]] = None
+    reroutes: list[dict[str, object]] = []
     for path in sorted((codex_home / "sessions").glob(f"**/rollout-*-{thread_id}.jsonl")):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 payload = json.loads(line).get("payload")
             except (json.JSONDecodeError, AttributeError):
                 continue
-            if isinstance(payload, dict) and payload.get("type") == "thread_settings_applied":
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("type") == "thread_settings_applied":
                 settings = payload.get("thread_settings") or {}
                 permissions = settings.get("permission_profile") or {}
-                return {
+                route = {
                     "model": settings.get("model"),
                     "provider": settings.get("model_provider_id"),
                     "service_tier": settings.get("service_tier"),
@@ -159,7 +163,11 @@ def read_route(codex_home: Path, thread_id: object) -> Optional[dict[str, object
                     "network": permissions.get("network") if isinstance(permissions, dict) else None,
                     "session_file": str(path),
                 }
-    return None
+            elif payload.get("type") == "model_reroute":
+                reroutes.append({"from": payload.get("from_model"), "to": payload.get("to_model")})
+    if route is not None:
+        route["reroutes"] = reroutes
+    return route
 
 
 def read_events(out: Path) -> dict[str, object]:
@@ -208,6 +216,8 @@ def judge(out: Path, model: str, launch: Optional[dict[str, object]],
         else:
             if route.get("model") != model:
                 problems.append(f"route ran {route.get('model')}, not the requested {model}")
+            for reroute in route.get("reroutes") or []:
+                problems.append(f"session rerouted the model from {reroute['from']} to {reroute['to']}")
             if codex_home and route["provider"] != WORKER_PROVIDER:
                 problems.append(f"route used provider {route['provider']}, not {WORKER_PROVIDER}")
     if handback["status"] is None:

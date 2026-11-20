@@ -74,8 +74,9 @@ monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
 Each `--out` holds `brief.md`, `prompt.md` (what the worker received),
 `events.jsonl` (Codex JSON events), `codex.log` (Codex's stderr),
 `last-message.md` (the handback) and `receipt.json`. The receipt's `route`
-comes from the thread's session record in the worker home: model, provider,
-service tier, effort and network. The same
+comes from the thread's session record in the worker home: the last applied
+model, provider, service tier, effort and network, plus any model reroute,
+which fails the run. The same
 receipt prints as one JSON line on stdout. Rerunning `check` on an exec unit
 keeps its recorded launch facts, so a timeout, start failure or wrong route
 stays in the verdict. It checks the route against the receipt's requested
@@ -87,7 +88,7 @@ model unless `--model` names another.
 | 2 | `usage` | Refused before launch (bad flag, missing brief, used `--out`, no worker profile). |
 | 3 | `blocked` | Worker handed back blocked; `handback.reason` says why. |
 | 4 | `timed_out` | No handback within the bound. |
-| 5 | `failed` | Codex did not start or exited nonzero, no session record, wrong model or provider, or no exact `HANDBACK` line; see `problems`. |
+| 5 | `failed` | Codex did not start or exited nonzero, no session record, wrong model or provider, a model reroute, or no exact `HANDBACK` line; see `problems`. |
 | 130 | `interrupted` | The caller interrupted the run; the worker's process group was stopped. |
 
 ## Run a pane worker

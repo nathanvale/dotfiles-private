@@ -47,8 +47,15 @@ if cfg.get('FAKE_SESSION', '1') == '1':
                 'model_provider_id': cfg.get('FAKE_PROVIDER', 'monash_foundry'),
                 'service_tier': cfg.get('FAKE_TIER', 'priority'), 'reasoning_effort': 'high',
                 'permission_profile': {'type': 'managed', 'network': cfg.get('FAKE_NETWORK', 'enabled')}}
-    (sessions / f'rollout-2026-11-20T13-56-00-{thread}.jsonl').write_text(json.dumps(
-        {'type': 'event_msg', 'payload': {'type': 'thread_settings_applied', 'thread_settings': settings}}) + '\\n')
+    events = [{'type': 'event_msg', 'payload': {'type': 'thread_settings_applied', 'thread_settings': settings}}]
+    if cfg.get('FAKE_REROUTE'):
+        events.append({'type': 'event_msg', 'payload': {'type': 'model_reroute', 'from_model': settings['model'],
+                                                         'to_model': cfg['FAKE_REROUTE']}})
+    # Write then rename, so a parallel worker reading the shared fixture thread never sees a partial file.
+    record = sessions / f'rollout-2026-11-20T13-56-00-{thread}.jsonl'
+    partial = record.with_name(f'{record.name}.{os.getpid()}.tmp')
+    partial.write_text(''.join(json.dumps(event) + '\\n' for event in events))
+    os.replace(partial, record)
 if mode == 'hang':
     # The child ignores SIGTERM, so only a group SIGKILL ends it.
     child = subprocess.Popen(['sh', '-c', 'trap "" TERM; sleep 600 & wait'])
@@ -226,6 +233,11 @@ class MonashWorkerTest(unittest.TestCase):
         code, receipt = self.worker("check", "--out", str(self.out))
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"], ["route ran gpt-5.5, not the requested gpt-6.1-sol"])
+
+    def test_session_that_reroutes_the_model_fails(self) -> None:
+        code, receipt = self.run_unit(message="HANDBACK: done", extra_env={"FAKE_REROUTE": "gpt-5.5"})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"], ["session rerouted the model from gpt-6.1-sol to gpt-5.5"])
 
     def test_route_on_another_provider_fails(self) -> None:
         code, receipt = self.run_unit(message="HANDBACK: done", extra_env={"FAKE_PROVIDER": "openai"})
