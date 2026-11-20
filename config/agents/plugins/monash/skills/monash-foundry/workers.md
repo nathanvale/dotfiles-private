@@ -22,7 +22,7 @@ it as `~/.local/bin/monash-worker`. Read `monash-worker --help` for flags.
   change, and the evidence form you need (`path:line`, or a command and its
   output).
 - Give the worker every input it needs on disk. The worker's sandbox has no
-  network, so fetch a pull request diff, issue text or remote state first
+  network, so fetch a pull request diff, Linear issue text or remote state first
   (for example `gh pr diff 18 > /abs/out/pr-18.diff`).
 - Phrase review work as expected behaviour to confirm. Attack wording ("try
   to break it") has tripped the provider's content filter, which replaces the
@@ -57,8 +57,10 @@ monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo \
   proposal: the coordinator reviews the diff, runs checks, and commits and
   pushes itself.
 - Effort: `high` by default; the launcher validates the value against its
-  catalogue. The launcher pins `service_tier` to default, so the fast tier is
-  unavailable on this route; fast Sol exists only on the personal Codex login.
+  catalogue.
+- Tier: exec runs on the default tier. The launcher passes
+  `service_tier="default"` and refuses `-c service_tier=...` and `-p` with
+  exit 2 before launch. Use a pane worker when a unit needs the fast tier.
 - Bound: the default 1800 seconds suits reviews (Sol reviews have taken 3.5 to
   6 minutes; small read-only questions 20 to 45 seconds). A timeout stops the
   whole worker process group.
@@ -86,8 +88,11 @@ receipt prints as one JSON line on stdout.
    Codex's "Hooks need review" prompt: choose "Continue without trusting"
    unless Nathan has trusted those hooks. A folder trust prompt is Nathan's.
    Then run `monash verify NAME`. Do not rerun `spawn`.
-3. Set effort in the pane with Codex `/model` when the launcher default
-   (medium) is too low.
+3. Set effort with Codex `/model` (the launcher default is medium) and the
+   fast tier with `/fast`, then confirm with `/status`: model GPT-6.1-Sol,
+   the chosen effort, provider `monash_foundry`. The launcher's default tier
+   applies only at launch; `/fast` sets `service_tier: priority` for the
+   session, and the session file's `thread_settings_applied` event records it.
 4. `monash-worker prepare --brief BRIEF.md --out OUT_DIR` writes `prompt.md`,
    which tells the worker to write its handback to `OUT_DIR/last-message.md`,
    and prints the one line to send. Send it:
@@ -109,6 +114,13 @@ receipt prints as one JSON line on stdout.
    coordinator.
 
 ## Known gaps
+
+- Fast exec workers need a launcher change: admit `service_tier=priority` as
+  a Codex native value. The tier costs more, so the change is Nathan's
+  decision.
+- A pane worker's tier is client-side evidence: the request asked for
+  priority and the turns completed. Whether Azure served priority is not
+  observed.
 
 - `monash doctor` reports Herdr `failed` while `herdr status --json` shows the
   server running: the doctor reads plain `herdr status` as JSON. Trust
