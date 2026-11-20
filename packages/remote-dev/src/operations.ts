@@ -64,8 +64,9 @@ export async function remote(
   host: ConfiguredHost,
   command: string,
   environment: Environment,
+  sshOptions: string[] = [],
 ): Promise<Step<string>> {
-  const result = await runProgram(toolPath(config, "ssh", homeOf(environment)), sshArguments(host, command), {
+  const result = await runProgram(toolPath(config, "ssh", homeOf(environment)), sshArguments(host, command, sshOptions), {
     environment: { ...stringEnvironment(environment), SSH_AUTH_SOCK: "" },
     timeoutMs: REMOTE_TIMEOUT_MS,
   });
@@ -89,8 +90,9 @@ async function observeHost(
   config: RemoteDevConfig,
   host: ConfiguredHost,
   environment: Environment,
+  sshOptions: string[] = [],
 ): Promise<Step<{ containers: ObservedContainer[]; rejected: number }>> {
-  const output = await remote(config, host, inventoryCommand(host), environment);
+  const output = await remote(config, host, inventoryCommand(host), environment, sshOptions);
   if (!output.ok) return output;
   return { ok: true, value: parseInventory(output.value) };
 }
@@ -145,11 +147,12 @@ export async function recheck(
   targetId: string,
   environment: Environment,
   requireRunning = true,
+  sshOptions: string[] = [],
 ): Promise<Step<Resolved>> {
   const target = config.targets.find((candidate) => candidate.id === targetId);
   const host = config.hosts.find((candidate) => candidate.id === target?.host);
   if (target === undefined || host === undefined) return { reason: "target-unknown", ok: false };
-  const observed = await observeHost(config, host, environment);
+  const observed = await observeHost(config, host, environment, sshOptions);
   if (!observed.ok) return observed;
   const [row] = buildRows(
     { ...config, targets: [target] },

@@ -15,9 +15,9 @@ depend on the package's source layout, so a rewrite can replay them unchanged.
 | Field | Probe | Meaning |
 | --- | --- | --- |
 | `sshConfig.alias`, `sshConfig.hostname` | `ssh -G ALIAS` | The host's SSH alias and address |
-| `route.host`, `route.default` | `route -n get HOST`, `route -n get default` | Interface for each route; `null` host means no route |
+| `route.host`, `route.default` | `route -n get HOST`, `route -n get default` | Interface for each route. A `null` host means only the default route matches (macOS answers `destination: default`) |
 | `sharedLink` | `ssh -O check`, `ps -o etime=`, a session with `ControlMaster=no` | `null` when no shared link is open. `responds: false` when a session through it prints nothing |
-| `sharedLink.clientAddress`, `directConnection.clientAddress` | `echo "$SSH_CONNECTION"` | The client address sshd sees |
+| `sharedLink.clientAddress`, `directConnection.clientAddress` | `echo "remote-dev-sample $SSH_CONNECTION"` | The client address sshd sees |
 | `mibPerSecond` | 8 MiB of `/dev/zero`, timed after the header line | Transfer rate |
 | `container` | `docker ps` on the host | `running` or `stopped` |
 | `editor` | `code --version`; `ls ~/.vscode-server/bin` in the container | Local VS Code release and commit; server folders as `ready NAME` or `partial NAME` |

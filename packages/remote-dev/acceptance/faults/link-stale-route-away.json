@@ -4,18 +4,39 @@
   "summary": "The reverse of 21 November: a link opened at home is used away from home, where On-Demand WireGuard carries new connections.",
   "target": "pilot",
   "observed": {
-    "sshConfig": { "alias": "mac-mini", "hostname": "192.168.1.100" },
-    "route": { "host": "utun7", "default": "utun7" },
-    "sharedLink": { "pid": 70549, "etime": "02:10:00", "clientAddress": "192.168.1.104", "mibPerSecond": 0.4 },
-    "directConnection": { "clientAddress": "192.168.2.2", "mibPerSecond": 9 },
+    "sshConfig": {
+      "alias": "mac-mini",
+      "hostname": "192.168.1.100"
+    },
+    "route": {
+      "host": "utun7",
+      "default": "utun7"
+    },
+    "sharedLink": {
+      "pid": 70549,
+      "etime": "02:10:00",
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 2
+    },
+    "directConnection": {
+      "clientAddress": "192.168.2.2",
+      "mibPerSecond": 9
+    },
     "container": "running",
-    "editor": { "version": "1.147.0", "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5", "servers": [] },
+    "editor": {
+      "version": "1.147.0",
+      "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5",
+      "servers": []
+    },
     "install": "absent"
   },
   "expect": {
     "cause": "link-stale-route",
     "exitCode": 3,
     "repairAction": "ssh -O stop mac-mini",
-    "messageIncludes": ["from 192.168.1.104", "from 192.168.2.2"]
+    "messageIncludes": [
+      "from 192.168.1.104",
+      "from 192.168.2.2"
+    ]
   }
 }

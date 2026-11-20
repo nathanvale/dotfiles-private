@@ -79,16 +79,17 @@ export type Transfer =
   | { kind: "missing" }
   | { bytes: number; exitCode: number; header: string; kind: "measured"; milliseconds: number };
 
-const HEADER_LIMIT = 512;
+const HEADER_LIMIT = 4096;
 
 /**
- * Run one program whose stdout is a header line followed by a byte stream, and
- * time the stream from the end of the header. The bytes are counted, never kept.
+ * Run one program whose stdout is any preamble, a line starting with `marker`,
+ * then a byte stream. Time the stream from the end of the marker line and count
+ * its bytes without keeping them. `header` is the marker line's remainder.
  */
 export async function measureTransfer(
   program: string,
   args: string[],
-  options: { environment: Record<string, string>; timeoutMs: number },
+  options: { environment: Record<string, string>; marker: string; timeoutMs: number },
 ): Promise<Transfer> {
   let child: ReturnType<typeof Bun.spawn>;
   try {
@@ -97,26 +98,31 @@ export async function measureTransfer(
     return { kind: "missing" };
   }
   const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs);
-  let header = "";
-  let headerDone = false;
+  const decoder = new TextDecoder("latin1");
+  let preamble = "";
+  let header: string | null = null;
   let bytes = 0;
   let started = performance.now();
   for await (const chunk of child.stdout as ReadableStream<Uint8Array>) {
-    let body = chunk;
-    if (!headerDone) {
-      const newline = chunk.indexOf(0x0a);
-      const end = newline === -1 ? chunk.length : newline;
-      header = (header + new TextDecoder().decode(chunk.subarray(0, end))).slice(0, HEADER_LIMIT);
-      if (newline === -1) continue;
-      headerDone = true;
-      started = performance.now();
-      body = chunk.subarray(newline + 1);
+    if (header !== null) {
+      bytes += chunk.length;
+      continue;
     }
-    bytes += body.length;
+    const text = preamble + decoder.decode(chunk);
+    const at = text.startsWith(options.marker) ? 0 : text.indexOf(`\n${options.marker}`);
+    const start = at <= 0 ? at : at + 1;
+    const end = start === -1 ? -1 : text.indexOf("\n", start);
+    if (end === -1) {
+      preamble = text.slice(-HEADER_LIMIT);
+      continue;
+    }
+    header = text.slice(start + options.marker.length, end);
+    started = performance.now();
+    bytes = text.length - end - 1;
   }
   const exitCode = await child.exited;
   clearTimeout(timer);
-  return { bytes, exitCode, header, kind: "measured", milliseconds: performance.now() - started };
+  return { bytes, exitCode, header: header ?? "", kind: "measured", milliseconds: performance.now() - started };
 }
 
 async function readBounded(stream: ReadableStream<Uint8Array>): Promise<string> {

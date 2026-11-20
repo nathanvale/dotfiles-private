@@ -225,7 +225,7 @@ export function serverListCommand(host: ConfiguredHost, containerId: string): st
   return [host.dockerPath, "--host", host.dockerHost, "exec", containerId, "sh", "-c", script].map(quote).join(" ");
 }
 
-export function sshArguments(host: ConfiguredHost, remoteCommand: string): string[] {
+export function sshArguments(host: ConfiguredHost, remoteCommand: string, options: string[] = []): string[] {
   return [
     "-T",
     "-o", "BatchMode=yes",
@@ -233,6 +233,7 @@ export function sshArguments(host: ConfiguredHost, remoteCommand: string): strin
     "-o", "StrictHostKeyChecking=yes",
     "-o", "ForwardAgent=no",
     "-o", "ClearAllForwardings=yes",
+    ...options,
     "--",
     host.sshAlias,
     remoteCommand,

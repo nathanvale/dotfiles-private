@@ -39,7 +39,7 @@ const MASTER = { etime: "06:07", pid: 70549 };
 /** Replay one SSH sample: sshd's view of the client, then the bytes at the scenario's rate. */
 function sample(link: { client: string; mibPerSecond: number; responds?: boolean }, command: string): number {
   if (link.responds === false) return 255;
-  writeSync(1, `${link.client} 50888 192.168.1.100 22\n`);
+  writeSync(1, `Last login: Sat Nov 21 10:00:00 2026\nremote-dev-sample ${link.client} 50888 192.168.1.100 22\n`);
   const total = Number(/head -c (\d+)/.exec(command)?.[1] ?? "0");
   const chunk = 256 * 1024;
   for (let sent = 0; sent < total; sent += chunk) {
@@ -117,10 +117,10 @@ function route(): number {
     return 0;
   }
   if (settings.host === null) {
-    process.stderr.write("route: writing to routing socket: not in table\n");
-    return 1;
+    process.stdout.write(`   route to: ${destination}\ndestination: default\n  interface: ${settings.default ?? "en0"}\n`);
+    return 0;
   }
-  process.stdout.write(`   route to: ${destination}\n  interface: ${settings.host ?? "en0"}\n`);
+  process.stdout.write(`   route to: ${destination}\ndestination: ${destination}\n  interface: ${settings.host ?? "en0"}\n`);
   return 0;
 }
 

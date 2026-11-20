@@ -1,5 +1,5 @@
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { Reason } from "./branch-station-catalog.ts";
 import type { ConfiguredHost, ConfiguredTarget, RemoteDevConfig } from "./command-contract.ts";
 import { resultFor, serverListCommand } from "./engine.ts";
@@ -32,6 +32,9 @@ const LOCAL_TIMEOUT_MS = 10_000;
 /** A shared link moving under this fraction of the direct rate is degraded. */
 const DEGRADED_RATIO = 0.5;
 const MIB = 1024 * 1024;
+const MARKER = "remote-dev-sample ";
+/** Doctor's own SSH calls never start a shared link: they use one if it exists, or go direct. */
+const NO_NEW_MASTER = ["-o", "ControlMaster=no"];
 
 const ok = (...checks: Check[]): Found => ({ checks, ok: true });
 
@@ -55,6 +58,15 @@ function routeInterface(output: string): string | null {
   return /interface:\s*(\S+)/.exec(output)?.[1] ?? null;
 }
 
+/** RFC 1918, link-local and carrier-grade NAT (Tailscale) IPv4 ranges: reachable only on a local network or VPN. */
+function isPrivateAddress(hostname: string): boolean {
+  const octets = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(hostname);
+  if (octets === null) return false;
+  const [first, second] = [Number(octets[1]), Number(octets[2])];
+  return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) ||
+    (first === 169 && second === 254) || (first === 100 && second >= 64 && second <= 127);
+}
+
 async function network(probe: Probe): Promise<Found> {
   const alias = probe.host.sshAlias;
   const resolved = await local(probe, "ssh", ["-G", alias]);
@@ -63,8 +75,11 @@ async function network(probe: Probe): Promise<Found> {
   if (hostname === undefined) return fail(probe, "host-unreachable");
   const toHost = await local(probe, "route", ["-n", "get", hostname]);
   if (toHost.kind === "missing") return fail(probe, "tool-unavailable");
-  const hostInterface = toHost.kind === "exited" && toHost.exitCode === 0 ? routeInterface(toHost.stdout) : null;
-  if (hostInterface === null) {
+  const routed = toHost.kind === "exited" && toHost.exitCode === 0 ? toHost.stdout : "";
+  const hostInterface = routeInterface(routed);
+  // macOS answers any address with the default route; a private host there sits on no network this Mac is joined to.
+  const onlyDefault = /destination:\s*default\b/.test(routed) && isPrivateAddress(hostname);
+  if (hostInterface === null || onlyDefault) {
     return refuse(probe, "network-no-route", `Cause network-no-route. This Mac has no route to ${hostname} (${alias}).`);
   }
   const toDefault = await local(probe, "route", ["-n", "get", "default"]);
@@ -96,24 +111,24 @@ function sampleArguments(alias: string, direct: boolean): string[] {
     "-o", "StrictHostKeyChecking=yes",
     "-o", "ForwardAgent=no",
     "-o", "ClearAllForwardings=yes",
-    "-o", direct ? "ControlPath=none" : "ControlMaster=no",
+    ...(direct ? ["-o", "ControlPath=none"] : NO_NEW_MASTER),
     "--",
     alias,
-    `echo "$SSH_CONNECTION"; head -c ${SAMPLE_BYTES} /dev/zero`,
+    `echo "${MARKER}$SSH_CONNECTION"; head -c ${SAMPLE_BYTES} /dev/zero`,
   ];
 }
 
 function sampleOf(transfer: Transfer): Sample | Reason {
   if (transfer.kind === "missing") return "tool-unavailable";
   const client = transfer.header.split(" ")[0] ?? "";
-  if (client === "") return "host-unreachable";
+  if (client === "" || transfer.bytes === 0) return "host-unreachable";
   return { client, rate: transfer.bytes / MIB / (Math.max(transfer.milliseconds, 1) / 1000) };
 }
 
 async function measure(probe: Probe, direct: boolean): Promise<Sample | Reason> {
   const program = toolPath(probe.config, "ssh", probe.home);
   const environment = { ...stringEnvironment(probe.environment), SSH_AUTH_SOCK: "" };
-  return sampleOf(await measureTransfer(program, sampleArguments(probe.host.sshAlias, direct), { environment, timeoutMs: SAMPLE_TIMEOUT_MS }));
+  return sampleOf(await measureTransfer(program, sampleArguments(probe.host.sshAlias, direct), { environment, marker: MARKER, timeoutMs: SAMPLE_TIMEOUT_MS }));
 }
 
 async function master(probe: Probe): Promise<{ age: string; pid: number } | null> {
@@ -132,10 +147,17 @@ async function link(probe: Probe): Promise<Found> {
   const shared = await master(probe);
   const through = await measure(probe, false);
   const direct = await measure(probe, true);
-  if (typeof direct === "string") return fail(probe, direct);
   if (shared === null) {
-    if (typeof through === "string") return fail(probe, through);
+    if (typeof direct === "string") return fail(probe, direct);
     return ok({ detail: `No shared SSH link is open; new connections go direct from ${direct.client} at ${rate(direct)}.`, id: "link", status: "ok" });
+  }
+  if (typeof direct === "string") {
+    if (typeof through === "string") return fail(probe, direct);
+    return ok({
+      detail: `The shared SSH link (pid ${shared.pid}, ${shared.age}) moved ${rate(through)}, but a direct connection failed, so the two were not compared.`,
+      id: "link",
+      status: "note",
+    });
   }
   const repair = `ssh -O stop ${alias}`;
   const next = `Run ${repair}. It is not a kill: open sessions keep running, and new connections get a fresh link. Then run remote-dev doctor ${probe.target.id} and remote-dev open ${probe.target.id}.`;
@@ -175,7 +197,7 @@ interface Resolved {
 }
 
 async function hostAndContainer(probe: Probe, resolved: Resolved): Promise<Found> {
-  const found = await recheck(probe.config, probe.target.id, probe.environment);
+  const found = await recheck(probe.config, probe.target.id, probe.environment, true, NO_NEW_MASTER);
   if (!found.ok) return fail(probe, found.reason);
   resolved.containerId = found.value.container.id;
   return ok(
@@ -191,8 +213,10 @@ async function editorServer(probe: Probe, resolved: Resolved): Promise<Found> {
   if (commit === undefined || !/^[0-9a-f]{40}$/.test(commit)) {
     return ok({ detail: "Could not read the local VS Code commit, so the container's server was not checked.", id: "editor-server", status: "note" });
   }
-  const listed = await remote(probe.config, probe.host, serverListCommand(probe.host, resolved.containerId), probe.environment);
-  if (!listed.ok) return fail(probe, listed.reason);
+  const listed = await remote(probe.config, probe.host, serverListCommand(probe.host, resolved.containerId), probe.environment, NO_NEW_MASTER);
+  if (!listed.ok) {
+    return ok({ detail: "The container's VS Code server folders could not be listed.", id: "editor-server", status: "note" });
+  }
   const lines = listed.value.split("\n");
   const short = commit.slice(0, 8);
   if (lines.includes(`ready ${commit}`)) {
@@ -228,12 +252,18 @@ async function install(probe: Probe): Promise<Found> {
   if ((await stat(checkout.gitEntry)).isDirectory()) {
     return ok({ detail: `Installed from the main checkout at ${checkout.root}.`, id: "install", status: "ok" });
   }
-  const mainRoot = /^gitdir: (.+)\/\.git\/worktrees\/[^/\n]+\s*$/m.exec(await readFile(checkout.gitEntry, "utf8"))?.[1];
-  const candidate = mainRoot === undefined ? null : join(mainRoot, relative(checkout.root, installed));
-  // The relink is safe only when the main checkout holds the command itself, not a link elsewhere.
-  const realMain = mainRoot === undefined ? null : await realpath(mainRoot).catch(() => null);
-  const realCandidate = candidate === null ? null : await realpath(candidate).catch(() => null);
-  const landed = realMain !== null && realCandidate !== null && realCandidate.startsWith(`${realMain}/`);
+  const gitdir = /^gitdir: (.+?)\s*$/m.exec(await readFile(checkout.gitEntry, "utf8"))?.[1];
+  const worktreeOf = gitdir === undefined ? undefined : /^(.+)\/\.git\/worktrees\/[^/]+$/.exec(resolve(checkout.root, gitdir))?.[1];
+  if (worktreeOf === undefined) {
+    return ok({ detail: `Installed from ${checkout.root}, whose .git file is not a worktree link.`, id: "install", status: "note" });
+  }
+  const mainRoot = worktreeOf;
+  const candidate = join(mainRoot, relative(checkout.root, installed));
+  // The relink is safe only when the main checkout itself holds the command, not a link into a worktree or release.
+  const realMain = await realpath(mainRoot).catch(() => null);
+  const realCandidate = await realpath(candidate).catch(() => null);
+  const holder = realCandidate === null ? null : await checkoutOf(realCandidate);
+  const landed = realMain !== null && holder !== null && holder.root === realMain && (await stat(holder.gitEntry)).isDirectory();
   const repair = landed ? `ln -sfn '${candidate}' '${link}'` : undefined;
   return refuse(
     probe,
@@ -241,7 +271,7 @@ async function install(probe: Probe): Promise<Found> {
     `Cause install-from-worktree. ${link} runs from the worktree at ${checkout.root}, so it changes whenever that branch changes.`,
     repair,
     repair === undefined
-      ? `The main checkout${mainRoot === undefined ? "" : ` at ${mainRoot}`} does not hold this command yet. Land its branch on main, relink ${link} into the main checkout, then run remote-dev doctor ${probe.target.id} again.`
+      ? `The main checkout at ${mainRoot} does not hold this command yet. Land its branch on main, relink ${link} into the main checkout, then run remote-dev doctor ${probe.target.id} again.`
       : `Run ${repair}, then run remote-dev doctor ${probe.target.id} again.`,
   );
 }

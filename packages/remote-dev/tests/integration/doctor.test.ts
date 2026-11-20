@@ -102,6 +102,8 @@ async function assertReadOnly(world: World): Promise<void> {
   for (const call of recorded) {
     expect(call.argv.some((word) => word === "stop" || word === "exit" || word === "cancel")).toBe(false);
     expect(forbidden.test(call.argv.at(-1) ?? "")).toBe(false);
+    const local = call.argv.includes("-G") || call.argv.includes("-O");
+    if (!local) expect(call.argv.includes("ControlMaster=no") || call.argv.includes("ControlPath=none")).toBe(true);
   }
 }
 
@@ -209,6 +211,19 @@ test("no shared link is healthy: both samples go direct", async () => {
   const world = await doctorWorld({ master: null, servers: [READY] });
   const checks = (result(world).result.data as { checks: { detail: string; id: string }[] }).checks;
   expect(checks.find((check) => check.id === "link")?.detail).toContain("No shared SSH link is open");
+});
+
+test("a failing direct connection beside a working shared link is a note, not a failure", async () => {
+  const world = await doctorWorld({
+    direct: { client: "192.168.1.104", mibPerSecond: 40, responds: false },
+    servers: [READY],
+  });
+  const { output, result: found } = result(world);
+  expect(output.exitCode).toBe(0);
+  const link = (found.data as { checks: { detail: string; id: string; status: string }[] }).checks.find((check) => check.id === "link");
+  expect(link?.status).toBe("note");
+  expect(link?.detail).toContain("direct connection failed");
+  await assertReadOnly(world);
 });
 
 test("doctor validates its target and configuration like the other target commands", async () => {
