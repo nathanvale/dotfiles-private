@@ -525,6 +525,16 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.assert_success(result)
         self.assertEqual(tree_snapshot(source), before)
 
+    def test_worker_home_check_reports_a_managed_file_with_the_wrong_mode(self) -> None:
+        self.install_initial()
+        profile = self.worker_home / "monash-sol.config.toml"
+        os.chmod(profile, 0o644)
+        checked = self.run_installer("--check", "--host-role", "mini")
+        self.assert_check_failure(checked)
+        self.assertIn(f"worker Codex file missing or out of date: {profile}", checked.stderr)
+        self.assert_success(self.run_installer("--host-role", "mini"))
+        self.assertEqual(profile.stat().st_mode & 0o777, 0o600)
+
     def test_worker_home_check_requires_mode_700(self) -> None:
         self.install_initial()
         os.chmod(self.worker_home, 0o500)

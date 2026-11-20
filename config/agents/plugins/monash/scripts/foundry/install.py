@@ -513,7 +513,8 @@ def worker_home_plan(home: Path, files: dict[str, str]) -> list[str]:
         if path.is_symlink() or not path.is_file():
             raise InstallRefusal(f"refusing unmanaged worker Codex file: {path}")
         current = path.read_text(encoding="utf-8", errors="replace")
-        if current == text:
+        info = os.lstat(path)
+        if current == text and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600:
             continue
         if current.splitlines()[:1] != [WORKER_HEADER]:
             raise InstallRefusal(f"refusing unmanaged worker Codex file: {path}; move it aside and rerun")

@@ -12,12 +12,15 @@ One call is one unit; a coordinator fans out by running several calls at once.
 from __future__ import annotations
 
 import argparse
+import importlib.machinery
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -25,7 +28,9 @@ from typing import Optional
 
 
 SCHEMA_VERSION = 1
-# install.py owns this home and its profile file; see its worker home section.
+SCRIPT_DIR = Path(__file__).resolve().parent
+LAUNCHER = SCRIPT_DIR / "monash-foundry"
+# install.py owns this home and its two files; see its worker home section.
 WORKER_HOME_NAME = ".codex-monash-sol"
 WORKER_PROFILE = "monash-sol"
 WORKER_PROVIDER = "monash_foundry"
@@ -82,6 +87,55 @@ def read_handback(out: Path) -> dict[str, Optional[str]]:
 
 def worker_home() -> Path:
     return Path.home() / WORKER_HOME_NAME
+
+
+def require_private_home(codex_home: Path) -> None:
+    """The home and its managed files must be the installer's: owned, private, never links."""
+    profile = codex_home / f"{WORKER_PROFILE}.config.toml"
+    if not os.path.lexists(profile) and not codex_home.is_symlink():
+        raise UsageError(f"{codex_home} has no {WORKER_PROFILE} profile; run scripts/foundry/install.py")
+    checks = ((codex_home, stat.S_ISDIR, 0o700),
+              (codex_home / "config.toml", stat.S_ISREG, 0o600), (profile, stat.S_ISREG, 0o600))
+    for path, kind, mode in checks:
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            info = None
+        if info is None or not kind(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != mode:
+            raise UsageError(f"{path} is not a private worker home entry (owned, mode {mode:o}, not a link); "
+                             "run scripts/foundry/install.py")
+
+
+def load_launcher():
+    """monash-foundry owns which environment names a Codex worker may inherit."""
+    if not LAUNCHER.is_file():
+        raise UsageError(f"{LAUNCHER} is missing; reinstall with scripts/foundry/install.py")
+    loader = importlib.machinery.SourceFileLoader("monash_foundry_for_worker", str(LAUNCHER))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = module  # its dataclasses resolve their module through sys.modules
+    previous, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
+
+
+def worker_environment(codex_home: Path) -> dict[str, str]:
+    """Only the names the launcher route passed to Codex, plus the worker home; never credentials."""
+    launcher = load_launcher()
+    source = os.environ
+    environment = {name: source[name] for name in (*launcher.WRAPPER_ENV_NAMES, *launcher.CODEX_ENV_HOP_NAMES)
+                   if name in source}
+    if environment.get("HERDR_AGENT") != "codex":
+        environment.pop("HERDR_AGENT", None)
+    for name in ("TERM", "SSH_CONNECTION"):
+        value = launcher.safe_public_env_value(source.get(name))
+        if value is not None:
+            environment[name] = value
+    environment["CODEX_HOME"] = str(codex_home)
+    return environment
 
 
 def read_route(codex_home: Path, thread_id: object) -> Optional[dict[str, object]]:
@@ -245,8 +299,8 @@ def run(args: argparse.Namespace) -> int:
     if args.timeout_seconds <= 0:
         raise UsageError("--timeout-seconds must be positive")
     codex_home = worker_home()
-    if not (codex_home / f"{WORKER_PROFILE}.config.toml").is_file():
-        raise UsageError(f"{codex_home} has no {WORKER_PROFILE} profile; run scripts/foundry/install.py")
+    require_private_home(codex_home)
+    environment = worker_environment(codex_home)
     out = compose(args.brief, args.out, file_handback=False)
 
     codex = shutil.which("codex")
@@ -255,7 +309,6 @@ def run(args: argparse.Namespace) -> int:
             *(("-s", args.sandbox) if args.sandbox else ()),
             "-C", str(cwd), "--skip-git-repo-check", "--json",
             "-o", str(out / HANDBACK_FILE), "-"]
-    environment = dict(os.environ, CODEX_HOME=str(codex_home))
     started = time.monotonic()
     with (out / EVENTS_FILE).open("wb") as events, (out / CODEX_LOG_FILE).open("wb") as log, \
             (out / PROMPT_FILE).open("rb") as stdin:

@@ -31,32 +31,34 @@ WORKERS_DOC = SOURCE_DIR.parent.parent / "skills" / "monash-foundry" / "workers.
 FAKE_CODEX = """#!{python}
 import json, os, subprocess, sys, time
 from pathlib import Path
-Path(os.environ['WORKER_TEST_LOG']).write_text(json.dumps(
-    {'argv': sys.argv[1:], 'stdin': sys.stdin.read(), 'codex_home': os.environ.get('CODEX_HOME')}))
-mode = os.environ['FAKE_MODE']
+cfg = json.loads(Path(__file__).with_name('fake.json').read_text())
+Path(cfg['WORKER_TEST_LOG']).write_text(json.dumps(
+    {'argv': sys.argv[1:], 'stdin': sys.stdin.read(), 'codex_home': os.environ.get('CODEX_HOME'),
+     'env_names': sorted(os.environ)}))
+mode = cfg['FAKE_MODE']
 argv = sys.argv[1:]
 out = Path(argv[argv.index('-o') + 1])
 thread = 'thread-fixture-1'
 print(json.dumps({'type': 'thread.started', 'thread_id': thread}))
-if os.environ.get('FAKE_SESSION', '1') == '1':
+if cfg.get('FAKE_SESSION', '1') == '1':
     sessions = Path(os.environ['CODEX_HOME']) / 'sessions' / '2026' / '11' / '20'
     sessions.mkdir(parents=True, exist_ok=True)
-    settings = {'model': os.environ.get('FAKE_ROUTE_MODEL', 'gpt-6.1-sol'),
-                'model_provider_id': os.environ.get('FAKE_PROVIDER', 'monash_foundry'),
-                'service_tier': os.environ.get('FAKE_TIER', 'priority'), 'reasoning_effort': 'high',
-                'permission_profile': {'type': 'managed', 'network': os.environ.get('FAKE_NETWORK', 'enabled')}}
+    settings = {'model': cfg.get('FAKE_ROUTE_MODEL', 'gpt-6.1-sol'),
+                'model_provider_id': cfg.get('FAKE_PROVIDER', 'monash_foundry'),
+                'service_tier': cfg.get('FAKE_TIER', 'priority'), 'reasoning_effort': 'high',
+                'permission_profile': {'type': 'managed', 'network': cfg.get('FAKE_NETWORK', 'enabled')}}
     (sessions / f'rollout-2026-11-20T13-56-00-{thread}.jsonl').write_text(json.dumps(
         {'type': 'event_msg', 'payload': {'type': 'thread_settings_applied', 'thread_settings': settings}}) + '\\n')
 if mode == 'hang':
     # The child ignores SIGTERM, so only a group SIGKILL ends it.
     child = subprocess.Popen(['sh', '-c', 'trap "" TERM; sleep 600 & wait'])
-    Path(os.environ['WORKER_TEST_CHILD']).write_text(str(child.pid))
+    Path(cfg['WORKER_TEST_CHILD']).write_text(str(child.pid))
     time.sleep(600)
 if mode == 'refuse':
     print('Error: unknown profile', file=sys.stderr)
     raise SystemExit(2)
 print(json.dumps({'type': 'turn.completed', 'usage': {'output_tokens': 7}}))
-out.write_text(os.environ['FAKE_MESSAGE'])
+out.write_text(cfg['FAKE_MESSAGE'])
 """
 
 
@@ -87,13 +89,18 @@ class MonashWorkerTest(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         shutil.copy2(SOURCE_DIR / "monash-worker", self.bin / "monash-worker")
+        # The real launcher sits beside monash-worker, as installed; only its environment policy is read.
+        shutil.copy2(SOURCE_DIR / "monash-foundry", self.bin / "monash-foundry")
         fake = self.bin / "codex"
         fake.write_text(FAKE_CODEX.replace("{python}", sys.executable), encoding="utf-8")
         fake.chmod(0o755)
         self.home = self.root / "home"
         self.codex_home = self.home / ".codex-monash-sol"
-        self.codex_home.mkdir(parents=True)
-        (self.codex_home / "monash-sol.config.toml").write_text("# fixture profile\n", encoding="utf-8")
+        self.codex_home.mkdir(parents=True, mode=0o700)
+        os.chmod(self.codex_home, 0o700)
+        for name in ("config.toml", "monash-sol.config.toml"):
+            (self.codex_home / name).write_text("# fixture\n", encoding="utf-8")
+            os.chmod(self.codex_home / name, 0o600)
         self.cwd = self.root / "repo"
         self.cwd.mkdir()
         self.brief = self.root / "brief.md"
@@ -103,10 +110,13 @@ class MonashWorkerTest(unittest.TestCase):
 
     def env(self, mode: str = "ok", message: str = "", route_model: str = "gpt-6.1-sol",
             extra_env: dict[str, str] | None = None, path_first: str = "") -> dict[str, str]:
-        env = {"HOME": str(self.home), "PATH": f"{path_first}{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
-               "WORKER_TEST_LOG": str(self.log), "FAKE_MODE": mode, "FAKE_MESSAGE": message,
-               "FAKE_ROUTE_MODEL": route_model, "WORKER_TEST_CHILD": str(self.root / "child.pid")}
-        env.update(extra_env or {})
+        """The worker's environment; the fake's settings go in fake.json, since the worker strips extras."""
+        fake = {"WORKER_TEST_LOG": str(self.log), "FAKE_MODE": mode, "FAKE_MESSAGE": message,
+                "FAKE_ROUTE_MODEL": route_model, "WORKER_TEST_CHILD": str(self.root / "child.pid")}
+        env = {"HOME": str(self.home), "PATH": f"{path_first}{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"}
+        for name, value in (extra_env or {}).items():
+            (fake if name.startswith("FAKE_") else env)[name] = value
+        (self.bin / "fake.json").write_text(json.dumps(fake), encoding="utf-8")
         return env
 
     def worker(self, *args: str, **fake: object) -> tuple[int, dict[str, object]]:
@@ -227,6 +237,56 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"],
                          [f"no session record for thread thread-fixture-1 in {self.codex_home}"])
+
+    def test_worker_gets_only_the_launcher_allowlisted_environment(self) -> None:
+        secrets = {"OPENAI_API_KEY": "x", "CODEX_API_KEY": "x", "AZURE_OPENAI_API_KEY": "x",
+                   "AZURE_CLIENT_SECRET": "x", "OP_SERVICE_ACCOUNT_TOKEN": "x", "HTTPS_PROXY": "http://proxy",
+                   "GITHUB_TOKEN": "x", "UNRELATED_SETTING": "x"}
+        code, _ = self.run_unit(message="HANDBACK: done", extra_env={**secrets, "TERM": "xterm", "LANG": "C"})
+        self.assertEqual(code, 0)
+        names = set(json.loads(self.log.read_text())["env_names"])
+        self.assertEqual(names & set(secrets), set())
+        # Independent oracle: what the old launcher route passed to Codex, plus the worker home.
+        self.assertTrue({"HOME", "PATH", "LANG", "TERM", "CODEX_HOME"} <= names, names)
+
+    def test_unsafe_worker_home_is_refused_before_launch(self) -> None:
+        profile = self.codex_home / "monash-sol.config.toml"
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
+        cases = {
+            "home is a symlink": lambda: (self.codex_home.rename(elsewhere / "real"),
+                                          self.codex_home.symlink_to(elsewhere / "real")),
+            "home mode 755": lambda: os.chmod(self.codex_home, 0o755),
+            "profile mode 644": lambda: os.chmod(profile, 0o644),
+            "profile is a symlink": lambda: (profile.rename(elsewhere / "profile"),
+                                             profile.symlink_to(elsewhere / "profile")),
+        }
+        for label, damage in cases.items():
+            with self.subTest(label):
+                self.tearDown_case()
+                damage()
+                code, receipt = self.run_unit(message="HANDBACK: done")
+                self.assertEqual(code, 2)
+                self.assertIn("is not a private worker home entry", receipt["message"])
+                self.assertFalse(self.log.exists())
+
+    def tearDown_case(self) -> None:
+        """Rebuild a healthy worker home between subtests."""
+        for path in (self.codex_home, self.root / "elsewhere" / "real"):
+            if path.is_symlink():
+                path.unlink()
+            elif path.exists():
+                shutil.rmtree(path)
+        for path in (self.root / "elsewhere" / "profile", self.out, self.log):
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif os.path.lexists(path):
+                path.unlink()
+        self.codex_home.mkdir(mode=0o700)
+        os.chmod(self.codex_home, 0o700)
+        for name in ("config.toml", "monash-sol.config.toml"):
+            (self.codex_home / name).write_text("# fixture\n", encoding="utf-8")
+            os.chmod(self.codex_home / name, 0o600)
 
     def test_missing_worker_profile_is_refused_before_launch(self) -> None:
         (self.codex_home / "monash-sol.config.toml").unlink()

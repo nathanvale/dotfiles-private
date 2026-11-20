@@ -155,9 +155,13 @@ When the coordinator writes the change itself, it runs steps 1 and 2 too.
 Exec workers bypass `monash-foundry launch` (Nathan, 20 November 2026), which
 pinned the default tier and allowed no network. The cost:
 
-- The launcher's environment scrubbing and argument guard no longer apply.
-  The profile pins the provider and model instead, and the receipt fails a
-  run whose session record names another model or provider.
+- Workers inherit only the environment names the launcher route passed to
+  Codex (`monash-foundry`'s allowlist) plus `CODEX_HOME`, so credentials and
+  proxy settings stay out. The launcher's argument guard no longer applies:
+  the profile pins the provider and model instead, and the receipt fails a run
+  whose session record names another model or provider.
+- `monash-worker run` refuses a worker home that is a link, not yours, or not
+  mode 700, or managed files that are not mode 600; rerun the installer.
 - Network access applies to every workspace-write exec worker, and only to
   them: the separate home keeps it out of Nathan's own Codex sessions.
 - The worker home has no `AGENTS.md`, so Nathan's global Codex instructions do
