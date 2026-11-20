@@ -64,7 +64,7 @@ test("human help names every public command, option, and the explicit start boun
   const help = run(world, ["--help"]);
   expect(help.exitCode).toBe(0);
   expect(help.stderr).toBe("");
-  for (const fragment of ["choose", "list [--all]", "open TARGET", "start TARGET", "logs TARGET", "board TARGET", "--lines N", "--json", "Other actions never start containers.", "No command creates, restarts"]) {
+  for (const fragment of ["choose", "list [--all]", "open TARGET", "start TARGET", "doctor TARGET", "logs TARGET", "board TARGET", "--lines N", "--json", "Other actions never start containers.", "No command creates, restarts"]) {
     expect(help.stdout).toContain(fragment);
   }
   const noArgs = run(world, []);
@@ -96,6 +96,7 @@ test("discovery reports the profile, exits, and the explicit effect exclusions",
     "remote-dev.start:external",
     "remote-dev.logs:inspect",
     "remote-dev.board:external",
+    "remote-dev.doctor:inspect",
     "remote-dev.choose:external",
   ]);
   expect(data.effectExclusions).toEqual([

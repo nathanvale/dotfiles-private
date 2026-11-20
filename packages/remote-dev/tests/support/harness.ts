@@ -24,8 +24,25 @@ export function psOutput(...rows: string[]): string {
   return rows.length === 0 ? "" : `${rows.join("\n")}\n`;
 }
 
+/** One measured SSH sample: the client address sshd saw, and the transfer rate. */
+export interface LinkSample {
+  client: string;
+  mibPerSecond: number;
+}
+
+export interface DoctorScenario {
+  commit?: string;
+  direct?: LinkSample;
+  hostname?: string;
+  master?: { etime: string; pid: number } | null;
+  route?: { default?: string; host?: string | null };
+  servers?: string[];
+  shared?: LinkSample;
+}
+
 export interface Scenario {
   code?: { exit?: number };
+  doctor?: DoctorScenario;
   fzf?: { picks?: { exit?: number; key?: string; match?: string }[] };
   opener?: { exit?: number };
   pilotRuntime?: { exit?: number; output?: string };
@@ -88,6 +105,8 @@ export function baseConfig(dir: string) {
       fzf: join(dir, "bin", "fzf"),
       opener: join(dir, "bin", "opener"),
       pilotRuntime: join(dir, "bin", "pilotRuntime"),
+      ps: join(dir, "bin", "ps"),
+      route: join(dir, "bin", "route"),
       ssh: join(dir, "bin", "ssh"),
     } as Record<string, string>,
     version: 1,
@@ -103,7 +122,7 @@ export async function makeWorld(
   await mkdir(join(dir, "bin"));
   await mkdir(join(dir, "isolated", "user-data"), { recursive: true });
   await mkdir(join(dir, "isolated", "extensions"), { recursive: true });
-  for (const tool of ["ssh", "code", "fzf", "opener", "pilotRuntime"]) {
+  for (const tool of ["ssh", "code", "fzf", "opener", "pilotRuntime", "ps", "route"]) {
     const path = join(dir, "bin", tool);
     await writeFile(path, `#!/bin/sh\nFAKE_SCENARIO="${dir}/scenario.json" FAKE_LOG="${dir}/calls.jsonl" exec "${process.execPath}" "${FAKE_TOOL}" ${tool} "$@"\n`);
     await chmod(path, 0o755);

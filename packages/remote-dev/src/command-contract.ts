@@ -60,6 +60,12 @@ export const COMMANDS = [
     summary: "Recheck a target, then open its configured task board.",
   },
   {
+    commandIdentity: "remote-dev.doctor",
+    effectClass: "inspect",
+    route: ["doctor"],
+    summary: "Check each step of the route to a target and name the cause and repair of a failure.",
+  },
+  {
     commandIdentity: "remote-dev.choose",
     effectClass: "external",
     route: ["choose"],
@@ -73,6 +79,7 @@ const AVAILABLE_PATHS = [
   "remote-dev.command-discovery",
   "remote-dev.discovery",
   "remote-dev.dispatch",
+  "remote-dev.doctor",
   "remote-dev.help",
   "remote-dev.list",
   "remote-dev.logs",
@@ -151,6 +158,8 @@ export const Config = z
         fzf: z.string().regex(SAFE_LOCAL_PATH).optional(),
         opener: z.string().regex(SAFE_LOCAL_PATH).optional(),
         pilotRuntime: z.string().regex(SAFE_LOCAL_PATH).optional(),
+        ps: z.string().regex(SAFE_LOCAL_PATH).optional(),
+        route: z.string().regex(SAFE_LOCAL_PATH).optional(),
         ssh: z.string().regex(SAFE_LOCAL_PATH).optional(),
       })
       .optional(),

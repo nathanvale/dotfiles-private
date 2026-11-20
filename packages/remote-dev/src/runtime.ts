@@ -35,7 +35,7 @@ export async function loadConfig(path: string): Promise<ConfigLoad> {
 
 export type ProgramResult =
   | { kind: "missing" }
-  | { exitCode: number; kind: "exited"; stdout: string }
+  | { exitCode: number; kind: "exited"; stderr: string; stdout: string }
   | { kind: "timeout" };
 
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
@@ -47,13 +47,13 @@ const OUTPUT_LIMIT = 4 * 1024 * 1024;
 export async function runProgram(
   program: string,
   args: string[],
-  options: { environment?: Record<string, string>; timeoutMs: number },
+  options: { captureStderr?: boolean; environment?: Record<string, string>; timeoutMs: number },
 ): Promise<ProgramResult> {
   let child: ReturnType<typeof Bun.spawn>;
   try {
     child = Bun.spawn([program, ...args], {
       env: options.environment ?? (process.env as Record<string, string>),
-      stderr: "ignore",
+      stderr: options.captureStderr === true ? "pipe" : "ignore",
       stdin: "ignore",
       stdout: "pipe",
     });
@@ -65,11 +65,58 @@ export async function runProgram(
     timedOut = true;
     child.kill("SIGKILL");
   }, options.timeoutMs);
-  const stdout = await readBounded(child.stdout as ReadableStream<Uint8Array>);
+  const [stdout, stderr] = await Promise.all([
+    readBounded(child.stdout as ReadableStream<Uint8Array>),
+    options.captureStderr === true ? readBounded(child.stderr as ReadableStream<Uint8Array>) : "",
+  ]);
   const exitCode = await child.exited;
   clearTimeout(timer);
   if (timedOut) return { kind: "timeout" };
-  return { exitCode, kind: "exited", stdout };
+  return { exitCode, kind: "exited", stderr, stdout };
+}
+
+export type Transfer =
+  | { kind: "missing" }
+  | { bytes: number; exitCode: number; header: string; kind: "measured"; milliseconds: number };
+
+const HEADER_LIMIT = 512;
+
+/**
+ * Run one program whose stdout is a header line followed by a byte stream, and
+ * time the stream from the end of the header. The bytes are counted, never kept.
+ */
+export async function measureTransfer(
+  program: string,
+  args: string[],
+  options: { environment: Record<string, string>; timeoutMs: number },
+): Promise<Transfer> {
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn([program, ...args], { env: options.environment, stderr: "ignore", stdin: "ignore", stdout: "pipe" });
+  } catch {
+    return { kind: "missing" };
+  }
+  const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs);
+  let header = "";
+  let headerDone = false;
+  let bytes = 0;
+  let started = performance.now();
+  for await (const chunk of child.stdout as ReadableStream<Uint8Array>) {
+    let body = chunk;
+    if (!headerDone) {
+      const newline = chunk.indexOf(0x0a);
+      const end = newline === -1 ? chunk.length : newline;
+      header = (header + new TextDecoder().decode(chunk.subarray(0, end))).slice(0, HEADER_LIMIT);
+      if (newline === -1) continue;
+      headerDone = true;
+      started = performance.now();
+      body = chunk.subarray(newline + 1);
+    }
+    bytes += body.length;
+  }
+  const exitCode = await child.exited;
+  clearTimeout(timer);
+  return { bytes, exitCode, header, kind: "measured", milliseconds: performance.now() - started };
 }
 
 async function readBounded(stream: ReadableStream<Uint8Array>): Promise<string> {

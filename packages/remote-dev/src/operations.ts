@@ -35,6 +35,8 @@ const DEFAULT_TOOLS = {
   fzf: "fzf",
   opener: "/usr/bin/open",
   pilotRuntime: join(import.meta.dir, "../resources/pilot-runtime.py"),
+  ps: "/bin/ps",
+  route: "/sbin/route",
   ssh: "/usr/bin/ssh",
 };
 const REMOTE_TIMEOUT_MS = 30_000;
@@ -57,7 +59,7 @@ export async function readConfig(environment: Environment): Promise<Step<RemoteD
   return { ok: true, value: loaded.config };
 }
 
-async function remote(
+export async function remote(
   config: RemoteDevConfig,
   host: ConfiguredHost,
   command: string,
@@ -75,7 +77,7 @@ async function remote(
   return { ok: true, value: result.stdout };
 }
 
-function stringEnvironment(environment: Environment): Record<string, string> {
+export function stringEnvironment(environment: Environment): Record<string, string> {
   const copy: Record<string, string> = {};
   for (const [key, value] of Object.entries(environment)) {
     if (value !== undefined) copy[key] = value;
@@ -128,7 +130,7 @@ export async function inventory(
   };
 }
 
-interface Resolved {
+export interface Resolved {
   container: ObservedContainer;
   host: ConfiguredHost;
   target: ConfiguredTarget;
@@ -138,7 +140,7 @@ interface Resolved {
  * Point-in-time guard: rediscover the host and require the configured
  * container identity to be present and running immediately before dispatch.
  */
-async function recheck(
+export async function recheck(
   config: RemoteDevConfig,
   targetId: string,
   environment: Environment,

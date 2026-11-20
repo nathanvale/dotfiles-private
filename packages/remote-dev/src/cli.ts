@@ -3,6 +3,8 @@ import { stationsFor } from "./branch-station-catalog.ts";
 import { choose } from "./chooser.ts";
 import { COMMANDS, envelope, TargetArgument } from "./command-contract.ts";
 import { attemptEmergencyDiagnostic, recordDiagnostic } from "./diagnostics.ts";
+import type { Check } from "./doctor.ts";
+import { doctor } from "./doctor.ts";
 import { resultFor } from "./engine.ts";
 import type { InventoryRow, OperationResult } from "./model.ts";
 import { inventory, openBoard, openTarget, readConfig, readLogs, startTarget } from "./operations.ts";
@@ -13,7 +15,7 @@ process.on("SIGINT", () => lifecycle.terminate(130));
 process.on("SIGTERM", () => lifecycle.terminate(143));
 
 const USAGE =
-  "remote-dev [choose] | list [--all] | open TARGET | start TARGET | logs TARGET [--lines N] | board TARGET  [--json]";
+  "remote-dev [choose] | list [--all] | open TARGET | start TARGET | doctor TARGET | logs TARGET [--lines N] | board TARGET  [--json]";
 
 const HUMAN_HELP = `Usage: ${USAGE}
 
@@ -30,6 +32,8 @@ Commands:
   open TARGET     Recheck TARGET, then open it in the isolated VS Code environment.
   start TARGET    Start the existing target, restore configured services, then open VS Code.
                   Only exited or created containers can be started; running skips start.
+  doctor TARGET   Check each step to TARGET (network, SSH link, host, container, VS Code server,
+                  install) without changing anything. A failure names its cause and repair.
   logs TARGET     Recheck TARGET, then print its native service log tail (secrets redacted).
                   Editor connection logs: in VS Code, View > Output > Dev Containers or Remote - SSH.
   board TARGET    Recheck TARGET, then open its configured task board.
@@ -43,6 +47,7 @@ Examples:
   remote-dev choose
   remote-dev list --json
   remote-dev open pilot
+  remote-dev doctor pilot
 
 Discovery:
   remote-dev --discover --json
@@ -51,7 +56,7 @@ Discovery:
 Config: $REMOTE_DEV_CONFIG or \${XDG_CONFIG_HOME:-~/.config}/remote-dev/targets.json
 `;
 
-const KNOWN = new Set(["board", "choose", "list", "logs", "open", "start"]);
+const KNOWN = new Set(["board", "choose", "doctor", "list", "logs", "open", "start"]);
 
 const OPTIONS = [
   { name: "--all", value: null },
@@ -110,7 +115,10 @@ function table(rows: InventoryRow[]): string {
 }
 
 function humanSuccess(result: OperationResult): string {
-  const data = result.data as { rows?: InventoryRow[]; text?: string } | null;
+  const data = result.data as { checks?: Check[]; rows?: InventoryRow[]; text?: string } | null;
+  if (data?.checks !== undefined) {
+    return [result.message, "", ...data.checks.map((check) => `${check.status.padEnd(4)}  ${check.id.padEnd(13)}  ${check.detail}`)].join("\n");
+  }
   if (result.commandIdentity === "remote-dev.list" && data?.rows !== undefined) {
     const rows = data.rows;
     const notes = rows.filter((row) => row.reason !== null).map((row) => `- ${row.target ?? row.container}: ${row.reason}`);
@@ -203,7 +211,7 @@ function parseLines(args: string[]): number | null | "invalid" {
   return Number.isSafeInteger(value) && value >= 1 && value <= 1000 ? value : "invalid";
 }
 
-async function targetCommand(name: "board" | "logs" | "open" | "start", args: string[]): Promise<OperationResult> {
+async function targetCommand(name: "board" | "doctor" | "logs" | "open" | "start", args: string[]): Promise<OperationResult> {
   const commandIdentity = `remote-dev.${name}`;
   const [target, ...rest] = args;
   if (target === undefined || target.startsWith("--")) return usage(`${name} needs a TARGET. Run remote-dev list.`);
@@ -217,6 +225,7 @@ async function targetCommand(name: "board" | "logs" | "open" | "start", args: st
   if (name === "start") return startTarget(commandIdentity, config.value, target, process.env);
   if (name === "open") return openTarget(commandIdentity, config.value, target, process.env);
   if (name === "board") return openBoard(commandIdentity, config.value, target, process.env);
+  if (name === "doctor") return doctor(commandIdentity, config.value, target, process.env);
   return readLogs(commandIdentity, config.value, target, lines ?? 200, process.env);
 }
 
@@ -240,7 +249,7 @@ async function main(argv: string[]): Promise<number> {
   await recordDiagnostic(KNOWN.has(command ?? "") ? `remote-dev.${command}` : "remote-dev.choose");
   if (command === undefined || command === "choose") return write(await chooseCommand(rest), json);
   if (command === "list") return write(await list(rest), json);
-  if (command === "open" || command === "logs" || command === "board" || command === "start") {
+  if (command === "open" || command === "logs" || command === "board" || command === "start" || command === "doctor") {
     return write(await targetCommand(command, rest), json);
   }
   return write(usage(), json);

@@ -30,10 +30,19 @@ function effectsFor(state: string, effect: string | undefined) {
 export function resultFor(
   commandIdentity: string,
   reason: Reason,
-  options: { data?: unknown; effect?: string; effects?: OperationResult["effects"]; message?: string; resource?: string } = {},
+  options: {
+    data?: unknown;
+    effect?: string;
+    effects?: OperationResult["effects"];
+    message?: string;
+    nextAction?: string | undefined;
+    repairAction?: string | undefined;
+    resource?: string;
+  } = {},
 ): OperationResult {
   const detail = REASONS[reason];
   const row = CAUSES[detail.cause];
+  const guidance = guidanceFor(reason, options.resource);
   return {
     causeCode: detail.cause,
     commandIdentity,
@@ -42,10 +51,10 @@ export function resultFor(
     effects: options.effects ?? effectsFor(row.transactionState, options.effect),
     exitCode: row.exitCode,
     failureClass: row.failureClass,
-    ...guidanceFor(reason, options.resource),
+    ...("nextAction" in guidance && options.nextAction !== undefined ? { nextAction: options.nextAction } : guidance),
     message: options.message ?? detail.message,
     outcome: row.outcome,
-    repairAction: detail.repairAction,
+    repairAction: options.repairAction ?? detail.repairAction,
     retryable: row.retryable,
     ...("retryDelayMilliseconds" in row ? { retryDelayMilliseconds: row.retryDelayMilliseconds } : {}),
     transactionState: row.transactionState,
@@ -207,6 +216,13 @@ export function logTailCommand(
   return [host.dockerPath, "--host", host.dockerHost, "exec", containerId, "tail", "-n", String(lines), path]
     .map(quote)
     .join(" ");
+}
+
+/** Read-only listing of VS Code server folders in the container's home, by container ID. */
+export function serverListCommand(host: ConfiguredHost, containerId: string): string {
+  const script =
+    'cd "$HOME/.vscode-server/bin" 2>/dev/null || exit 0; for d in *; do [ -e "$d" ] || continue; if [ -x "$d/node" ]; then echo "ready $d"; else echo "partial $d"; fi; done';
+  return [host.dockerPath, "--host", host.dockerHost, "exec", containerId, "sh", "-c", script].map(quote).join(" ");
 }
 
 export function sshArguments(host: ConfiguredHost, remoteCommand: string): string[] {

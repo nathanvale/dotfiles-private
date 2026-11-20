@@ -1,7 +1,7 @@
 // One fake for every controlled external boundary (ssh, code, fzf, opener).
 // It records its argv and selected environment facts, then replays the
 // scenario named by FAKE_SCENARIO. It never touches Docker, SSH, or editors.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import type { Scenario } from "./harness.ts";
 
 const [tool = "unknown", ...argv] = process.argv.slice(2);
@@ -32,11 +32,57 @@ appendFileSync(
   })}\n`,
 );
 
+const doctor = scenario.doctor ?? {};
+const HOME_CLIENT = { client: "192.168.1.104", mibPerSecond: 100 };
+const MASTER = { etime: "06:07", pid: 70549 };
+
+/** Replay one SSH sample: sshd's view of the client, then the bytes at the scenario's rate. */
+function sample(link: { client: string; mibPerSecond: number }, command: string): number {
+  writeSync(1, `${link.client} 50888 192.168.1.100 22\n`);
+  const total = Number(/head -c (\d+)/.exec(command)?.[1] ?? "0");
+  const chunk = 256 * 1024;
+  for (let sent = 0; sent < total; sent += chunk) {
+    const size = Math.min(chunk, total - sent);
+    writeSync(1, Buffer.alloc(size));
+    Bun.sleepSync((size / (link.mibPerSecond * 1024 * 1024)) * 1000);
+  }
+  return 0;
+}
+
+function sshLocal(): number | null {
+  if (argv.includes("-G")) {
+    process.stdout.write(`user server\nhostname ${doctor.hostname ?? "192.168.1.100"}\nport 22\n`);
+    return 0;
+  }
+  if (!argv.includes("-O")) return null;
+  const master = doctor.master === undefined ? MASTER : doctor.master;
+  if (master === null) {
+    process.stderr.write("Control socket connect(/tmp/cm): No such file or directory\r\n");
+    return 255;
+  }
+  process.stderr.write(`Master running (pid=${master.pid})\r\n`);
+  return 0;
+}
+
+/** Doctor's remote probes: a timed sample, or the container's VS Code server listing. */
+function doctorProbe(command: string): number | null {
+  if (command.includes("SSH_CONNECTION")) {
+    return sample((argv.includes("ControlPath=none") ? doctor.direct : doctor.shared) ?? HOME_CLIENT, command);
+  }
+  if (!command.includes(".vscode-server")) return null;
+  process.stdout.write(doctor.servers === undefined ? "" : `${doctor.servers.join("\n")}\n`);
+  return 0;
+}
+
 function ssh(): number {
   const settings = scenario.ssh ?? {};
+  const local = sshLocal();
+  if (local !== null) return local;
   if (settings.exit !== undefined) return settings.exit;
   if (settings.unreachableAliases?.some((alias) => argv.includes(alias))) return 255;
   const command = argv.at(-1) ?? "";
+  const probed = doctorProbe(command);
+  if (probed !== null) return probed;
   const verb = command.split(" ")[3]?.replaceAll("'", "");
   if (verb === "start") return settings.startExit ?? 0;
   if (verb === "exec") {
@@ -62,14 +108,42 @@ function fzf(): number {
   return 0;
 }
 
+function route(): number {
+  const destination = argv.at(-1);
+  const settings = doctor.route ?? {};
+  if (destination === "default") {
+    process.stdout.write(`   route to: default\n  interface: ${settings.default ?? "en0"}\n`);
+    return 0;
+  }
+  if (settings.host === null) {
+    process.stderr.write("route: writing to routing socket: not in table\n");
+    return 1;
+  }
+  process.stdout.write(`   route to: ${destination}\n  interface: ${settings.host ?? "en0"}\n`);
+  return 0;
+}
+
+function code(): number {
+  if (argv[0] === "--version") {
+    process.stdout.write(`1.147.0\n${doctor.commit ?? "8a14f0cc1b08d531eb83255ea3764ae22aa932b5"}\narm64\n`);
+    return 0;
+  }
+  return scenario.code?.exit ?? 0;
+}
+
 const exits: Record<string, () => number> = {
-  code: () => scenario.code?.exit ?? 0,
+  code,
   fzf,
   opener: () => scenario.opener?.exit ?? 0,
   pilotRuntime: () => {
     process.stdout.write(scenario.pilotRuntime?.output ?? JSON.stringify({ status: "ready", started: [], attempted: false }));
     return scenario.pilotRuntime?.exit ?? 0;
   },
+  ps: () => {
+    process.stdout.write(`${(doctor.master ?? MASTER).etime}\n`);
+    return 0;
+  },
+  route,
   ssh,
 };
 process.exit((exits[tool] ?? (() => 99))());
