@@ -22,7 +22,7 @@
     },
     {
       "name": "personal",
-      "version": "0.4.74",
+      "version": "0.4.75",
       "source": {
         "source": "local",
         "path": "./personal"
