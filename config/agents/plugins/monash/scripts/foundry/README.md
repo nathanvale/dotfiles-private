@@ -782,11 +782,14 @@ boundary. Other native arguments retain their order and value.
 
 ## Worker hand-off
 
-`monash-worker` hands one brief to a non-interactive `monash-foundry launch
-... -- exec` Codex worker, bounds it, and writes a receipt; `prepare` and
-`check` serve Herdr pane workers. The agent-facing workflow is
+`monash-worker` hands one brief to a non-interactive `codex exec --profile
+monash-sol` worker in the worker Codex home `~/.codex-monash-sol`, bounds it,
+and writes a receipt from the thread's session record; `prepare` and `check`
+serve Herdr pane workers. `install.py` creates that home's `config.toml` (the
+provider block from `monash-codex-desktop`) and `monash-sol.config.toml`,
+refuses files it does not manage, and `--check` verifies both; `--worker-home`
+selects another home for tests. The agent-facing workflow is
 [`../../skills/monash-foundry/workers.md`](../../skills/monash-foundry/workers.md).
-Its route check reads the stderr route line below.
 
 ## Output and ownership
 

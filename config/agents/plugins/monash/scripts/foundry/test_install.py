@@ -259,6 +259,8 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.baseline = self.root / "baseline herdr config with spaces.toml"
         self.baseline.write_text(BASELINE_TEXT, encoding="utf-8")
         self.real_home = os.environ.get("HOME")
+        # Every run names a temporary worker home, so no test can write the real one.
+        self.worker_home = self.root / "worker codex home"
 
     def target(self, prefix: Path | None = None) -> Path:
         return (prefix or self.prefix) / "share" / "monash-foundry"
@@ -287,6 +289,7 @@ class TerraInstallerProcessTests(unittest.TestCase):
                 str(selected_prefix),
                 "--herdr-config",
                 str(selected_baseline),
+                *(() if "--worker-home" in args else ("--worker-home", str(self.worker_home))),
                 *args,
             ],
             cwd=REPO_ROOT,
@@ -427,6 +430,74 @@ class TerraInstallerProcessTests(unittest.TestCase):
         checked = self.run_installer("--check", "--host-role", "mini")
         self.assert_success(checked)
         self.assertIn("Installation check passed:", checked.stdout)
+
+    def test_install_creates_the_private_worker_codex_home(self) -> None:
+        target = self.install_initial()
+        self.assertEqual(self.worker_home.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(sorted(path.name for path in self.worker_home.iterdir()),
+                         ["config.toml", "monash-sol.config.toml"])
+        profile = (self.worker_home / "monash-sol.config.toml").read_text(encoding="utf-8")
+        # Independent oracle: the proven 13:56 profile, as literal lines.
+        for line in ('model_provider = "monash_foundry"', 'model = "gpt-6.1-sol"',
+                     'model_reasoning_effort = "high"', 'service_tier = "priority"',
+                     'sandbox_mode = "workspace-write"', 'approval_policy = "never"',
+                     f'model_catalog_json = "{target / "codex-models.json"}"',
+                     "[sandbox_workspace_write]", "network_access = true"):
+            self.assertIn(line + "\n", profile)
+        config = (self.worker_home / "config.toml").read_text(encoding="utf-8")
+        for line in ("[model_providers.monash_foundry]", 'wire_api = "responses"',
+                     "requires_openai_auth = false", f'command = "{target / "monash-codex-token"}"'):
+            self.assertIn(line + "\n", config)
+        for name in ("config.toml", "monash-sol.config.toml"):
+            self.assertEqual((self.worker_home / name).stat().st_mode & 0o777, 0o600)
+        checked = self.run_installer("--check", "--host-role", "mini")
+        self.assert_success(checked)
+
+    def test_worker_home_dry_run_plans_and_writes_nothing(self) -> None:
+        planned = self.run_installer("--dry-run", "--host-role", "mini")
+        self.assert_success(planned)
+        self.assertIn(f"create worker Codex home {self.worker_home} (mode 700)", planned.stdout)
+        self.assertIn(f"write worker Codex file {self.worker_home / 'monash-sol.config.toml'}", planned.stdout)
+        self.assertFalse(os.path.lexists(self.worker_home))
+
+    def test_worker_home_reinstall_changes_nothing(self) -> None:
+        self.install_initial()
+        before = tree_snapshot(self.worker_home)
+        planned = self.run_installer("--dry-run", "--host-role", "mini")
+        self.assert_success(planned)
+        self.assertNotIn("worker Codex", planned.stdout)
+        self.assert_success(self.run_installer("--host-role", "mini"))
+        self.assertEqual(tree_snapshot(self.worker_home), before)
+
+    def test_worker_home_refuses_an_unmanaged_file_without_mutation(self) -> None:
+        self.worker_home.mkdir(mode=0o700)
+        handmade = self.worker_home / "config.toml"
+        handmade.write_text("[model_providers.monash_foundry]\nname = \"handmade\"\n", encoding="utf-8")
+        before = tree_snapshot(self.root)
+        result = self.run_installer("--host-role", "mini")
+        self.assert_refusal(result)
+        self.assertIn("refusing unmanaged worker Codex file", result.stderr)
+        self.assertEqual(tree_snapshot(self.root), before)
+
+    def test_worker_home_check_reports_an_edited_or_missing_file(self) -> None:
+        self.install_initial()
+        profile = self.worker_home / "monash-sol.config.toml"
+        profile.write_text(profile.read_text(encoding="utf-8").replace("priority", "default"), encoding="utf-8")
+        checked = self.run_installer("--check", "--host-role", "mini")
+        self.assert_check_failure(checked)
+        self.assertIn(f"worker Codex file missing or out of date: {profile}", checked.stderr)
+        self.assert_success(self.run_installer("--host-role", "mini"))
+        self.assertIn('service_tier = "priority"', profile.read_text(encoding="utf-8"))
+        profile.unlink()
+        checked = self.run_installer("--check", "--host-role", "mini")
+        self.assert_check_failure(checked)
+        self.assertIn(f"worker Codex file missing or out of date: {profile}", checked.stderr)
+
+    def test_worker_home_refuses_the_main_codex_home(self) -> None:
+        result = self.run_installer("--host-role", "mini", "--worker-home", str(Path.home() / ".codex"))
+        self.assert_refusal(result)
+        self.assertIn("must not be the main Codex home", result.stderr)
+        self.assertFalse(os.path.lexists(self.prefix))
 
     def test_remote_helper_is_a_hashed_executable_data_payload(self) -> None:
         target = self.install_initial()

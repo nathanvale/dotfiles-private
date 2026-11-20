@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Hand one bounded unit to a non-interactive Monash Codex worker and check its handback.
 
-`run` sends a brief through the installed `monash-foundry launch` route as one
-`codex exec` turn, enforces a wall-clock bound, and writes a receipt. `prepare`
+`run` sends a brief as one `codex exec --profile monash-sol` turn in the worker
+Codex home that install.py manages (~/.codex-monash-sol), enforces a
+wall-clock bound, and writes a receipt from the worker's session record. `prepare`
 writes the same prompt for a Herdr pane worker, which writes its own handback
 file. `check` judges an output directory, such as a pane worker's.
 One call is one unit; a coordinator fans out by running several calls at once.
@@ -15,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -23,8 +25,10 @@ from typing import Optional
 
 
 SCHEMA_VERSION = 1
-SCRIPT_DIR = Path(__file__).resolve().parent
-FOUNDRY = SCRIPT_DIR / "monash-foundry"
+# install.py owns this home and its profile file; see its worker home section.
+WORKER_HOME_NAME = ".codex-monash-sol"
+WORKER_PROFILE = "monash-sol"
+WORKER_PROVIDER = "monash_foundry"
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "high"
 DEFAULT_TIMEOUT_SECONDS = 1800
@@ -34,7 +38,7 @@ SANDBOXES = ("read-only", "workspace-write")
 BRIEF_FILE = "brief.md"
 PROMPT_FILE = "prompt.md"
 EVENTS_FILE = "events.jsonl"
-LAUNCHER_LOG_FILE = "launcher.log"
+CODEX_LOG_FILE = "codex.log"
 HANDBACK_FILE = "last-message.md"
 RECEIPT_FILE = "receipt.json"
 
@@ -51,10 +55,6 @@ Handback rules (added by monash-worker):
 # The final non-blank line must be exactly one marker; `done` takes no suffix.
 HANDBACK_PREFIX = "HANDBACK:"
 HANDBACK_LINE = re.compile(rf"^{HANDBACK_PREFIX} (?:(?P<done>done)|blocked: (?P<reason>\S.*))$")
-# The launcher's stderr route line; see "Output and ownership" in README.md.
-ROUTE_LINE = re.compile(r"^host=\S+ agent=(?P<agent>\S+) provider=(?P<provider>.+?) "
-                        r"deployment=(?P<deployment>\S+)(?: resource=\S+)?"
-                        r"(?: model=(?P<model>\S+))?(?: qualification=\S+)?$")
 
 # Exit codes are the public contract for callers that do not parse JSON.
 EXIT = {"done": 0, "prepared": 0, "usage": 2, "blocked": 3, "timed_out": 4, "failed": 5, "interrupted": 130}
@@ -80,14 +80,31 @@ def read_handback(out: Path) -> dict[str, Optional[str]]:
     return {"status": None, "reason": "final message has no HANDBACK line"}
 
 
-def read_route(out: Path) -> Optional[dict[str, str]]:
-    path = out / LAUNCHER_LOG_FILE
-    if not path.is_file():
+def worker_home() -> Path:
+    return Path.home() / WORKER_HOME_NAME
+
+
+def read_route(codex_home: Path, thread_id: object) -> Optional[dict[str, object]]:
+    """The settings Codex applied to the thread, from its session record in the worker home."""
+    if not isinstance(thread_id, str) or not re.fullmatch(r"[0-9A-Za-z-]+", thread_id):
         return None
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        match = ROUTE_LINE.match(line.strip())
-        if match:
-            return match.groupdict()
+    for path in sorted((codex_home / "sessions").glob(f"**/rollout-*-{thread_id}.jsonl")):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                payload = json.loads(line).get("payload")
+            except (json.JSONDecodeError, AttributeError):
+                continue
+            if isinstance(payload, dict) and payload.get("type") == "thread_settings_applied":
+                settings = payload.get("thread_settings") or {}
+                permissions = settings.get("permission_profile") or {}
+                return {
+                    "model": settings.get("model"),
+                    "provider": settings.get("model_provider_id"),
+                    "service_tier": settings.get("service_tier"),
+                    "effort": settings.get("reasoning_effort"),
+                    "network": permissions.get("network") if isinstance(permissions, dict) else None,
+                    "session_file": str(path),
+                }
     return None
 
 
@@ -114,22 +131,23 @@ def read_events(out: Path) -> dict[str, object]:
 def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[str, object]:
     """Build the receipt from files on disk; `launch` is None for a pane worker."""
     handback = read_handback(out)
-    route = read_route(out)
     events = read_events(out)
+    route = read_route(Path(str(launch["codex_home"])), events["thread_id"]) if launch is not None else None
     problems: list[str] = []
     if launch is not None:
         if launch["start_error"]:
-            problems.append(f"launcher did not start: {launch['start_error']}")
+            problems.append(f"codex did not start: {launch['start_error']}")
         elif launch["timed_out"]:
             problems.append(f"no handback within {launch['timeout_seconds']} seconds")
         elif launch["exit_code"] != 0:
-            problems.append(f"launcher exited {launch['exit_code']}; read {LAUNCHER_LOG_FILE}")
+            problems.append(f"codex exited {launch['exit_code']}; read {CODEX_LOG_FILE}")
         if route is None:
-            problems.append(f"launcher printed no route line; read {LAUNCHER_LOG_FILE}")
-        elif route["model"] is None:
-            problems.append(f"launcher route line names no model; read {LAUNCHER_LOG_FILE}")
-        elif route["model"] != model:
-            problems.append(f"route ran {route['model']}, not the requested {model}")
+            problems.append(f"no session record for thread {events['thread_id']} in {launch['codex_home']}")
+        else:
+            if route["model"] != model:
+                problems.append(f"route ran {route['model']}, not the requested {model}")
+            if route["provider"] != WORKER_PROVIDER:
+                problems.append(f"route used provider {route['provider']}, not {WORKER_PROVIDER}")
     if handback["status"] is None:
         problems.append(str(handback["reason"]))
     if launch is not None and launch["timed_out"]:
@@ -174,7 +192,7 @@ def signal_group(process: subprocess.Popen[bytes], sig: signal.Signals) -> None:
 
 
 def stop(process: subprocess.Popen[bytes]) -> None:
-    """Stop the launcher and every process left in its group, even ones that ignore SIGTERM."""
+    """Stop codex and every process left in its group, even ones that ignore SIGTERM."""
     signal_group(process, signal.SIGTERM)
     try:
         process.wait(timeout=KILL_GRACE_SECONDS)
@@ -218,18 +236,28 @@ def run(args: argparse.Namespace) -> int:
         raise UsageError(f"--cwd {cwd} must be an existing absolute directory")
     if args.timeout_seconds <= 0:
         raise UsageError("--timeout-seconds must be positive")
+    codex_home = worker_home()
+    if not (codex_home / f"{WORKER_PROFILE}.config.toml").is_file():
+        raise UsageError(f"{codex_home} has no {WORKER_PROFILE} profile; run scripts/foundry/install.py")
     out = compose(args.brief, args.out, file_handback=False)
 
-    argv = [str(FOUNDRY), "launch", "--model", args.model, "--agent", "codex", "--",
-            "exec", "-c", f"model_reasoning_effort={args.effort}", "-s", args.sandbox,
+    codex = shutil.which("codex")
+    argv = [codex or "codex", "exec", "--profile", WORKER_PROFILE, "-m", args.model,
+            "-c", f"model_reasoning_effort={args.effort}",
+            *(("-s", args.sandbox) if args.sandbox else ()),
             "-C", str(cwd), "--skip-git-repo-check", "--json",
             "-o", str(out / HANDBACK_FILE), "-"]
+    environment = dict(os.environ, CODEX_HOME=str(codex_home))
     started = time.monotonic()
-    with (out / EVENTS_FILE).open("wb") as events, (out / LAUNCHER_LOG_FILE).open("wb") as log, \
+    with (out / EVENTS_FILE).open("wb") as events, (out / CODEX_LOG_FILE).open("wb") as log, \
             (out / PROMPT_FILE).open("rb") as stdin:
         timed_out, start_error, exit_code = False, None, None
         try:
-            process = subprocess.Popen(argv, stdin=stdin, stdout=events, stderr=log, start_new_session=True)
+            if codex is None:
+                raise FileNotFoundError(0, "codex is not on PATH")
+            # The prompt file is stdin, so codex reads to its end instead of waiting on a terminal.
+            process = subprocess.Popen(argv, stdin=stdin, stdout=events, stderr=log, env=environment,
+                                       start_new_session=True)
         except OSError as error:
             start_error = error.strerror or type(error).__name__
         else:
@@ -245,8 +273,10 @@ def run(args: argparse.Namespace) -> int:
                 raise
     launch = {
         "agent": "codex",
+        "codex_home": str(codex_home),
+        "profile": WORKER_PROFILE,
         "effort": args.effort,
-        "sandbox": args.sandbox,
+        "sandbox": args.sandbox or "profile",
         "cwd": str(cwd),
         "exit_code": exit_code,
         "start_error": start_error,
@@ -267,7 +297,7 @@ def check(args: argparse.Namespace) -> int:
     return write_receipt(out, judge(out, str(model), launch))
 
 
-LAUNCH_KEYS = ("exit_code", "start_error", "timed_out", "timeout_seconds")
+LAUNCH_KEYS = ("codex_home", "exit_code", "start_error", "timed_out", "timeout_seconds")
 
 
 def read_recorded_receipt(out: Path) -> Optional[dict[str, object]]:
@@ -294,9 +324,9 @@ def parser() -> argparse.ArgumentParser:
     run_command.add_argument("--out", required=True, help="new or empty directory for this unit's results")
     run_command.add_argument("--cwd", required=True, help="absolute working directory for the worker")
     run_command.add_argument("--model", default=DEFAULT_MODEL)
-    run_command.add_argument("--effort", default=DEFAULT_EFFORT,
-                             help="Codex reasoning effort; the launcher validates it against the catalogue")
-    run_command.add_argument("--sandbox", choices=SANDBOXES, default="read-only")
+    run_command.add_argument("--effort", default=DEFAULT_EFFORT, help="Codex reasoning effort")
+    run_command.add_argument("--sandbox", choices=SANDBOXES,
+                             help="default: the profile's workspace-write with network; read-only has no network")
     run_command.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     run_command.set_defaults(handler=run)
     prepare_command = commands.add_parser(
