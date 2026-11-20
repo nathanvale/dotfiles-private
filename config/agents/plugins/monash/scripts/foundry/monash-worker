@@ -458,6 +458,8 @@ def run_in_pane(herdr: Herdr, argv: list[str], out: Path, cwd: Path,
                 exit_code = int(exit_file.read_text().strip() or "-1")
                 if remaining() <= 0:  # observed after the bound, however it got here: not accepted
                     exit_code, timed_out = None, True
+                    if pid is not None:
+                        stop_pane_group(pid)  # same cleanup as the other timeout path
                 break
             if pid is None and time.monotonic() - started > min(PANE_START_SECONDS, timeout_seconds):
                 start_error = f"the pane did not start the worker within {PANE_START_SECONDS} seconds"
