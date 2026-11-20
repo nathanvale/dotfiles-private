@@ -29,6 +29,7 @@ SOURCE_FILES = (
     "foundry",
     "monash-foundry",
     "monash",
+    "monash-worker",
     "monash_hosts.py",
     "monash_remote.py",
     "monash-codex-token",
@@ -38,7 +39,7 @@ SOURCE_FILES = (
     "CODEX-CATALOG-LICENSE",
     "CODEX-CATALOG-NOTICE",
 )
-COMMANDS = ("foundry", "monash-foundry", "monash")
+COMMANDS = ("foundry", "monash-foundry", "monash", "monash-worker")
 # Executable payload that is run by absolute installed path, never linked into bin.
 EXECUTABLE_HELPERS = ("monash_remote.py", "monash-codex-token", "monash-codex-desktop")
 SOURCE_INSTALL_MODES = {

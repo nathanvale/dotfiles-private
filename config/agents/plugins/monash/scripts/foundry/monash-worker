@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""Hand one bounded unit to a non-interactive Monash Codex worker and check its handback.
+
+`run` sends a brief through the installed `monash-foundry launch` route as one
+`codex exec` turn, enforces a wall-clock bound, and writes a receipt. `prepare`
+writes the same prompt for a Herdr pane worker, which writes its own handback
+file. `check` judges an output directory, such as a pane worker's.
+One call is one unit; a coordinator fans out by running several calls at once.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import time
+from typing import Optional
+
+
+SCHEMA_VERSION = 1
+SCRIPT_DIR = Path(__file__).resolve().parent
+FOUNDRY = SCRIPT_DIR / "monash-foundry"
+DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_EFFORT = "high"
+DEFAULT_TIMEOUT_SECONDS = 1800
+KILL_GRACE_SECONDS = 10
+SANDBOXES = ("read-only", "workspace-write")
+
+BRIEF_FILE = "brief.md"
+PROMPT_FILE = "prompt.md"
+EVENTS_FILE = "events.jsonl"
+LAUNCHER_LOG_FILE = "launcher.log"
+HANDBACK_FILE = "last-message.md"
+RECEIPT_FILE = "receipt.json"
+
+# The handback convention has one owner: every prompt ends with this text.
+HANDBACK_RULES = """
+---
+Handback rules (added by monash-worker):
+- Stay inside this brief. Do not push, open or edit pull requests, post, or message anyone.
+- Your final message is the handback. Cite evidence as path:line, or as a command and its output.
+- End the final message with exactly one of these lines:
+  HANDBACK: done
+  HANDBACK: blocked: <one-line reason>
+"""
+HANDBACK_LINE = re.compile(r"^HANDBACK: (done|blocked)(?:: (.+))?$")
+# The launcher's stderr route line; see "Output and ownership" in README.md.
+ROUTE_LINE = re.compile(r"^host=\S+ agent=(?P<agent>\S+) provider=(?P<provider>.+?) "
+                        r"deployment=(?P<deployment>\S+)(?: resource=\S+)?"
+                        r"(?: model=(?P<model>\S+))?(?: qualification=\S+)?$")
+
+# Exit codes are the public contract for callers that do not parse JSON.
+EXIT = {"done": 0, "prepared": 0, "usage": 2, "blocked": 3, "timed_out": 4, "failed": 5, "interrupted": 130}
+
+
+class UsageError(Exception):
+    pass
+
+
+def read_handback(out: Path) -> dict[str, Optional[str]]:
+    path = out / HANDBACK_FILE
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    if not text.strip():
+        return {"status": None, "reason": "no final message was written"}
+    for line in reversed(text.splitlines()):
+        match = HANDBACK_LINE.match(line.strip())
+        if match:
+            return {"status": match.group(1), "reason": match.group(2)}
+    return {"status": None, "reason": "final message has no HANDBACK line"}
+
+
+def read_route(out: Path) -> Optional[dict[str, str]]:
+    path = out / LAUNCHER_LOG_FILE
+    if not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = ROUTE_LINE.match(line.strip())
+        if match:
+            return match.groupdict()
+    return None
+
+
+def read_events(out: Path) -> dict[str, object]:
+    found: dict[str, object] = {"thread_id": None, "usage": None, "errors": []}
+    path = out / EVENTS_FILE
+    if not path.is_file():
+        return found
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        kind = event.get("type") if isinstance(event, dict) else None
+        if kind == "thread.started":
+            found["thread_id"] = event.get("thread_id")
+        elif kind == "turn.completed":
+            found["usage"] = event.get("usage")
+        elif kind in ("error", "turn.failed"):
+            found["errors"].append(event.get("message") or event.get("error"))
+    return found
+
+
+def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[str, object]:
+    """Build the receipt from files on disk; `launch` is None for a pane worker."""
+    handback = read_handback(out)
+    route = read_route(out)
+    events = read_events(out)
+    problems: list[str] = []
+    if launch is not None:
+        if launch["start_error"]:
+            problems.append(f"launcher did not start: {launch['start_error']}")
+        elif launch["timed_out"]:
+            problems.append(f"no handback within {launch['timeout_seconds']} seconds")
+        elif launch["exit_code"] != 0:
+            problems.append(f"launcher exited {launch['exit_code']}; read {LAUNCHER_LOG_FILE}")
+        if route is None:
+            problems.append(f"launcher printed no route line; read {LAUNCHER_LOG_FILE}")
+        elif route["model"] is None:
+            problems.append(f"launcher route line names no model; read {LAUNCHER_LOG_FILE}")
+        elif route["model"] != model:
+            problems.append(f"route ran {route['model']}, not the requested {model}")
+    if handback["status"] is None:
+        problems.append(str(handback["reason"]))
+    if launch is not None and launch["timed_out"]:
+        status = "timed_out"
+    elif problems:
+        status = "failed"
+    else:
+        status = str(handback["status"])
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "problems": problems,
+        "requested_model": model,
+        "route": route,
+        "thread_id": events["thread_id"],
+        "usage": events["usage"],
+        "worker_errors": events["errors"],
+        "handback": handback,
+        "launch": launch,
+        "out": str(out),
+        "handback_file": str(out / HANDBACK_FILE),
+    }
+
+
+def write_receipt(out: Path, receipt: dict[str, object]) -> int:
+    (out / RECEIPT_FILE).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(receipt))
+    return EXIT[str(receipt["status"])]
+
+
+def prepare_out(out: Path) -> None:
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise UsageError(f"--out {out} already holds results; choose a new directory per unit")
+    out.mkdir(parents=True, exist_ok=True)
+
+
+def signal_group(process: subprocess.Popen[bytes], sig: signal.Signals) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def stop(process: subprocess.Popen[bytes]) -> None:
+    """Stop the launcher and every process left in its group, even ones that ignore SIGTERM."""
+    signal_group(process, signal.SIGTERM)
+    try:
+        process.wait(timeout=KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    signal_group(process, signal.SIGKILL)
+    process.wait()
+
+
+def compose(brief_arg: str, out_arg: str, *, file_handback: bool) -> Path:
+    """Copy the brief into a fresh out directory and write the prompt the worker receives."""
+    brief = Path(brief_arg).expanduser()
+    try:
+        text = brief.read_text(encoding="utf-8") if brief.is_file() else ""
+    except UnicodeDecodeError as error:
+        raise UsageError(f"--brief {brief} is not UTF-8 text") from error
+    if not text.strip():
+        raise UsageError(f"--brief {brief} is missing or empty")
+    out = Path(out_arg).expanduser().absolute()
+    prepare_out(out)
+    (out / BRIEF_FILE).write_text(text, encoding="utf-8")
+    prompt = text.rstrip("\n") + "\n" + HANDBACK_RULES
+    if file_handback:
+        # A pane worker has no -o flag, so it writes the handback file itself.
+        prompt += f"- Also write the complete final message to {out / HANDBACK_FILE}\n"
+    (out / PROMPT_FILE).write_text(prompt, encoding="utf-8")
+    return out
+
+
+def prepare(args: argparse.Namespace) -> int:
+    out = compose(args.brief, args.out, file_handback=True)
+    print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "prepared", "out": str(out),
+                      "prompt_file": str(out / PROMPT_FILE),
+                      "send": f"Read {out / PROMPT_FILE} and do exactly what it says."}))
+    return EXIT["prepared"]
+
+
+def run(args: argparse.Namespace) -> int:
+    cwd = Path(args.cwd).expanduser()
+    if not cwd.is_absolute() or not cwd.is_dir():
+        raise UsageError(f"--cwd {cwd} must be an existing absolute directory")
+    if args.timeout_seconds <= 0:
+        raise UsageError("--timeout-seconds must be positive")
+    out = compose(args.brief, args.out, file_handback=False)
+
+    argv = [str(FOUNDRY), "launch", "--model", args.model, "--agent", "codex", "--",
+            "exec", "-c", f"model_reasoning_effort={args.effort}", "-s", args.sandbox,
+            "-C", str(cwd), "--skip-git-repo-check", "--json",
+            "-o", str(out / HANDBACK_FILE), "-"]
+    started = time.monotonic()
+    with (out / EVENTS_FILE).open("wb") as events, (out / LAUNCHER_LOG_FILE).open("wb") as log, \
+            (out / PROMPT_FILE).open("rb") as stdin:
+        timed_out, start_error, exit_code = False, None, None
+        try:
+            process = subprocess.Popen(argv, stdin=stdin, stdout=events, stderr=log, start_new_session=True)
+        except OSError as error:
+            start_error = error.strerror or type(error).__name__
+        else:
+            try:
+                exit_code = process.wait(timeout=args.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                stop(process)
+                exit_code = process.returncode
+            except BaseException:
+                # The worker runs in its own session, so Ctrl-C would not reach it.
+                stop(process)
+                raise
+    launch = {
+        "agent": "codex",
+        "effort": args.effort,
+        "sandbox": args.sandbox,
+        "cwd": str(cwd),
+        "exit_code": exit_code,
+        "start_error": start_error,
+        "timed_out": timed_out,
+        "timeout_seconds": args.timeout_seconds,
+        "duration_seconds": round(time.monotonic() - started, 1),
+    }
+    return write_receipt(out, judge(out, args.model, launch))
+
+
+def check(args: argparse.Namespace) -> int:
+    out = Path(args.out).expanduser().absolute()
+    if not out.is_dir():
+        raise UsageError(f"--out {out} is not a directory")
+    return write_receipt(out, judge(out, args.model, None))
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="monash-worker", description=__doc__,
+                                   formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = root.add_subparsers(dest="command", required=True)
+    run_command = commands.add_parser("run", help="run one brief as a non-interactive Codex worker")
+    run_command.add_argument("--brief", required=True, help="file holding the unit's brief")
+    run_command.add_argument("--out", required=True, help="new or empty directory for this unit's results")
+    run_command.add_argument("--cwd", required=True, help="absolute working directory for the worker")
+    run_command.add_argument("--model", default=DEFAULT_MODEL)
+    run_command.add_argument("--effort", default=DEFAULT_EFFORT,
+                             help="Codex reasoning effort; the launcher validates it against the catalogue")
+    run_command.add_argument("--sandbox", choices=SANDBOXES, default="read-only")
+    run_command.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    run_command.set_defaults(handler=run)
+    prepare_command = commands.add_parser(
+        "prepare", help="write a pane worker's prompt and print the one line to send it")
+    prepare_command.add_argument("--brief", required=True)
+    prepare_command.add_argument("--out", required=True)
+    prepare_command.set_defaults(handler=prepare)
+    check_command = commands.add_parser("check", help=f"judge an existing {HANDBACK_FILE}, such as a pane worker's")
+    check_command.add_argument("--out", required=True)
+    check_command.add_argument("--model", default=DEFAULT_MODEL)
+    check_command.set_defaults(handler=check)
+    return root
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        return args.handler(args)
+    except KeyboardInterrupt:
+        print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "interrupted"}))
+        return EXIT["interrupted"]
+    except UsageError as error:
+        print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "usage", "message": str(error)}))
+        return EXIT["usage"]
+
+
+if __name__ == "__main__":
+    sys.exit(main())

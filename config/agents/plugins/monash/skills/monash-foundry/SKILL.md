@@ -1,6 +1,6 @@
 ---
 name: monash-foundry
-description: "Install, verify, launch, or repair the Monash Azure Foundry routes for Codex, Claude Code, and OpenCode."
+description: "Install, verify, launch, or repair the Monash Azure Foundry routes for Codex, Claude Code, and OpenCode, or hand a bounded unit to a Monash Codex worker such as Sol 6.1."
 ---
 
 # Monash Foundry
@@ -96,6 +96,11 @@ or remote identity and repair action. Do not rerun `spawn`, answer a blocked
 prompt, or kill a native agent while recovering. `monash_remote.py` owns
 internal `start`, `get`, `prompt`, `read`, `wait`, and `reconnect` operations;
 do not treat it as a public command.
+
+## Hand work to a worker
+
+To fan a bounded unit out to a Monash Codex worker (Sol 6.1 by default),
+through `monash-worker` or a Herdr pane, read [workers.md](workers.md).
 
 ## Credentials and repair
 

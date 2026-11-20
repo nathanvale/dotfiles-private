@@ -780,12 +780,20 @@ Caller `--pure`, `--pure=...`, and the supported `--no-pure` form are refused.
 version preflight because they could bypass the selected route and its billing
 boundary. Other native arguments retain their order and value.
 
+## Worker hand-off
+
+`monash-worker` hands one brief to a non-interactive `monash-foundry launch
+... -- exec` Codex worker, bounds it, and writes a receipt; `prepare` and
+`check` serve Herdr pane workers. The agent-facing workflow is
+[`../../skills/monash-foundry/workers.md`](../../skills/monash-foundry/workers.md).
+Its route check reads the stderr route line below.
+
 ## Output and ownership
 
 Before a real exec, the launcher writes one concise line to stderr:
 
 ```text
-host=<host> agent=<codex|claude|opencode> provider=<provider> deployment=<deployment>
+host=<host> agent=<codex|claude|opencode> provider=<provider> deployment=<deployment>[ resource=<resource>][ model=<stable-id>][ qualification=explicit]
 ```
 
 It never prints secret values, credential output, or forwarded native argument
