@@ -228,15 +228,21 @@ async function install(probe: Probe): Promise<Found> {
   if ((await stat(checkout.gitEntry)).isDirectory()) {
     return ok({ detail: `Installed from the main checkout at ${checkout.root}.`, id: "install", status: "ok" });
   }
-  const gitdir = /^gitdir: (.+)\/\.git\/worktrees\/[^/\n]+\s*$/m.exec(await readFile(checkout.gitEntry, "utf8"))?.[1];
-  const main = gitdir === undefined ? null : join(gitdir, relative(checkout.root, installed));
-  const repair = main === null ? undefined : `ln -sfn '${main}' '${link}'`;
+  const mainRoot = /^gitdir: (.+)\/\.git\/worktrees\/[^/\n]+\s*$/m.exec(await readFile(checkout.gitEntry, "utf8"))?.[1];
+  const candidate = mainRoot === undefined ? null : join(mainRoot, relative(checkout.root, installed));
+  // The relink is safe only when the main checkout holds the command itself, not a link elsewhere.
+  const realMain = mainRoot === undefined ? null : await realpath(mainRoot).catch(() => null);
+  const realCandidate = candidate === null ? null : await realpath(candidate).catch(() => null);
+  const landed = realMain !== null && realCandidate !== null && realCandidate.startsWith(`${realMain}/`);
+  const repair = landed ? `ln -sfn '${candidate}' '${link}'` : undefined;
   return refuse(
     probe,
     "install-from-worktree",
     `Cause install-from-worktree. ${link} runs from the worktree at ${checkout.root}, so it changes whenever that branch changes.`,
     repair,
-    repair === undefined ? undefined : `Run ${repair}, then run remote-dev doctor ${probe.target.id} again.`,
+    repair === undefined
+      ? `The main checkout${mainRoot === undefined ? "" : ` at ${mainRoot}`} does not hold this command yet. Land its branch on main, relink ${link} into the main checkout, then run remote-dev doctor ${probe.target.id} again.`
+      : `Run ${repair}, then run remote-dev doctor ${probe.target.id} again.`,
   );
 }
 

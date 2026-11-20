@@ -21,7 +21,7 @@ depend on the package's source layout, so a rewrite can replay them unchanged.
 | `mibPerSecond` | 8 MiB of `/dev/zero`, timed after the header line | Transfer rate |
 | `container` | `docker ps` on the host | `running` or `stopped` |
 | `editor` | `code --version`; `ls ~/.vscode-server/bin` in the container | Local VS Code release and commit; server folders as `ready NAME` or `partial NAME` |
-| `install` | `realpath ~/.local/bin/remote-dev` | `absent`, `main-checkout` or `worktree` |
+| `install` | `realpath ~/.local/bin/remote-dev` | `absent`, `main-checkout`, `worktree` (main tracks the command) or `worktree-unlanded` (main does not) |
 
 `expect` holds the result: the cause, the exit code, the exact `repairAction`,
 and fragments the message must include. `{main}` and `{home}` in an expected

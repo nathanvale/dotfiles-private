@@ -4,22 +4,44 @@
   "summary": "The shared link rebuilt over en0 at 10:05 moved data at a ninth of a direct connection's rate 21 minutes later.",
   "target": "pilot",
   "observed": {
-    "sshConfig": { "alias": "mac-mini", "hostname": "192.168.1.100" },
-    "route": { "host": "en0", "default": "utun7" },
-    "sharedLink": { "pid": 70549, "etime": "21:04", "clientAddress": "192.168.1.104", "mibPerSecond": 5.0 },
-    "directConnection": { "clientAddress": "192.168.1.104", "mibPerSecond": 45.2 },
+    "sshConfig": {
+      "alias": "mac-mini",
+      "hostname": "192.168.1.100"
+    },
+    "route": {
+      "host": "en0",
+      "default": "utun7"
+    },
+    "sharedLink": {
+      "pid": 70549,
+      "etime": "21:04",
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 5.0
+    },
+    "directConnection": {
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 45.2
+    },
     "container": "running",
-    "editor": { "version": "1.147.0", "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5", "servers": [] },
+    "editor": {
+      "version": "1.147.0",
+      "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5",
+      "servers": []
+    },
     "install": "absent"
   },
   "expect": {
     "cause": "link-degraded",
     "exitCode": 3,
     "repairAction": "ssh -O stop mac-mini",
-    "messageIncludes": ["pid 70549", "21m old"]
+    "messageIncludes": [
+      "pid 70549",
+      "21m old"
+    ]
   },
   "evidence": {
     "recorded": "2026-11-21T10:26:00+11:00",
-    "rates": "32 MiB through the shared link: 6.4 s (5.0 MiB/s). Direct (ControlPath=none): 1.0 s (31 MiB/s). A private fresh master: 0.7 s (45 MiB/s). remote-dev doctor pilot on this branch reported 5.0 against 45.2 MiB/s."
+    "rates": "32 MiB through the shared link: 6.4 s (5.0 MiB/s). Direct (ControlPath=none): 1.0 s (31 MiB/s). A private fresh master: 0.7 s (45 MiB/s). remote-dev doctor pilot on this branch reported 5.0 against 45.2 MiB/s.",
+    "cause": "Not isolated. By 10:36 the same link moved 36 MiB/s against 33 MiB/s direct. Concurrent traffic on the link, such as the VS Code server upload that began about 10:26, is a possible explanation (a guess)."
   }
 }

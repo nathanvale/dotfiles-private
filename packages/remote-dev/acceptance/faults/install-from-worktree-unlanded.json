@@ -1,0 +1,43 @@
+{
+  "cause": "install-from-worktree",
+  "origin": "recorded",
+  "summary": "~/.local/bin/remote-dev ran from ~/code/dotfiles/.worktrees/remote-dev-command-recovery-20261119 on a detached HEAD that never reached main. Main's packages/remote-dev was an untracked link to an older release, so relinking there would have installed an older command.",
+  "target": "pilot",
+  "observed": {
+    "sshConfig": {
+      "alias": "mac-mini",
+      "hostname": "192.168.1.100"
+    },
+    "route": {
+      "host": "en0",
+      "default": "en0"
+    },
+    "sharedLink": {
+      "pid": 70549,
+      "etime": "06:07",
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 45
+    },
+    "directConnection": {
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 45
+    },
+    "container": "running",
+    "editor": {
+      "version": "1.147.0",
+      "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5",
+      "servers": [
+        "ready 8a14f0cc1b08d531eb83255ea3764ae22aa932b5"
+      ]
+    },
+    "install": "worktree-unlanded"
+  },
+  "expect": {
+    "cause": "install-from-worktree",
+    "exitCode": 3,
+    "repairAction": "Land remote-dev on the main checkout, then relink ~/.local/bin/remote-dev to it.",
+    "messageIncludes": [
+      ".worktrees/"
+    ]
+  }
+}

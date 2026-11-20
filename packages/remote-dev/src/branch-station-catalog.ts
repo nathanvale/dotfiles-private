@@ -173,7 +173,7 @@ export const REASONS = {
     cause: "DOMAIN_PRECONDITION_UNMET",
     guidance: "Relink ~/.local/bin/remote-dev to the main checkout with the repair command, then run remote-dev doctor again.",
     message: "Cause install-from-worktree. The installed remote-dev runs from a git worktree, so it changes when that branch changes.",
-    repairAction: "Relink ~/.local/bin/remote-dev to the main checkout.",
+    repairAction: "Land remote-dev on the main checkout, then relink ~/.local/bin/remote-dev to it.",
     trigger: "~/.local/bin/remote-dev resolves into a linked git worktree.",
   },
   "link-degraded": {

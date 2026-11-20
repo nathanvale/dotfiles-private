@@ -20,7 +20,7 @@ const ACCEPTANCE = join(import.meta.dir, "../../acceptance");
 const RUNNING = psOutput(PS.pilotRunning);
 const READY = "ready 8a14f0cc1b08d531eb83255ea3764ae22aa932b5";
 
-type Install = "absent" | "main-checkout" | "worktree";
+type Install = "absent" | "main-checkout" | "worktree" | "worktree-unlanded";
 
 interface Fault {
   cause: string;
@@ -73,10 +73,13 @@ async function install(world: World, kind: Install): Promise<string> {
   const main = join(world.dir, "code", "dotfiles");
   if (kind === "absent") return main;
   const root = kind === "main-checkout" ? main : join(main, ".worktrees", "remote-dev-x");
-  await mkdir(join(root, "packages", "remote-dev", "bin"), { recursive: true });
-  await writeFile(join(root, "packages", "remote-dev", "bin", "remote-dev"), "#!/bin/sh\n");
-  if (kind === "main-checkout") await mkdir(join(main, ".git"), { recursive: true });
-  else await writeFile(join(root, ".git"), `gitdir: ${main}/.git/worktrees/remote-dev-x\n`);
+  const roots = kind === "worktree" ? [main, root] : [root];
+  for (const holder of roots) {
+    await mkdir(join(holder, "packages", "remote-dev", "bin"), { recursive: true });
+    await writeFile(join(holder, "packages", "remote-dev", "bin", "remote-dev"), "#!/bin/sh\n");
+  }
+  await mkdir(join(main, ".git"), { recursive: true });
+  if (kind !== "main-checkout") await writeFile(join(root, ".git"), `gitdir: ${main}/.git/worktrees/remote-dev-x\n`);
   await mkdir(join(world.dir, ".local", "bin"), { recursive: true });
   await symlink(join(root, "packages", "remote-dev", "bin", "remote-dev"), join(world.dir, ".local", "bin", "remote-dev"));
   return main;
