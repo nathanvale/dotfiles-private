@@ -458,7 +458,12 @@ def load_desktop_module(source: Path):
     loader = importlib.machinery.SourceFileLoader("monash_codex_desktop_for_install", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    # Loading must not write a bytecode cache into the source, even on --dry-run.
+    previous, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
@@ -794,8 +799,12 @@ def main(argv: list[str]) -> int:
     if not worker_home.is_absolute():
         worker_home = Path.cwd() / worker_home
     try:
-        main_homes = {Path.home() / ".codex", *([Path(os.environ["CODEX_HOME"])] if os.environ.get("CODEX_HOME") else [])}
-        if any(worker_home.resolve().is_relative_to(main.expanduser().resolve()) for main in main_homes):
+        main_homes = {(Path.home() / ".codex").resolve()}
+        inherited = os.environ.get("CODEX_HOME")
+        # A worker that runs the installer inherits CODEX_HOME set to the worker home itself.
+        if inherited and Path(inherited).expanduser().resolve() != worker_home.resolve():
+            main_homes.add(Path(inherited).expanduser().resolve())
+        if any(worker_home.resolve().is_relative_to(main) for main in main_homes):
             raise InstallRefusal("--worker-home must not be the main Codex home or inside it")
         if args.check:
             return check(source, target, bin_dir, args.host_role, worker_home)

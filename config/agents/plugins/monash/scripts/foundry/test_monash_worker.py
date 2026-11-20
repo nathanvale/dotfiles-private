@@ -192,15 +192,30 @@ class MonashWorkerTest(unittest.TestCase):
         launch = {"agent": "codex", "effort": "high", "sandbox": "read-only", "cwd": str(self.cwd),
                   "exit_code": 0, "start_error": None, "timed_out": False, "timeout_seconds": 1800,
                   "duration_seconds": 12.0}
-        (self.out / "receipt.json").write_text(json.dumps({"schema_version": 1, "status": "done",
+        route = {"agent": "codex", "provider": "Monash Foundry Azure Responses", "deployment": "gpt-6.1-sol",
+                 "model": "gpt-6.1-sol"}
+        (self.out / "receipt.json").write_text(json.dumps({"schema_version": 1, "status": "done", "route": route,
                                                             "requested_model": "gpt-6.1-sol", "launch": launch}))
         code, receipt = self.worker("check", "--out", str(self.out))
         self.assertEqual(code, 0, receipt)
-        self.assertIsNone(receipt["route"])
+        self.assertEqual(receipt["route"]["model"], "gpt-6.1-sol")
         launch["timed_out"] = True
-        (self.out / "receipt.json").write_text(json.dumps({"schema_version": 1, "launch": launch}))
+        (self.out / "receipt.json").write_text(json.dumps({"schema_version": 1, "route": route, "launch": launch}))
         code, receipt = self.worker("check", "--out", str(self.out))
         self.assertEqual(code, 4)
+
+    def test_check_keeps_a_wrong_route_recorded_before_the_worker_home(self) -> None:
+        # Independent oracle: a 0.2.x receipt whose launcher route line named another model.
+        self.out.mkdir()
+        (self.out / "last-message.md").write_text("HANDBACK: done\n")
+        launch = {"exit_code": 0, "start_error": None, "timed_out": False, "timeout_seconds": 1800}
+        route = {"agent": "codex", "provider": "Monash Foundry Azure Responses", "deployment": "gpt-5.5",
+                 "model": "gpt-5.5"}
+        (self.out / "receipt.json").write_text(json.dumps({"schema_version": 1, "requested_model": "gpt-6.1-sol",
+                                                            "route": route, "launch": launch}))
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"], ["route ran gpt-5.5, not the requested gpt-6.1-sol"])
 
     def test_route_on_another_provider_fails(self) -> None:
         code, receipt = self.run_unit(message="HANDBACK: done", extra_env={"FAKE_PROVIDER": "openai"})

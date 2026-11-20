@@ -128,13 +128,17 @@ def read_events(out: Path) -> dict[str, object]:
     return found
 
 
-def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[str, object]:
+def judge(out: Path, model: str, launch: Optional[dict[str, object]],
+          recorded_route: Optional[dict[str, object]] = None) -> dict[str, object]:
     """Build the receipt from files on disk; `launch` is None for a pane worker."""
     handback = read_handback(out)
     events = read_events(out)
-    # A receipt from before the worker home (0.2.x) has no codex_home and no session record to re-read.
     codex_home = launch.get("codex_home") if launch is not None else None
-    route = read_route(Path(str(codex_home)), events["thread_id"]) if codex_home else None
+    if codex_home:
+        route = read_route(Path(str(codex_home)), events["thread_id"])
+    else:
+        # A 0.2.x receipt has no session record to re-read; its recorded launcher route still counts.
+        route = recorded_route if launch is not None else None
     problems: list[str] = []
     if launch is not None:
         if launch["start_error"]:
@@ -145,10 +149,12 @@ def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[st
             problems.append(f"codex exited {launch['exit_code']}; read {CODEX_LOG_FILE}")
         if codex_home and route is None:
             problems.append(f"no session record for thread {events['thread_id']} in {codex_home}")
-        elif route is not None:
-            if route["model"] != model:
-                problems.append(f"route ran {route['model']}, not the requested {model}")
-            if route["provider"] != WORKER_PROVIDER:
+        elif route is None:
+            problems.append("receipt records no route")
+        else:
+            if route.get("model") != model:
+                problems.append(f"route ran {route.get('model')}, not the requested {model}")
+            if codex_home and route["provider"] != WORKER_PROVIDER:
                 problems.append(f"route used provider {route['provider']}, not {WORKER_PROVIDER}")
     if handback["status"] is None:
         problems.append(str(handback["reason"]))
@@ -296,7 +302,9 @@ def check(args: argparse.Namespace) -> int:
     recorded = read_recorded_receipt(out)
     launch = recorded.get("launch") if recorded else None
     model = args.model or (recorded or {}).get("requested_model") or DEFAULT_MODEL
-    return write_receipt(out, judge(out, str(model), launch))
+    recorded_route = (recorded or {}).get("route")
+    return write_receipt(out, judge(out, str(model), launch,
+                                    recorded_route if isinstance(recorded_route, dict) else None))
 
 
 LAUNCH_KEYS = ("exit_code", "start_error", "timed_out", "timeout_seconds")

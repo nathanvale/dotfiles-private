@@ -493,11 +493,12 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.assert_check_failure(checked)
         self.assertIn(f"worker Codex file missing or out of date: {profile}", checked.stderr)
 
-    def test_worker_home_refuses_the_main_codex_home_and_anything_inside_it(self) -> None:
+    def test_worker_home_refuses_a_home_inside_the_main_codex_home(self) -> None:
         # CODEX_HOME names the main home here, so even a broken installer writes only in the temp root.
+        # (A worker home equal to CODEX_HOME is the inherited worker case, allowed above.)
         main = self.root / "main codex home"
         main.mkdir()
-        for home in (main, main / "worker"):
+        for home in (main / "worker", main / "nested" / "worker"):
             with self.subTest(home=home):
                 result = self.run_installer("--host-role", "mini", "--worker-home", str(home),
                                             env_overrides={"CODEX_HOME": str(main)})
@@ -505,6 +506,24 @@ class TerraInstallerProcessTests(unittest.TestCase):
                 self.assertIn("must not be the main Codex home or inside it", result.stderr)
                 self.assertFalse(os.path.lexists(self.prefix))
                 self.assertEqual(list(main.iterdir()), [])
+
+    def test_worker_home_may_be_the_inherited_codex_home(self) -> None:
+        # A Codex worker running the installer inherits CODEX_HOME set to the worker home itself.
+        self.install_initial()
+        for args in (("--dry-run",), ("--check",), ()):
+            with self.subTest(args=args):
+                result = self.run_installer("--host-role", "mini", *args,
+                                            env_overrides={"CODEX_HOME": str(self.worker_home)})
+                self.assert_success(result)
+
+    def test_dry_run_writes_no_bytecode_into_the_source(self) -> None:
+        source = self.root / "source copy"
+        shutil.copytree(INSTALLER.parent, source, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        before = tree_snapshot(source)
+        result = self.run_installer("--dry-run", "--host-role", "mini", installer=source / "install.py",
+                                    env_overrides={"PYTHONDONTWRITEBYTECODE": ""})
+        self.assert_success(result)
+        self.assertEqual(tree_snapshot(source), before)
 
     def test_worker_home_check_requires_mode_700(self) -> None:
         self.install_initial()
