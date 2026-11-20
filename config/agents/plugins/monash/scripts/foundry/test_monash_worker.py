@@ -2,7 +2,8 @@
 
 Each case copies the real script beside a fake `monash-foundry`, runs it as a
 process, and reads its exit code, stdout receipt, and files. Expected values
-are literals owned by this file.
+are literals owned by this file. The fake covers only `launch -- exec`, a
+surface `test_monash.py`'s fake (models and dry-run selection) does not.
 
 Run:
     python3 -m unittest discover -s scripts/foundry -p 'test_monash_worker.py' -v
@@ -16,7 +17,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import signal
 import tempfile
+import time
 import unittest
 
 
@@ -36,7 +39,8 @@ print(os.environ.get('FAKE_ROUTE_LINE') or 'host=Mac agent=codex provider=Monash
       f'deployment={model} model={model}', file=sys.stderr)
 print(json.dumps({'type': 'thread.started', 'thread_id': 'thread-fixture-1'}))
 if mode == 'hang':
-    child = subprocess.Popen(['sleep', '600'])
+    # The child ignores SIGTERM, so only a group SIGKILL ends it.
+    child = subprocess.Popen(['sh', '-c', 'trap "" TERM; sleep 600 & wait'])
     Path(os.environ['WORKER_TEST_CHILD']).write_text(str(child.pid))
     time.sleep(600)
 if mode == 'refuse':
@@ -45,6 +49,26 @@ if mode == 'refuse':
 print(json.dumps({'type': 'turn.completed', 'usage': {'output_tokens': 7}}))
 out.write_text(os.environ['FAKE_MESSAGE'])
 """
+
+
+def process_gone(pid: int, deadline_seconds: float = 10) -> bool:
+    """Wait, bounded, until `pid` is reaped or a zombie; a delivered SIGKILL ends there."""
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], stdout=subprocess.PIPE,
+                               text=True, check=False).stdout.strip()
+        if not state or state.startswith("Z"):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def kill_leftover_group(pid: int) -> None:
+    """Cleanup only: a failing run must not leave the fixture's processes behind."""
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 class MonashWorkerTest(unittest.TestCase):
@@ -73,10 +97,9 @@ class MonashWorkerTest(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
         return result.returncode, json.loads(result.stdout)
 
-    def run_unit(self, **kwargs: object) -> tuple[int, dict[str, object]]:
-        extra = list(kwargs.pop("extra_args", ()))  # type: ignore[arg-type]
+    def run_unit(self, *extra_args: str, **fake: object) -> tuple[int, dict[str, object]]:
         return self.worker("run", "--brief", str(self.brief), "--out", str(self.out),
-                           "--cwd", str(self.cwd), *extra, **kwargs)  # type: ignore[arg-type]
+                           "--cwd", str(self.cwd), *extra_args, **fake)  # type: ignore[arg-type]
 
     def test_done_handback_passes_and_launch_uses_the_monash_exec_route(self) -> None:
         code, receipt = self.run_unit(message="Three files.\nHANDBACK: done\n")
@@ -96,7 +119,7 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(json.loads((self.out / "receipt.json").read_text()), receipt)
 
     def test_effort_and_sandbox_reach_the_launcher(self) -> None:
-        self.run_unit(message="HANDBACK: done", extra_args=("--effort", "medium", "--sandbox", "workspace-write"))
+        self.run_unit("--effort", "medium", "--sandbox", "workspace-write", message="HANDBACK: done")
         argv = json.loads(self.log.read_text())["argv"]
         self.assertIn("model_reasoning_effort=medium", argv)
         self.assertEqual(argv[argv.index("-s") + 1], "workspace-write")
@@ -134,13 +157,45 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertIn("reserved", (self.out / "launcher.log").read_text())
 
     def test_timeout_stops_the_whole_worker_process_group(self) -> None:
-        code, receipt = self.run_unit(mode="hang", extra_args=("--timeout-seconds", "2"))
+        code, receipt = self.run_unit("--timeout-seconds", "2", mode="hang")
         self.assertEqual(code, 4)
         self.assertEqual(receipt["status"], "timed_out")
         self.assertEqual(receipt["problems"][0], "no handback within 2 seconds")
         child = int((self.root / "child.pid").read_text())
-        with self.assertRaises(ProcessLookupError):
-            os.kill(child, 0)
+        self.addCleanup(kill_leftover_group, child)
+        self.assertTrue(process_gone(child))
+
+    def test_interrupt_stops_the_worker_group_and_exits_130(self) -> None:
+        env = dict(os.environ, WORKER_TEST_LOG=str(self.log), FAKE_MODE="hang", FAKE_MESSAGE="",
+                   WORKER_TEST_CHILD=str(self.root / "child.pid"))
+        worker = subprocess.Popen([sys.executable, str(self.bin / "monash-worker"), "run", "--brief",
+                                   str(self.brief), "--out", str(self.out), "--cwd", str(self.cwd)],
+                                  env=env, stdout=subprocess.PIPE, text=True)
+        child_file = self.root / "child.pid"
+        deadline = time.monotonic() + 30
+        while not child_file.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(child_file.is_file(), "fake launcher never started its child")
+        self.addCleanup(kill_leftover_group, int(child_file.read_text()))
+        worker.send_signal(signal.SIGINT)
+        stdout, _ = worker.communicate(timeout=60)
+        self.assertEqual(worker.returncode, 130)
+        self.assertEqual(json.loads(stdout)["status"], "interrupted")
+        self.assertTrue(process_gone(int(child_file.read_text())))
+
+    def test_launcher_that_cannot_start_fails_with_a_receipt(self) -> None:
+        (self.bin / "monash-foundry").chmod(0o644)
+        code, receipt = self.run_unit(message="HANDBACK: done")
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0], "launcher did not start: Permission denied")
+        self.assertIsNone(receipt["launch"]["exit_code"])
+
+    def test_brief_that_is_not_utf8_is_refused_before_launch(self) -> None:
+        self.brief.write_bytes(b"\xff\xfe brief")
+        code, receipt = self.run_unit(message="HANDBACK: done")
+        self.assertEqual(code, 2)
+        self.assertIn("is not UTF-8 text", receipt["message"])
+        self.assertFalse(self.log.exists())
 
     def test_out_directory_with_results_is_refused_before_launch(self) -> None:
         self.out.mkdir()

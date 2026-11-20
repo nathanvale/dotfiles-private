@@ -793,7 +793,7 @@ Its route check reads the stderr route line below.
 Before a real exec, the launcher writes one concise line to stderr:
 
 ```text
-host=<host> agent=<codex|claude|opencode> provider=<provider> deployment=<deployment>
+host=<host> agent=<codex|claude|opencode> provider=<provider> deployment=<deployment>[ resource=<resource>][ model=<stable-id>][ qualification=explicit]
 ```
 
 It never prints secret values, credential output, or forwarded native argument

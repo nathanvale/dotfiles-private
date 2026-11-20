@@ -55,7 +55,7 @@ ROUTE_LINE = re.compile(r"^host=\S+ agent=(?P<agent>\S+) provider=(?P<provider>.
                         r"(?: model=(?P<model>\S+))?(?: qualification=\S+)?$")
 
 # Exit codes are the public contract for callers that do not parse JSON.
-EXIT = {"done": 0, "usage": 2, "blocked": 3, "timed_out": 4, "failed": 5}
+EXIT = {"done": 0, "prepared": 0, "usage": 2, "blocked": 3, "timed_out": 4, "failed": 5, "interrupted": 130}
 
 
 class UsageError(Exception):
@@ -64,9 +64,10 @@ class UsageError(Exception):
 
 def read_handback(out: Path) -> dict[str, Optional[str]]:
     path = out / HANDBACK_FILE
-    if not path.is_file() or not path.read_text(encoding="utf-8").strip():
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    if not text.strip():
         return {"status": None, "reason": "no final message was written"}
-    for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+    for line in reversed(text.splitlines()):
         match = HANDBACK_LINE.match(line.strip())
         if match:
             return {"status": match.group(1), "reason": match.group(2)}
@@ -111,12 +112,16 @@ def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[st
     events = read_events(out)
     problems: list[str] = []
     if launch is not None:
-        if launch["timed_out"]:
+        if launch["start_error"]:
+            problems.append(f"launcher did not start: {launch['start_error']}")
+        elif launch["timed_out"]:
             problems.append(f"no handback within {launch['timeout_seconds']} seconds")
         elif launch["exit_code"] != 0:
             problems.append(f"launcher exited {launch['exit_code']}; read {LAUNCHER_LOG_FILE}")
         if route is None:
             problems.append(f"launcher printed no route line; read {LAUNCHER_LOG_FILE}")
+        elif route["model"] is None:
+            problems.append(f"launcher route line names no model; read {LAUNCHER_LOG_FILE}")
         elif route["model"] != model:
             problems.append(f"route ran {route['model']}, not the requested {model}")
     if handback["status"] is None:
@@ -155,29 +160,35 @@ def prepare_out(out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
 
 
+def signal_group(process: subprocess.Popen[bytes], sig: signal.Signals) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
 def stop(process: subprocess.Popen[bytes]) -> None:
-    """Stop the launcher and the Codex process group it started."""
-    for sig, grace in ((signal.SIGTERM, KILL_GRACE_SECONDS), (signal.SIGKILL, None)):
-        try:
-            os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            process.wait(timeout=grace)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+    """Stop the launcher and every process left in its group, even ones that ignore SIGTERM."""
+    signal_group(process, signal.SIGTERM)
+    try:
+        process.wait(timeout=KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    signal_group(process, signal.SIGKILL)
     process.wait()
 
 
 def compose(brief_arg: str, out_arg: str, *, file_handback: bool) -> Path:
     """Copy the brief into a fresh out directory and write the prompt the worker receives."""
     brief = Path(brief_arg).expanduser()
-    if not brief.is_file() or not brief.read_text(encoding="utf-8").strip():
+    try:
+        text = brief.read_text(encoding="utf-8") if brief.is_file() else ""
+    except UnicodeDecodeError as error:
+        raise UsageError(f"--brief {brief} is not UTF-8 text") from error
+    if not text.strip():
         raise UsageError(f"--brief {brief} is missing or empty")
     out = Path(out_arg).expanduser().absolute()
     prepare_out(out)
-    text = brief.read_text(encoding="utf-8")
     (out / BRIEF_FILE).write_text(text, encoding="utf-8")
     prompt = text.rstrip("\n") + "\n" + HANDBACK_RULES
     if file_handback:
@@ -192,7 +203,7 @@ def prepare(args: argparse.Namespace) -> int:
     print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "prepared", "out": str(out),
                       "prompt_file": str(out / PROMPT_FILE),
                       "send": f"Read {out / PROMPT_FILE} and do exactly what it says."}))
-    return EXIT["done"]
+    return EXIT["prepared"]
 
 
 def run(args: argparse.Namespace) -> int:
@@ -210,19 +221,29 @@ def run(args: argparse.Namespace) -> int:
     started = time.monotonic()
     with (out / EVENTS_FILE).open("wb") as events, (out / LAUNCHER_LOG_FILE).open("wb") as log, \
             (out / PROMPT_FILE).open("rb") as stdin:
-        process = subprocess.Popen(argv, stdin=stdin, stdout=events, stderr=log, start_new_session=True)
-        timed_out = False
+        timed_out, start_error, exit_code = False, None, None
         try:
-            process.wait(timeout=args.timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            stop(process)
+            process = subprocess.Popen(argv, stdin=stdin, stdout=events, stderr=log, start_new_session=True)
+        except OSError as error:
+            start_error = error.strerror or type(error).__name__
+        else:
+            try:
+                exit_code = process.wait(timeout=args.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                stop(process)
+                exit_code = process.returncode
+            except BaseException:
+                # The worker runs in its own session, so Ctrl-C would not reach it.
+                stop(process)
+                raise
     launch = {
         "agent": "codex",
         "effort": args.effort,
         "sandbox": args.sandbox,
         "cwd": str(cwd),
-        "exit_code": process.returncode,
+        "exit_code": exit_code,
+        "start_error": start_error,
         "timed_out": timed_out,
         "timeout_seconds": args.timeout_seconds,
         "duration_seconds": round(time.monotonic() - started, 1),
@@ -267,6 +288,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser().parse_args(argv)
     try:
         return args.handler(args)
+    except KeyboardInterrupt:
+        print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "interrupted"}))
+        return EXIT["interrupted"]
     except UsageError as error:
         print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "usage", "message": str(error)}))
         return EXIT["usage"]

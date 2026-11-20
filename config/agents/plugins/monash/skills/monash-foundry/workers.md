@@ -27,16 +27,13 @@ it as `~/.local/bin/monash-worker`. Read `monash-worker --help` for flags.
 - Phrase review work as expected behaviour to confirm. Attack wording ("try
   to break it") has tripped the provider's content filter, which replaces the
   answer with "This content can't be shown".
-- `monash-worker` appends the handback rules to every prompt: stay in scope,
-  no push, pull request, post or message, cite evidence, and end with
-  `HANDBACK: done` or `HANDBACK: blocked: <reason>`. Leave those out of the
-  brief.
+- Leave the handback rules out of the brief: `monash-worker` appends them,
+  and each unit's `prompt.md` shows the exact text the worker received.
 
 ## Run exec workers
 
 ```sh
-monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo \
-  [--effort high] [--sandbox read-only] [--timeout-seconds 1800]
+monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
 ```
 
 - Fan out by running one call per unit at the same time, each with its own new
@@ -76,7 +73,8 @@ receipt prints as one JSON line on stdout.
 | 2 | `usage` | Refused before launch (bad flag, missing brief, used `--out`). |
 | 3 | `blocked` | Worker handed back blocked; `handback.reason` says why. |
 | 4 | `timed_out` | No handback within the bound. |
-| 5 | `failed` | Launcher refused or exited nonzero, wrong model, or no `HANDBACK` line; see `problems`. |
+| 5 | `failed` | Launcher did not start, refused or exited nonzero, wrong model, or no `HANDBACK` line; see `problems`. |
+| 130 | `interrupted` | The caller interrupted the run; the worker's process group was stopped. |
 
 ## Run a pane worker
 
@@ -122,9 +120,9 @@ Coordinator, after the checks in the next section pass:
 3. Commit and push the branch, then open the pull request ready for review
    with that body. Ready, not draft: this replaces the draft default for
    these pull requests.
-4. Drive it with pstack's Babysit playbook (`poteto-mode`
-   `playbooks/babysit.md`, mode `drive`) until the forge reports it
-   merge-ready. Merging stays Nathan's call.
+4. Drive it with the Babysit playbook of pstack's `poteto-mode` skill, in
+   `drive` mode, until the forge reports it merge-ready. Merging stays
+   Nathan's call.
 
 When the coordinator writes the change itself, it runs steps 1 and 2 too.
 
@@ -145,7 +143,6 @@ When the coordinator writes the change itself, it runs steps 1 and 2 too.
 - A pane worker's tier is client-side evidence: the request asked for
   priority and the turns completed. Whether Azure served priority is not
   observed.
-
 - `monash doctor` reports Herdr `failed` while `herdr status --json` shows the
   server running: the doctor reads plain `herdr status` as JSON. Trust
   `herdr status --json`.
