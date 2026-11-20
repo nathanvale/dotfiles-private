@@ -362,6 +362,17 @@ def stop_pane_group(pid: int) -> None:
             time.sleep(PANE_POLL_SECONDS)
 
 
+def discover_pid(pid_file: Path, seconds: float) -> Optional[int]:
+    """The pane job's pid, waiting briefly: a command can reach the shell just before a failure."""
+    grace = time.monotonic() + seconds
+    while True:
+        if pid_file.is_file() and pid_file.read_text().strip():
+            return int(pid_file.read_text().strip())
+        if time.monotonic() >= grace:
+            return None
+        time.sleep(PANE_POLL_SECONDS)
+
+
 def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out: Path, cwd: Path,
                 timeout_seconds: int) -> tuple[bool, Optional[str], Optional[int], dict[str, object]]:
     """Run the same codex command in a new unfocused Herdr tab; close it once the result is captured."""
@@ -424,11 +435,9 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
                        timeout=min(HERDR_CALL_SECONDS, remaining()))
         except OSError as error:
             # The command may have reached the shell before the call failed: stop any worker it started.
-            grace = time.monotonic() + PANE_STOP_GRACE_SECONDS
-            while time.monotonic() < grace and not (pid_file.is_file() and pid_file.read_text().strip()):
-                time.sleep(PANE_POLL_SECONDS)
-            if pid_file.is_file() and pid_file.read_text().strip():
-                stop_pane_group(int(pid_file.read_text().strip()))
+            pid = discover_pid(pid_file, PANE_STOP_GRACE_SECONDS)
+            if pid is not None:
+                stop_pane_group(pid)
                 raise OSError(0, f"{error.strerror}; the worker had started and was stopped") from error
             raise
         while True:
@@ -445,6 +454,8 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
                 break
             if exit_file.is_file():
                 exit_code = int(exit_file.read_text().strip() or "-1")
+                if remaining() <= 0:  # observed after the bound, however it got here: not accepted
+                    exit_code, timed_out = None, True
                 break
             if pid is None and time.monotonic() - started > min(PANE_START_SECONDS, timeout_seconds):
                 start_error = f"the pane did not start the worker within {PANE_START_SECONDS} seconds"
@@ -457,6 +468,9 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
     except OSError as error:
         start_error = error.strerror or type(error).__name__
     except BaseException:
+        # An interrupt can land while pane run is in flight, before the loop has read the pid.
+        if pid is None and facts.get("pane"):
+            pid = discover_pid(pid_file, PANE_STOP_GRACE_SECONDS)
         if pid is not None:
             stop_pane_group(pid)
         raise

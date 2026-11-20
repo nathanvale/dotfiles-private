@@ -633,5 +633,24 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(receipt["launch"]["herdr"]["close_error"], "herdr tab close timed out")
 
 
+    def test_interrupt_during_pane_run_stops_a_started_worker(self) -> None:
+        env = self.env(mode="hang", extra_env={"FAKE_HERDR_RUN_RETURNS_AFTER": 20})
+        worker = subprocess.Popen([sys.executable, str(self.bin / "monash-worker"), "run", "--pane", "--brief",
+                                   str(self.brief), "--out", str(self.out), "--cwd", str(self.cwd)],
+                                  env=env, stdout=subprocess.PIPE, text=True)
+        child_file = self.root / "child.pid"
+        deadline = time.monotonic() + 30
+        while not child_file.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(child_file.is_file(), "fake codex never started its child")
+        child = int(child_file.read_text())
+        self.addCleanup(kill_leftover_group, child)
+        worker.send_signal(signal.SIGINT)  # herdr pane run is still in flight
+        stdout, _ = worker.communicate(timeout=60)
+        self.assertEqual(worker.returncode, 130)
+        self.assertEqual(json.loads(stdout)["status"], "interrupted")
+        self.assertTrue(process_gone(child))
+
+
 if __name__ == "__main__":
     unittest.main()
