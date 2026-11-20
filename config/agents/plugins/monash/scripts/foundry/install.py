@@ -497,8 +497,8 @@ def worker_home_plan(home: Path, files: dict[str, str]) -> list[str]:
     if not os.path.lexists(home):
         return ["create", *files]
     info = os.lstat(home)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise InstallRefusal(f"refusing worker Codex home that is not a private directory you own: {home}")
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise InstallRefusal(f"refusing worker Codex home that is not a private directory with mode 700 that you own: {home}")
     writes = []
     for name, text in files.items():
         path = home / name
@@ -794,8 +794,9 @@ def main(argv: list[str]) -> int:
     if not worker_home.is_absolute():
         worker_home = Path.cwd() / worker_home
     try:
-        if worker_home.resolve() == (Path.home() / ".codex").resolve():
-            raise InstallRefusal("--worker-home must not be the main Codex home ~/.codex")
+        main_homes = {Path.home() / ".codex", *([Path(os.environ["CODEX_HOME"])] if os.environ.get("CODEX_HOME") else [])}
+        if any(worker_home.resolve().is_relative_to(main.expanduser().resolve()) for main in main_homes):
+            raise InstallRefusal("--worker-home must not be the main Codex home or inside it")
         if args.check:
             return check(source, target, bin_dir, args.host_role, worker_home)
         return install(source, target, bin_dir, baseline, args.host_role, args.dry_run, worker_home)

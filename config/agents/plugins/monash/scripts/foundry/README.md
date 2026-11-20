@@ -787,8 +787,9 @@ monash-sol` worker in the worker Codex home `~/.codex-monash-sol`, bounds it,
 and writes a receipt from the thread's session record; `prepare` and `check`
 serve Herdr pane workers. `install.py` creates that home's `config.toml` (the
 provider block from `monash-codex-desktop`) and `monash-sol.config.toml`,
-refuses files it does not manage, and `--check` verifies both; `--worker-home`
-selects another home for tests. The agent-facing workflow is
+refuses files it does not manage, a home that is not mode 700, and a home
+equal to or inside `~/.codex` or `$CODEX_HOME`; `--check` verifies both files.
+`--worker-home` selects another home for tests. The agent-facing workflow is
 [`../../skills/monash-foundry/workers.md`](../../skills/monash-foundry/workers.md).
 
 ## Output and ownership

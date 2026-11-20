@@ -493,11 +493,26 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.assert_check_failure(checked)
         self.assertIn(f"worker Codex file missing or out of date: {profile}", checked.stderr)
 
-    def test_worker_home_refuses_the_main_codex_home(self) -> None:
-        result = self.run_installer("--host-role", "mini", "--worker-home", str(Path.home() / ".codex"))
-        self.assert_refusal(result)
-        self.assertIn("must not be the main Codex home", result.stderr)
-        self.assertFalse(os.path.lexists(self.prefix))
+    def test_worker_home_refuses_the_main_codex_home_and_anything_inside_it(self) -> None:
+        # CODEX_HOME names the main home here, so even a broken installer writes only in the temp root.
+        main = self.root / "main codex home"
+        main.mkdir()
+        for home in (main, main / "worker"):
+            with self.subTest(home=home):
+                result = self.run_installer("--host-role", "mini", "--worker-home", str(home),
+                                            env_overrides={"CODEX_HOME": str(main)})
+                self.assert_refusal(result)
+                self.assertIn("must not be the main Codex home or inside it", result.stderr)
+                self.assertFalse(os.path.lexists(self.prefix))
+                self.assertEqual(list(main.iterdir()), [])
+
+    def test_worker_home_check_requires_mode_700(self) -> None:
+        self.install_initial()
+        os.chmod(self.worker_home, 0o500)
+        self.addCleanup(os.chmod, self.worker_home, 0o700)
+        checked = self.run_installer("--check", "--host-role", "mini")
+        self.assert_check_failure(checked)
+        self.assertIn("not a private directory with mode 700 that you own", checked.stderr)
 
     def test_remote_helper_is_a_hashed_executable_data_payload(self) -> None:
         target = self.install_initial()

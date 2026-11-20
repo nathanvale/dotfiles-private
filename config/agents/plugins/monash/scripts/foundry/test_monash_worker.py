@@ -43,8 +43,8 @@ if os.environ.get('FAKE_SESSION', '1') == '1':
     sessions.mkdir(parents=True, exist_ok=True)
     settings = {'model': os.environ.get('FAKE_ROUTE_MODEL', 'gpt-6.1-sol'),
                 'model_provider_id': os.environ.get('FAKE_PROVIDER', 'monash_foundry'),
-                'service_tier': 'priority', 'reasoning_effort': 'high',
-                'permission_profile': {'type': 'managed', 'network': 'enabled'}}
+                'service_tier': os.environ.get('FAKE_TIER', 'priority'), 'reasoning_effort': 'high',
+                'permission_profile': {'type': 'managed', 'network': os.environ.get('FAKE_NETWORK', 'enabled')}}
     (sessions / f'rollout-2026-11-20T13-56-00-{thread}.jsonl').write_text(json.dumps(
         {'type': 'event_msg', 'payload': {'type': 'thread_settings_applied', 'thread_settings': settings}}) + '\\n')
 if mode == 'hang':
@@ -178,6 +178,29 @@ class MonashWorkerTest(unittest.TestCase):
         code, receipt = self.run_unit(message="HANDBACK: done", route_model="gpt-5.5")
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"], ["route ran gpt-5.5, not the requested gpt-6.1-sol"])
+
+    def test_receipt_records_the_tier_and_network_the_session_applied(self) -> None:
+        code, receipt = self.run_unit(message="HANDBACK: done",
+                                      extra_env={"FAKE_TIER": "default", "FAKE_NETWORK": "restricted"})
+        self.assertEqual(code, 0)
+        self.assertEqual((receipt["route"]["service_tier"], receipt["route"]["network"]), ("default", "restricted"))
+
+    def test_check_accepts_a_receipt_written_before_the_worker_home(self) -> None:
+        # Independent oracle: a 0.2.x exec receipt's launch record, which has no codex_home.
+        self.out.mkdir()
+        (self.out / "last-message.md").write_text("HANDBACK: done\n")
+        launch = {"agent": "codex", "effort": "high", "sandbox": "read-only", "cwd": str(self.cwd),
+                  "exit_code": 0, "start_error": None, "timed_out": False, "timeout_seconds": 1800,
+                  "duration_seconds": 12.0}
+        (self.out / "receipt.json").write_text(json.dumps({"schema_version": 1, "status": "done",
+                                                            "requested_model": "gpt-6.1-sol", "launch": launch}))
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 0, receipt)
+        self.assertIsNone(receipt["route"])
+        launch["timed_out"] = True
+        (self.out / "receipt.json").write_text(json.dumps({"schema_version": 1, "launch": launch}))
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 4)
 
     def test_route_on_another_provider_fails(self) -> None:
         code, receipt = self.run_unit(message="HANDBACK: done", extra_env={"FAKE_PROVIDER": "openai"})

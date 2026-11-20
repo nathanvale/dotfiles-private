@@ -132,7 +132,9 @@ def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[st
     """Build the receipt from files on disk; `launch` is None for a pane worker."""
     handback = read_handback(out)
     events = read_events(out)
-    route = read_route(Path(str(launch["codex_home"])), events["thread_id"]) if launch is not None else None
+    # A receipt from before the worker home (0.2.x) has no codex_home and no session record to re-read.
+    codex_home = launch.get("codex_home") if launch is not None else None
+    route = read_route(Path(str(codex_home)), events["thread_id"]) if codex_home else None
     problems: list[str] = []
     if launch is not None:
         if launch["start_error"]:
@@ -141,9 +143,9 @@ def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[st
             problems.append(f"no handback within {launch['timeout_seconds']} seconds")
         elif launch["exit_code"] != 0:
             problems.append(f"codex exited {launch['exit_code']}; read {CODEX_LOG_FILE}")
-        if route is None:
-            problems.append(f"no session record for thread {events['thread_id']} in {launch['codex_home']}")
-        else:
+        if codex_home and route is None:
+            problems.append(f"no session record for thread {events['thread_id']} in {codex_home}")
+        elif route is not None:
             if route["model"] != model:
                 problems.append(f"route ran {route['model']}, not the requested {model}")
             if route["provider"] != WORKER_PROVIDER:
@@ -297,7 +299,7 @@ def check(args: argparse.Namespace) -> int:
     return write_receipt(out, judge(out, str(model), launch))
 
 
-LAUNCH_KEYS = ("codex_home", "exit_code", "start_error", "timed_out", "timeout_seconds")
+LAUNCH_KEYS = ("exit_code", "start_error", "timed_out", "timeout_seconds")
 
 
 def read_recorded_receipt(out: Path) -> Optional[dict[str, object]]:
