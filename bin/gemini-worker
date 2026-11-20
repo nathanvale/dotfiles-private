@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+"""Hand one bounded unit to a headless Antigravity CLI (agy) worker on Gemini 4 Neon and check its handback.
+
+`run` sends a brief as one `agy` print-mode turn on Nathan's Google AI subscription
+login, inside agy's terminal sandbox, enforces a wall-clock bound, and writes a
+receipt from agy's own stream and log. `--pane` runs the same command in a new
+unfocused Herdr tab Nathan can watch. `check` judges an output directory again.
+One call is one unit; a coordinator fans out by running several calls at once.
+
+  gemini-worker run --pane --brief BRIEF.md --out OUT_DIR --cwd /abs/worktree
+
+Before use:
+- Sign in once by running `agy` interactively. Workers share that login's five-hour
+  and weekly quota with Nathan's own Antigravity use. API keys never reach a worker.
+- The sandbox writes only in --cwd, /tmp and build caches, and has no network
+  unless --allow-domain names a host. Put inputs on disk.
+- A git worktree's repository is mounted read-only, so git reads work and the
+  worker cannot commit. The coordinator reviews the diff, commits and pushes.
+- Each --out holds brief.md, prompt.md, input.jsonl, events.jsonl, stderr.log,
+  agy.log, last-message.md and receipt.json. Exit codes: 0 done, 2 usage,
+  3 blocked, 4 timed_out, 5 failed, 130 interrupted.
+
+The public contract (flags, handback rules, exit codes, receipt shape) mirrors
+`monash-worker` in the Monash plugin. That launcher is bound to Codex and the
+Monash route, so this personal worker keeps its own copy of the pane runner.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from typing import Optional
+
+
+SCHEMA_VERSION = 1
+AGENT = "agy"
+DEFAULT_MODEL = "gemini-4-neon-high"
+DEFAULT_TIMEOUT_SECONDS = 1800
+KILL_GRACE_SECONDS = 10
+VERSION_SECONDS = 15
+
+BRIEF_FILE = "brief.md"
+PROMPT_FILE = "prompt.md"
+INPUT_FILE = "input.jsonl"
+EVENTS_FILE = "events.jsonl"
+STDERR_FILE = "stderr.log"
+AGY_LOG_FILE = "agy.log"
+HANDBACK_FILE = "last-message.md"
+RECEIPT_FILE = "receipt.json"
+RUN_SCRIPT = "run.sh"
+PID_FILE = "worker.pid"
+EXIT_CODE_FILE = "exit-code"
+PANE_START_SECONDS = 30
+HERDR_CALL_SECONDS = 30
+HERDR_CLOSE_SECONDS = 10
+PANE_STOP_GRACE_SECONDS = 3
+PANE_POLL_SECONDS = 0.2
+DEFAULT_HERDR_SESSION = "default"
+
+# The worker sees only these names. API keys never reach it, so it cannot fall onto per-token billing.
+ENV_NAMES = ("HOME", "USER", "LOGNAME", "PATH", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR")
+# agy logs this when the request goes to the Code Assist backend that serves subscription logins.
+SUBSCRIPTION_ROUTE = re.compile(r"\bCCPA\b")
+RESOLVED_MODEL = re.compile(r"Resolving model (\S+)")
+DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
+
+HANDBACK_RULES = """
+---
+Handback rules (added by gemini-worker):
+- Stay inside this brief. Do not push, open or edit pull requests, post, or message anyone.
+- Your final message is the handback. Cite evidence as path:line, or as a command and its output.
+- End the final message with exactly one of these lines:
+  HANDBACK: done
+  HANDBACK: blocked: <one-line reason>
+"""
+HANDBACK_PREFIX = "HANDBACK:"
+HANDBACK_LINE = re.compile(rf"^{HANDBACK_PREFIX} (?:(?P<done>done)|blocked: (?P<reason>\S.*))$")
+
+EXIT = {"done": 0, "usage": 2, "blocked": 3, "timed_out": 4, "failed": 5, "interrupted": 130}
+
+
+class UsageError(Exception):
+    pass
+
+
+def settings(domains: list[str], read_paths: list[str]) -> dict[str, object]:
+    """Per-run settings, never saved: no paid overage credits; network only to the named domains."""
+    allow = [f"read_url({domain})" for domain in domains] + [f"read_file({path})" for path in read_paths]
+    return {"useG1Credits": False, "permissions": {"allow": allow}}
+
+
+def agy_argv(agy: str, model: str, timeout_seconds: int, out: Path, domains: list[str],
+             read_paths: list[str]) -> list[str]:
+    return [agy, "--input-format", "stream-json", "--output-format", "stream-json",
+            "--model", model, "--sandbox", "--print-timeout", f"{timeout_seconds}s",
+            "--log-file", str(out / AGY_LOG_FILE), "--settings", json.dumps(settings(domains, read_paths))]
+
+
+def git_read_paths(cwd: Path) -> list[str]:
+    """A worktree's repository lives outside it; mount it read-only so git works in the sandbox."""
+    git = shutil.which("git")
+    if git is None:
+        return []
+    try:
+        result = subprocess.run([git, "-C", str(cwd), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, timeout=VERSION_SECONDS)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    common = Path(result.stdout.strip()).resolve() if result.returncode == 0 and result.stdout.strip() else None
+    if common is None or common.is_relative_to(cwd.resolve()):
+        return []
+    return [str(common)]
+
+
+def read_handback(out: Path) -> dict[str, Optional[str]]:
+    path = out / HANDBACK_FILE
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    if not text.strip():
+        return {"status": None, "reason": "no final message was written"}
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    match = HANDBACK_LINE.match(lines[-1])
+    if match and any(line.startswith(HANDBACK_PREFIX) for line in lines[:-1]):
+        return {"status": None, "reason": "final message has more than one HANDBACK line"}
+    if match:
+        return {"status": "done" if match.group("done") else "blocked", "reason": match.group("reason")}
+    if any(line.startswith(HANDBACK_PREFIX) for line in lines):
+        return {"status": None, "reason": "final line is not an exact HANDBACK marker"}
+    return {"status": None, "reason": "final message has no HANDBACK line"}
+
+
+def read_events(out: Path) -> dict[str, object]:
+    """The init model and the final result from agy's stream-json output."""
+    found: dict[str, object] = {"init_model": None, "result": None}
+    path = out / EVENTS_FILE
+    if not path.is_file():
+        return found
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("event") == "init" and isinstance(event.get("init"), dict):
+            found["init_model"] = event["init"].get("model")
+        elif event.get("event") == "result" and isinstance(event.get("result"), dict):
+            found["result"] = event["result"]
+    return found
+
+
+def read_route(out: Path) -> dict[str, object]:
+    """What agy's own log says it resolved and where it sent the request."""
+    path = out / AGY_LOG_FILE
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    return {"resolved_models": sorted(set(RESOLVED_MODEL.findall(text))),
+            "backend": "subscription" if SUBSCRIPTION_ROUTE.search(text) else None}
+
+
+def write_handback(out: Path) -> None:
+    """agy has no output-file flag: the result event's response is the handback."""
+    result = read_events(out)["result"]
+    if isinstance(result, dict) and isinstance(result.get("response"), str):
+        (out / HANDBACK_FILE).write_text(result["response"], encoding="utf-8")
+
+
+def judge(out: Path, model: str, launch: Optional[dict[str, object]]) -> dict[str, object]:
+    handback = read_handback(out)
+    events = read_events(out)
+    result = events["result"] if isinstance(events["result"], dict) else None
+    route = {"init_model": events["init_model"], **read_route(out)}
+    denied = (result or {}).get("denied_actions") or []
+    problems: list[str] = []
+    if launch is not None:
+        if launch["start_error"]:
+            problems.append(f"agy did not start: {launch['start_error']}")
+        elif launch["timed_out"]:
+            problems.append(f"no handback within {launch['timeout_seconds']} seconds")
+        elif launch["exit_code"] is None:
+            problems.append(f"agy ended without an exit code (was its pane closed?); read {STDERR_FILE}")
+        elif launch["exit_code"] != 0:
+            problems.append(f"agy exited {launch['exit_code']}; read {STDERR_FILE}")
+    if result is None:
+        problems.append(f"no result event in {EVENTS_FILE}")
+    elif result.get("status") != "SUCCESS":
+        problems.append(f"agy result status is {result.get('status')}, not SUCCESS")
+    if denied:
+        # Headless agy denies what it cannot prompt for and still exits 0; that is not a result.
+        problems.append(f"agy denied {len(denied)} action(s) it could not ask about; read {STDERR_FILE}")
+    if route["init_model"] != model:
+        problems.append(f"agy started on {route['init_model']}, not the requested {model}")
+    if not route["resolved_models"]:
+        problems.append(f"{AGY_LOG_FILE} records no resolved model")
+    for other in (name for name in route["resolved_models"] if name != model):
+        problems.append(f"agy resolved {other}, not the requested {model}")
+    if route["backend"] != "subscription":
+        problems.append(f"{AGY_LOG_FILE} does not show the subscription (CCPA) route")
+    if handback["status"] is None:
+        problems.append(str(handback["reason"]))
+    if launch is not None and launch["timed_out"]:
+        status = "timed_out"
+    elif problems:
+        status = "failed"
+    else:
+        status = str(handback["status"])
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "problems": problems,
+        "requested_model": model,
+        "route": route,
+        "conversation_id": (result or {}).get("conversation_id"),
+        "usage": (result or {}).get("usage"),
+        "denied_actions": denied,
+        "handback": handback,
+        "launch": launch,
+        "out": str(out),
+        "handback_file": str(out / HANDBACK_FILE),
+    }
+
+
+def write_receipt(out: Path, receipt: dict[str, object]) -> int:
+    (out / RECEIPT_FILE).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(receipt))
+    return EXIT[str(receipt["status"])]
+
+
+def prepare_out(out: Path) -> None:
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise UsageError(f"--out {out} already holds results; choose a new directory per unit")
+    out.mkdir(parents=True, exist_ok=True)
+
+
+def compose(brief_arg: str, out_arg: str) -> Path:
+    """Copy the brief into a fresh out directory and write the prompt and agy's stdin."""
+    brief = Path(brief_arg).expanduser()
+    try:
+        text = brief.read_text(encoding="utf-8") if brief.is_file() else ""
+    except UnicodeDecodeError as error:
+        raise UsageError(f"--brief {brief} is not UTF-8 text") from error
+    if not text.strip():
+        raise UsageError(f"--brief {brief} is missing or empty")
+    out = Path(out_arg).expanduser().absolute()
+    prepare_out(out)
+    (out / BRIEF_FILE).write_text(text, encoding="utf-8")
+    prompt = text.rstrip("\n") + "\n" + HANDBACK_RULES
+    (out / PROMPT_FILE).write_text(prompt, encoding="utf-8")
+    # One stream-json user message: no shell quoting, no argument length limit.
+    (out / INPUT_FILE).write_text(json.dumps({"event": "user", "message": {"content": prompt}}) + "\n",
+                                  encoding="utf-8")
+    return out
+
+
+def worker_environment() -> dict[str, str]:
+    return {name: os.environ[name] for name in ENV_NAMES if name in os.environ}
+
+
+def agy_version(agy: str) -> Optional[str]:
+    """agy updates itself in the background, so each receipt records the version it launched."""
+    try:
+        result = subprocess.run([agy, "--version"], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, timeout=VERSION_SECONDS,
+                                env=worker_environment())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() or None
+
+
+def signal_group(process: subprocess.Popen[bytes], sig: signal.Signals) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def stop(process: subprocess.Popen[bytes]) -> None:
+    """Stop agy and every process left in its group, even ones that ignore SIGTERM."""
+    signal_group(process, signal.SIGTERM)
+    try:
+        process.wait(timeout=KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    signal_group(process, signal.SIGKILL)
+    process.wait()
+
+
+def run_exec(argv: list[str], cwd: Path, out: Path,
+             timeout_seconds: int) -> tuple[bool, Optional[str], Optional[int]]:
+    with (out / EVENTS_FILE).open("wb") as events, (out / STDERR_FILE).open("wb") as log, \
+            (out / INPUT_FILE).open("rb") as stdin:
+        timed_out, start_error, exit_code = False, None, None
+        try:
+            process = subprocess.Popen(argv, stdin=stdin, stdout=events, stderr=log, cwd=cwd,
+                                       env=worker_environment(), start_new_session=True)
+        except OSError as error:
+            start_error = error.strerror or type(error).__name__
+        else:
+            try:
+                exit_code = process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                stop(process)
+                exit_code = process.returncode
+            except BaseException:
+                stop(process)  # the worker runs in its own session, so Ctrl-C would not reach it
+                raise
+    return timed_out, start_error, exit_code
+
+
+class Herdr:
+    """The Herdr CLI for one named session; every call is explicit about its session."""
+
+    def __init__(self, session: str):
+        self.session = session
+        binary = shutil.which("herdr")
+        if binary is None:
+            raise UsageError("herdr is not on PATH; install Herdr, or run without --pane and say "
+                             "that no Herdr session was available")
+        self.binary = binary
+
+    def call(self, *args: str, timeout: float = HERDR_CALL_SECONDS) -> dict[str, object]:
+        if timeout <= 0:
+            raise OSError(0, f"herdr {' '.join(args[:2])} timed out")
+        try:
+            result = subprocess.run([self.binary, "--session", self.session, *args], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise OSError(0, f"herdr {' '.join(args[:2])} timed out") from error
+        if result.returncode != 0:
+            raise OSError(0, f"herdr {' '.join(args[:2])} exited {result.returncode}")
+        try:
+            value = json.loads(result.stdout) if result.stdout.strip() else {}
+        except json.JSONDecodeError as error:
+            raise OSError(0, f"herdr {' '.join(args[:2])} returned unreadable output") from error
+        return value if isinstance(value, dict) else {}
+
+    def require_running(self) -> None:
+        try:
+            server = self.call("status", "--json").get("server") or {}
+        except (OSError, subprocess.TimeoutExpired):
+            server = {}
+        if not (isinstance(server, dict) and server.get("running")):
+            raise UsageError(f"no Herdr session '{self.session}' is running; start Herdr (or name a running "
+                             "one with --herdr-session), or run without --pane and say that no Herdr "
+                             "session was available")
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stop_pane_group(pid: int) -> None:
+    """Stop the pane's worker job (its own process group under the pane's shell)."""
+    try:
+        group = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    for sig, grace in ((signal.SIGTERM, KILL_GRACE_SECONDS), (signal.SIGKILL, 0)):
+        try:
+            os.killpg(group, sig)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + grace
+        while alive(pid) and time.monotonic() < deadline:
+            time.sleep(PANE_POLL_SECONDS)
+
+
+def discover_pid(pid_file: Path, seconds: float) -> Optional[int]:
+    """The pane job's pid, waiting briefly: a command can reach the shell just before a failure."""
+    grace = time.monotonic() + seconds
+    while True:
+        if pid_file.is_file() and pid_file.read_text().strip():
+            return int(pid_file.read_text().strip())
+        if time.monotonic() >= grace:
+            return None
+        time.sleep(PANE_POLL_SECONDS)
+
+
+def pane_script(argv: list[str], out: Path, cwd: Path) -> str:
+    """The pane's job: agy's stream goes to events.jsonl and through `render` so Nathan can read it."""
+    q = shlex.quote
+    exit_partial = out / f"{EXIT_CODE_FILE}.partial"
+    # Written as expansions, so no environment value reaches the file.
+    assignments = " ".join(f'${{{name}:+"{name}=${name}"}}' for name in ENV_NAMES)
+    render = f"{q(sys.executable)} {q(str(Path(__file__).resolve()))} render"
+    return "\n".join((
+        "#!/bin/sh",
+        "# gemini-worker pane unit; every path below is shell-quoted.",
+        f"echo $$ > {q(str(out / PID_FILE))}",
+        f"cd {q(str(cwd))} || {{ echo 2 > {q(str(out / EXIT_CODE_FILE))}; exit 2; }}",
+        # env -i: the pane's own shell environment never reaches the worker.
+        f"( env -i {assignments} {' '.join(q(arg) for arg in argv)} < {q(str(out / INPUT_FILE))} "
+        f"2> {q(str(out / STDERR_FILE))}; echo $? > {q(str(exit_partial))} ) "
+        f"| tee {q(str(out / EVENTS_FILE))} | {render}",
+        f"mv {q(str(exit_partial))} {q(str(out / EXIT_CODE_FILE))}",
+        "",
+    ))
+
+
+def run_in_pane(herdr: Herdr, argv: list[str], out: Path, cwd: Path,
+                timeout_seconds: int) -> tuple[bool, Optional[str], Optional[int], dict[str, object]]:
+    """Run the agy command in a new unfocused Herdr tab; close it once the result is captured."""
+    q = shlex.quote
+    exit_file, pid_file = out / EXIT_CODE_FILE, out / PID_FILE
+    script = out / RUN_SCRIPT
+    script.write_text(pane_script(argv, out, cwd), encoding="utf-8")
+    facts: dict[str, object] = {"session": herdr.session}
+    timed_out, start_error, exit_code, pid = False, None, None, None
+    started = time.monotonic()
+
+    def remaining() -> float:
+        return timeout_seconds - (time.monotonic() - started)
+
+    try:
+        created = herdr.call("tab", "create", "--no-focus", "--label", f"neon: {out.name}", "--cwd", str(cwd),
+                             timeout=min(HERDR_CALL_SECONDS, remaining()))
+        result = created.get("result") or {}
+        facts["tab"] = (result.get("tab") or {}).get("tab_id")
+        facts["pane"] = (result.get("root_pane") or {}).get("pane_id")
+        if not facts["tab"] or not facts["pane"]:
+            raise OSError(0, "herdr tab create returned no tab or pane")
+        # Creation is not readiness: send the command only once the pane's shell owns the foreground.
+        ready_by = started + min(PANE_START_SECONDS, timeout_seconds)
+        while True:
+            try:
+                info = (herdr.call("pane", "process-info", "--pane", str(facts["pane"]),
+                                   timeout=min(HERDR_CALL_SECONDS, ready_by - time.monotonic())).get("result") or {})
+            except OSError:
+                info = {}
+            info = info.get("process_info") or {}
+            if info.get("shell_pid") and info.get("foreground_process_group_id") == info.get("shell_pid"):
+                break
+            if time.monotonic() >= ready_by:
+                raise OSError(0, "the pane's shell was not ready")
+            time.sleep(PANE_POLL_SECONDS)
+        if remaining() <= 0:
+            raise TimeoutError
+        try:
+            herdr.call("pane", "run", str(facts["pane"]), f"sh {q(str(script))}",
+                       timeout=min(HERDR_CALL_SECONDS, remaining()))
+        except OSError as error:
+            pid = discover_pid(pid_file, PANE_STOP_GRACE_SECONDS)
+            if pid is not None:
+                stop_pane_group(pid)
+                raise OSError(0, f"{error.strerror}; the worker had started and was stopped") from error
+            raise
+        while True:
+            if pid is None and pid_file.is_file() and pid_file.read_text().strip():
+                pid = int(pid_file.read_text().strip())
+            if remaining() <= 0:  # the bound comes first: a result that lands after it is not accepted
+                timed_out = True
+                if pid is None and pid_file.is_file() and pid_file.read_text().strip():
+                    pid = int(pid_file.read_text().strip())
+                if pid is not None:
+                    stop_pane_group(pid)
+                break
+            if exit_file.is_file():
+                exit_code = int(exit_file.read_text().strip() or "-1")
+                break
+            if pid is None and time.monotonic() - started > min(PANE_START_SECONDS, timeout_seconds):
+                start_error = f"the pane did not start the worker within {PANE_START_SECONDS} seconds"
+                break
+            if pid is not None and not alive(pid) and not exit_file.is_file():
+                break
+            time.sleep(PANE_POLL_SECONDS)
+    except TimeoutError:
+        timed_out = True
+    except OSError as error:
+        start_error = error.strerror or type(error).__name__
+    except BaseException:
+        if pid is None and facts.get("pane"):
+            pid = discover_pid(pid_file, PANE_STOP_GRACE_SECONDS)
+        if pid is not None:
+            stop_pane_group(pid)
+        raise
+    finally:
+        if facts.get("tab"):
+            try:
+                herdr.call("tab", "close", str(facts["tab"]),
+                           timeout=max(1.0, min(HERDR_CLOSE_SECONDS, remaining())))
+            except (OSError, subprocess.TimeoutExpired) as error:
+                facts["close_error"] = getattr(error, "strerror", None) or type(error).__name__
+    return timed_out, start_error, exit_code, facts
+
+
+def run(args: argparse.Namespace) -> int:
+    cwd = Path(args.cwd).expanduser()
+    if not cwd.is_absolute() or not cwd.is_dir():
+        raise UsageError(f"--cwd {cwd} must be an existing absolute directory")
+    if args.timeout_seconds <= 0:
+        raise UsageError("--timeout-seconds must be positive")
+    for domain in args.allow_domain:
+        if not DOMAIN.match(domain):
+            raise UsageError(f"--allow-domain {domain!r} must be a bare host name such as api.github.com")
+    herdr = Herdr(args.herdr_session) if args.pane else None
+    if herdr is not None:
+        herdr.require_running()  # refuse before any unit file exists; never fall back to exec
+    out = compose(args.brief, args.out)
+    agy = shutil.which(AGENT)
+    read_paths = git_read_paths(cwd)
+    argv = agy_argv(agy or AGENT, args.model, args.timeout_seconds, out, args.allow_domain, read_paths)
+    version = agy_version(agy) if agy else None
+    started = time.monotonic()
+    pane_facts: Optional[dict[str, object]] = None
+    if agy is None:
+        timed_out, start_error, exit_code = False, f"{AGENT} is not on PATH", None
+    elif herdr is not None:
+        timed_out, start_error, exit_code, pane_facts = run_in_pane(herdr, argv, out, cwd, args.timeout_seconds)
+    else:
+        timed_out, start_error, exit_code = run_exec(argv, cwd, out, args.timeout_seconds)
+    if not timed_out:
+        write_handback(out)
+    launch = {
+        "agent": AGENT,
+        "agy_version": version,
+        "shape": "pane" if herdr is not None else "exec",
+        **({"herdr": pane_facts} if pane_facts is not None else {}),
+        "sandbox": "agy terminal sandbox",
+        "allow_domains": args.allow_domain,
+        "read_only_paths": read_paths,
+        "cwd": str(cwd),
+        "exit_code": exit_code,
+        "start_error": start_error,
+        "timed_out": timed_out,
+        "timeout_seconds": args.timeout_seconds,
+        "duration_seconds": round(time.monotonic() - started, 1),
+    }
+    return write_receipt(out, judge(out, args.model, launch))
+
+
+LAUNCH_KEYS = ("exit_code", "start_error", "timed_out", "timeout_seconds")
+
+
+def check(args: argparse.Namespace) -> int:
+    """Judge an out directory again; its recorded launch facts and model stay part of the verdict."""
+    out = Path(args.out).expanduser().absolute()
+    if not out.is_dir():
+        raise UsageError(f"--out {out} is not a directory")
+    path = out / RECEIPT_FILE
+    recorded: dict[str, object] = {}
+    if path.exists():
+        try:
+            recorded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise UsageError(f"{path} is not a readable receipt") from error
+    launch = recorded.get("launch") if isinstance(recorded, dict) else None
+    if launch is not None and not (isinstance(launch, dict) and all(key in launch for key in LAUNCH_KEYS)):
+        raise UsageError(f"{path} has a malformed launch record")
+    model = args.model or recorded.get("requested_model") or DEFAULT_MODEL
+    return write_receipt(out, judge(out, str(model), launch))
+
+
+def render(_args: argparse.Namespace) -> int:
+    """Turn agy's stream-json on stdin into readable pane output; never stop reading early."""
+    tool_seen: set[tuple[object, object]] = set()
+    for line in sys.stdin:
+        try:
+            event = json.loads(line)
+            kind = event.get("event")
+            if kind == "init":
+                init = event.get("init") or {}
+                print(f"[agy] model {init.get('model')} in {init.get('cwd')}", flush=True)
+            elif kind == "step_update":
+                step = event.get("step_update") or {}
+                if step.get("text_delta"):
+                    print(step["text_delta"], end="", flush=True)
+                elif step.get("step_type") == "tool" and (step.get("step_index"), step.get("tool_name")) not in tool_seen:
+                    tool_seen.add((step.get("step_index"), step.get("tool_name")))
+                    print(f"\n[tool] {step.get('tool_name')}", flush=True)
+            elif kind == "result":
+                result = event.get("result") or {}
+                print(f"\n[agy] {result.get('status')} in {result.get('duration_seconds')} s", flush=True)
+                for denied in result.get("denied_actions") or []:
+                    print(f"[agy] denied: {denied}", flush=True)
+        except (ValueError, AttributeError, TypeError):
+            print(line, end="", flush=True)
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="gemini-worker", description=__doc__,
+                                   formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = root.add_subparsers(dest="command", required=True)
+    run_command = commands.add_parser("run", help="run one brief as a headless agy worker")
+    run_command.add_argument("--brief", required=True, help="file holding the unit's brief")
+    run_command.add_argument("--out", required=True, help="new or empty directory for this unit's results")
+    run_command.add_argument("--cwd", required=True, help="absolute working directory for the worker")
+    run_command.add_argument("--model", default=DEFAULT_MODEL,
+                             help="agy model slug; effort is part of it (default: %(default)s)")
+    run_command.add_argument("--allow-domain", action="append", default=[], metavar="HOST",
+                             help="let sandboxed commands reach HOST (repeatable); default: no network")
+    run_command.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    run_command.add_argument("--pane", action="store_true",
+                             help="run in a new unfocused Herdr tab Nathan can watch; refuses without Herdr")
+    run_command.add_argument("--herdr-session", default=DEFAULT_HERDR_SESSION,
+                             help="Herdr session for --pane (default: %(default)s)")
+    run_command.set_defaults(handler=run)
+    check_command = commands.add_parser("check", help="judge an existing out directory again")
+    check_command.add_argument("--out", required=True)
+    check_command.add_argument("--model", help="default: the receipt's requested model, else " + DEFAULT_MODEL)
+    check_command.set_defaults(handler=check)
+    render_command = commands.add_parser("render", help="print agy stream-json from stdin as readable text")
+    render_command.set_defaults(handler=render)
+    return root
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        return args.handler(args)
+    except KeyboardInterrupt:
+        print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "interrupted"}))
+        return EXIT["interrupted"]
+    except UsageError as error:
+        print(json.dumps({"schema_version": SCHEMA_VERSION, "status": "usage", "message": str(error)}))
+        return EXIT["usage"]
+
+
+if __name__ == "__main__":
+    sys.exit(main())
