@@ -101,6 +101,9 @@ prepare_fixture() {
   cp "$REPO_ROOT/bin/dotfiles/herdr-defaults.py" "$FIXTURE_DOTFILES/bin/dotfiles/herdr-defaults.py"
   mkdir -p "$FIXTURE_DOTFILES/config/herdr"
   cp "$REPO_ROOT/config/herdr/coordinator-instructions.txt" "$FIXTURE_DOTFILES/config/herdr/coordinator-instructions.txt"
+  cp "$REPO_ROOT/bin/dotfiles/claude-settings.py" "$FIXTURE_DOTFILES/bin/dotfiles/claude-settings.py"
+  mkdir -p "$FIXTURE_DOTFILES/config/agents/claude"
+  cp "$REPO_ROOT/config/agents/claude/settings.json" "$FIXTURE_DOTFILES/config/agents/claude/settings.json"
 
   cat >"$FIXTURE_DOTFILES/bin/dotfiles/symlinks/symlinks_manage.sh" <<'EOF'
 #!/usr/bin/env bash

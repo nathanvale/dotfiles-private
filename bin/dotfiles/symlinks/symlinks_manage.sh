@@ -77,7 +77,8 @@ common_symlinks=(
 	# Both native Fallow handlers use the same upstream-generated script.
 	"${HOME}/.codex/hooks/fallow-gate.sh|${DOTFILES}/config/agents/claude/hooks/fallow-gate.sh"
 	"${HOME}/.claude/CLAUDE.md|${DOTFILES}/config/agents/claude/CLAUDE.md"
-	"${HOME}/.claude/settings.json|${DOTFILES}/config/agents/claude/settings.json"
+	# ~/.claude/settings.json is machine-owned: bin/dotfiles/claude-settings.py
+	# installs the tracked policy into it, because Claude rewrites that file.
 	"${HOME}/.claude/hooks|${DOTFILES}/config/agents/claude/hooks"
 )
 
