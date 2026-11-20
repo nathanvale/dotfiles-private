@@ -115,9 +115,8 @@ receipt prints as one JSON line on stdout.
 
 ## Known gaps
 
-- Fast exec workers need a launcher change: admit `service_tier=priority` as
-  a Codex native value. The tier costs more, so the change is Nathan's
-  decision.
+- Fast stays pane-only (Nathan, 20 November 2026): the launcher keeps
+  exec on the default tier.
 - A pane worker's tier is client-side evidence: the request asked for
   priority and the turns completed. Whether Azure served priority is not
   observed.
