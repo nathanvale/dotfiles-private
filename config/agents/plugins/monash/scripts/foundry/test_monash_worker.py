@@ -79,19 +79,19 @@ from pathlib import Path
 cfg = json.loads(Path(__file__).with_name('fake.json').read_text())
 argv = sys.argv[1:]
 call = {'argv': argv}
-if 'tab' in argv and 'create' in argv and cfg.get('HERDR_HANG_ON_CREATE'):
+if 'tab' in argv and 'create' in argv and cfg.get('FAKE_HERDR_HANG_ON_CREATE'):
     time.sleep(60)
-if 'tab' in argv and 'close' in argv and cfg.get('HERDR_WATCH'):
-    out = Path(cfg['HERDR_WATCH'])
+if 'tab' in argv and 'close' in argv and cfg.get('FAKE_HERDR_WATCH'):
+    out = Path(cfg['FAKE_HERDR_WATCH'])
     call['handback_present'] = (out / 'last-message.md').exists()
-with Path(cfg['HERDR_CALLS']).open('a') as log:
+with Path(cfg['FAKE_HERDR_CALLS']).open('a') as log:
     log.write(json.dumps(call) + '\\n')
 if 'status' in argv:
-    print(json.dumps({'server': {'running': cfg.get('HERDR_RUNNING', True)}}))
+    print(json.dumps({'server': {'running': cfg.get('FAKE_HERDR_RUNNING', True)}}))
 elif 'tab' in argv and 'create' in argv:
     print(json.dumps({'result': {'root_pane': {'pane_id': 'w9:p1'}, 'tab': {'tab_id': 'w9:t1'}}}))
 elif 'process-info' in argv:
-    foreground = 2 if cfg.get('HERDR_SHELL_BUSY') else 1
+    foreground = 2 if cfg.get('FAKE_HERDR_SHELL_BUSY') else 1
     print(json.dumps({'result': {'process_info': {'foreground_process_group_id': foreground, 'shell_pid': 1}}}))
 elif 'pane' in argv and 'run' in argv:
     command = ' '.join(argv[argv.index('run') + 2:])
@@ -99,7 +99,7 @@ elif 'pane' in argv and 'run' in argv:
                      HERDR_PANE_ID='w9:p1', HERDR_SESSION='default')
     subprocess.Popen(['sh', '-c', command], env=shell_env, start_new_session=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(float(cfg.get('HERDR_RUN_RETURNS_AFTER', 0)))
+    time.sleep(float(cfg.get('FAKE_HERDR_RUN_RETURNS_AFTER', 0)))
 """
 
 
@@ -158,10 +158,10 @@ class MonashWorkerTest(unittest.TestCase):
         """The worker's environment; the fake's settings go in fake.json, since the worker strips extras."""
         fake = {"WORKER_TEST_LOG": str(self.log), "FAKE_MODE": mode, "FAKE_MESSAGE": message,
                 "FAKE_ROUTE_MODEL": route_model, "WORKER_TEST_CHILD": str(self.root / "child.pid"),
-                "HERDR_CALLS": str(self.herdr_log), "HERDR_WATCH": str(self.out)}
+                "FAKE_HERDR_CALLS": str(self.herdr_log), "FAKE_HERDR_WATCH": str(self.out)}
         env = {"HOME": str(self.home), "PATH": f"{path_first}{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"}
         for name, value in (extra_env or {}).items():
-            (fake if name.startswith(("FAKE_", "HERDR_")) else env)[name] = value
+            (fake if name.startswith("FAKE_") else env)[name] = value
         (self.bin / "fake.json").write_text(json.dumps(fake), encoding="utf-8")
         return env
 
@@ -547,7 +547,7 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(receipt["problems"], ["route used provider openai, not monash_foundry"])
 
     def test_pane_run_refuses_without_a_running_herdr_session(self) -> None:
-        code, receipt = self.run_unit("--pane", message="HANDBACK: done", extra_env={"HERDR_RUNNING": False})
+        code, receipt = self.run_unit("--pane", message="HANDBACK: done", extra_env={"FAKE_HERDR_RUNNING": False})
         self.assertEqual(code, 2)
         self.assertIn("no Herdr session 'default' is running", receipt["message"])
         self.assertIn("start Herdr", receipt["message"])
@@ -589,20 +589,26 @@ class MonashWorkerTest(unittest.TestCase):
     def test_pane_herdr_call_that_hangs_still_writes_a_receipt_within_the_bound(self) -> None:
         started = time.monotonic()
         code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
-                                      extra_env={"HERDR_HANG_ON_CREATE": True})
+                                      extra_env={"FAKE_HERDR_HANG_ON_CREATE": True})
         self.assertLess(time.monotonic() - started, 15)
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"][0], "codex did not start: herdr tab create timed out")
 
-    def test_pane_result_after_the_bound_is_not_done(self) -> None:
-        code, receipt = self.run_unit("--pane", "--timeout-seconds", "1", message="HANDBACK: done",
-                                      extra_env={"HERDR_RUN_RETURNS_AFTER": 3})
-        self.assertNotEqual(receipt["status"], "done")
-        self.assertIn(code, (4, 5))
+    def test_pane_run_that_times_out_after_starting_the_worker_stops_it(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", mode="hang",
+                                      extra_env={"FAKE_HERDR_RUN_RETURNS_AFTER": 5})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0],
+                         "codex did not start: herdr pane run timed out; the worker had started and was stopped")
+        child_file = self.root / "child.pid"
+        self.assertTrue(child_file.is_file(), "fake codex did not start its child")
+        child = int(child_file.read_text())
+        self.addCleanup(kill_leftover_group, child)
+        self.assertTrue(process_gone(child))
 
     def test_pane_whose_shell_is_not_ready_gets_no_command(self) -> None:
         code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
-                                      extra_env={"HERDR_SHELL_BUSY": True})
+                                      extra_env={"FAKE_HERDR_SHELL_BUSY": True})
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"][0], "codex did not start: the pane's shell was not ready")
         self.assertNotIn("run", [call["argv"][3] for call in self.herdr_calls()])

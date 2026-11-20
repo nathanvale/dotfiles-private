@@ -53,6 +53,8 @@ PID_FILE = "worker.pid"
 EXIT_CODE_FILE = "exit-code"
 PANE_START_SECONDS = 30
 HERDR_CALL_SECONDS = 30
+HERDR_CLOSE_SECONDS = 10
+PANE_STOP_GRACE_SECONDS = 3
 PANE_POLL_SECONDS = 0.2
 DEFAULT_HERDR_SESSION = "default"
 
@@ -308,10 +310,11 @@ class Herdr:
         self.binary = binary
 
     def call(self, *args: str, timeout: float = HERDR_CALL_SECONDS) -> dict[str, object]:
+        if timeout <= 0:
+            raise OSError(0, f"herdr {' '.join(args[:2])} timed out")
         try:
             result = subprocess.run([self.binary, "--session", self.session, *args], stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                    timeout=max(0.5, timeout))
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
         except subprocess.TimeoutExpired as error:
             raise OSError(0, f"herdr {' '.join(args[:2])} timed out") from error
         if result.returncode != 0:
@@ -400,16 +403,28 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
             raise OSError(0, "herdr tab create returned no tab or pane")
         # Creation is not readiness: send the command only once the pane's shell owns the foreground.
         while True:
+            if time.monotonic() - started >= min(PANE_START_SECONDS, timeout_seconds):
+                raise OSError(0, "the pane's shell was not ready")
             info = (herdr.call("pane", "process-info", "--pane", str(facts["pane"]),
                                timeout=min(HERDR_CALL_SECONDS, remaining())).get("result") or {})
             info = info.get("process_info") or {}
             if info.get("shell_pid") and info.get("foreground_process_group_id") == info.get("shell_pid"):
                 break
-            if time.monotonic() - started > min(PANE_START_SECONDS, timeout_seconds):
-                raise OSError(0, "the pane's shell was not ready")
             time.sleep(PANE_POLL_SECONDS)
-        herdr.call("pane", "run", str(facts["pane"]), f"sh {q(str(script))}",
-                   timeout=min(HERDR_CALL_SECONDS, remaining()))
+        if remaining() <= 0:
+            raise TimeoutError
+        try:
+            herdr.call("pane", "run", str(facts["pane"]), f"sh {q(str(script))}",
+                       timeout=min(HERDR_CALL_SECONDS, remaining()))
+        except OSError as error:
+            # The command may have reached the shell before the call failed: stop any worker it started.
+            grace = time.monotonic() + PANE_STOP_GRACE_SECONDS
+            while time.monotonic() < grace and not (pid_file.is_file() and pid_file.read_text().strip()):
+                time.sleep(PANE_POLL_SECONDS)
+            if pid_file.is_file() and pid_file.read_text().strip():
+                stop_pane_group(int(pid_file.read_text().strip()))
+                raise OSError(0, f"{error.strerror}; the worker had started and was stopped") from error
+            raise
         while True:
             if pid is None and pid_file.is_file() and pid_file.read_text().strip():
                 pid = int(pid_file.read_text().strip())
@@ -428,6 +443,8 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
             if pid is not None and not alive(pid) and not exit_file.is_file():
                 break
             time.sleep(PANE_POLL_SECONDS)
+    except TimeoutError:
+        timed_out = True  # the bound ran out before the command was sent
     except OSError as error:
         start_error = error.strerror or type(error).__name__
     except BaseException:
@@ -437,7 +454,7 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
     finally:
         if facts.get("tab"):
             try:
-                herdr.call("tab", "close", str(facts["tab"]))
+                herdr.call("tab", "close", str(facts["tab"]), timeout=HERDR_CLOSE_SECONDS)
             except (OSError, subprocess.TimeoutExpired) as error:
                 facts["close_error"] = getattr(error, "strerror", None) or type(error).__name__
     return timed_out, start_error, exit_code, facts
