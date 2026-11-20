@@ -27,6 +27,11 @@ Use the project's adopted task, knowledge and execution owners.
   Preserve the existing owner, accepted decisions and approval boundaries.
   A small Repair needs no new planning flow; a missing skill is not a reason
   to install it or block an otherwise qualified existing route.
+- Ticket from a Spec: ask Nathan to run Matt Pocock's `/implement` in the
+  worker's session before it implements. The skill is manual-only
+  (`disable-model-invocation`); never read or replicate it instead. The brief
+  maps its test, review and commit steps to the project's verification rules,
+  CI and independent review; the Handback cites the native load.
 - On accepting a Handback, advance it to review, Repair or authorized
   integration. If work must wait, record the next owner and the condition that
   lets it resume in the existing task.
