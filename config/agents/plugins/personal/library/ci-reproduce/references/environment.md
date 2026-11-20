@@ -43,8 +43,20 @@ ssh mac-mini 'bash -s -- --vm gh-macos-26-runner --repo OWNER/NAME --ref REF -- 
 - After changing a toolchain version, prepare the base once with
   `--vm gh-macos-26-runner --prepare` and the new version flags. Otherwise each
   clone builds it again.
-- Apple allows two macOS VMs per Mac. The script refuses to start while another
-  Tart VM runs. OrbStack and Docker run Linux only.
+- Apple allows two macOS VMs per Mac. Runs queue on a lock, and the script
+  refuses to start while another Tart VM runs. OrbStack and Docker run Linux
+  only.
+
+To rebuild the base, install Tart through the Brewfile's
+`HOMEBREW_DOTFILES_VM_HOST=1` opt-in, check free disk (the image is a 27 GB
+download), pin the image by digest, then size and prepare it:
+
+```sh
+tart clone ghcr.io/cirruslabs/macos-tahoe-base@sha256:65c3133a633fda8753cf1f71f2d55727792d534a2125b0032466563dcc8e58fd gh-macos-26-runner
+tart set gh-macos-26-runner --cpu 3 --memory 7168
+```
+
+Then run the script with `--vm gh-macos-26-runner --prepare`.
 
 If the target cannot run locally, state why. Use the existing runner's supported
 diagnostics within current authority, or return a bounded reproduction gap.

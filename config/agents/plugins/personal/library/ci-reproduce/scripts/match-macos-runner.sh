@@ -20,7 +20,6 @@ readonly default_node=24.22.2
 readonly default_node_sha256=aa9549349e47dffaa42dcf95d6e06ade8c4bdafc980979883b88767670df385a
 
 state=${XDG_STATE_HOME:-$HOME/.local/state}/ci-reproduce
-lock=""
 vm_name=""
 vm_pid=""
 vm_disposable=false
@@ -32,47 +31,35 @@ die() {
 }
 
 usage() {
-	cat >&2 <<'EOF'
+	cat >&2 <<EOF
 Usage: match-macos-runner.sh --repo OWNER/NAME --ref REF [options] -- COMMAND
        match-macos-runner.sh --prepare [--vm BASE] [versions]
 
   --repo OWNER/NAME  public GitHub repository, cloned over HTTPS
   --ref REF          branch, tag or commit to check out
-  --git VERSION      git built from kernel.org (default 2.56.1)
-  --bun VERSION      Bun from its GitHub release (default 1.4.4)
-  --node VERSION     Node from nodejs.org (default 24.22.2)
+  --git VERSION      git built from kernel.org (default $default_git)
+  --bun VERSION      Bun from its GitHub release (default $default_bun)
+  --node VERSION     Node from nodejs.org (default $default_node)
   --vm BASE          run in a disposable clone of the Tart VM BASE;
                      with --prepare, install the toolchains into BASE itself
   --prepare          install the toolchains only
   --keep             keep the checkout (and, with --vm, the stopped clone)
-  COMMAND            shell command run in the checkout, as one argument
+  COMMAND            shell command run in the checkout by bash -e, as one
+                     argument; it is printed and logged, so keep secrets out
 
 Exit status is COMMAND's; 2 means the run could not start.
 EOF
 	exit 2
 }
 
-release_lock() { [[ -n $lock ]] && rm -rf "$lock" || true; }
-
-# The lock names its owner's process, so a lock left by a killed run or a VM
-# that powered off is taken over instead of waited on.
-take_lock() {
-	lock=$state/.install-lock
-	local waited=0 owner
-	until mkdir "$lock" 2>/dev/null; do
-		owner=$(cat "$lock/pid" 2>/dev/null || true)
-		if [[ -n $owner ]] && ! kill -0 "$owner" 2>/dev/null; then
-			say "taking over $lock from process $owner, which is gone"
-			rm -rf "$lock"
-			continue
-		fi
-		((waited % 60 == 0)) && say "waiting for $lock (process ${owner:-unknown})"
-		((waited >= 900)) && die "gave up waiting for $lock"
-		sleep 5
-		waited=$((waited + 5))
-	done
-	echo $$ >"$lock/pid"
-	trap release_lock EXIT
+# Waits on a kernel lock (lockf) held through file descriptor FD. The kernel
+# drops it when every process holding FD exits, so a killed run or a VM that
+# powered off never leaves a stale lock behind.
+wait_lock() {
+	local fd=$1 what=$2
+	lockf -s -t 0 "$fd" && return
+	say "waiting for $what"
+	lockf -s -t 900 "$fd" || die "gave up waiting for $what after 900 s"
 }
 
 check_sha256() {
@@ -89,10 +76,12 @@ expected_sha256() {
 		printf '%s\n' "$default_sha"
 		return
 	fi
-	sha=$(curl -fsSL "$sums_url" | awk -v f="$file" '$2 == f {print $1}')
+	sha=$(curl -fsSL "$sums_url" | awk -v f="$file" '$2 == f {print $1}') || die "cannot read $sums_url"
 	[[ -n $sha ]] || die "$sums_url lists no checksum for $file"
 	printf '%s\n' "$sha"
 }
+
+fetch() { curl -fsSL -o "$1" "$2" || die "download failed: $2"; }
 
 ensure_git() {
 	local version=$1 prefix=$state/git-$1 expected tmp
@@ -100,11 +89,11 @@ ensure_git() {
 	local base=https://mirrors.edge.kernel.org/pub/software/scm/git
 	expected=$(expected_sha256 "$version" "$default_git" "$default_git_sha256" \
 		"$base/sha256sums.asc" "git-$version.tar.xz")
-	tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-reproduce-git.XXXXXX")
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-reproduce-git.XXXXXX") || die "cannot make a build folder"
 	say "building git $version into $prefix (two to five minutes)"
-	curl -fsSL -o "$tmp/git.tar.xz" "$base/git-$version.tar.xz"
+	fetch "$tmp/git.tar.xz" "$base/git-$version.tar.xz"
 	check_sha256 "$tmp/git.tar.xz" "$expected"
-	tar -xf "$tmp/git.tar.xz" -C "$tmp"
+	tar -xf "$tmp/git.tar.xz" -C "$tmp" || die "cannot unpack git $version"
 	# An unfinished install of ours has no .complete marker; start it afresh.
 	rm -rf "$prefix"
 	# Homebrew builds git with no Rust toolchain, so NO_RUST matches the runner.
@@ -123,14 +112,14 @@ ensure_bun() {
 	local base=https://github.com/oven-sh/bun/releases/download/bun-v$version
 	expected=$(expected_sha256 "$version" "$default_bun" "$default_bun_sha256" \
 		"$base/SHASUMS256.txt" bun-darwin-aarch64.zip)
-	tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-reproduce-bun.XXXXXX")
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-reproduce-bun.XXXXXX") || die "cannot make a download folder"
 	say "fetching Bun $version into $dir"
-	curl -fsSL -o "$tmp/bun.zip" "$base/bun-darwin-aarch64.zip"
+	fetch "$tmp/bun.zip" "$base/bun-darwin-aarch64.zip"
 	check_sha256 "$tmp/bun.zip" "$expected"
-	unzip -q "$tmp/bun.zip" -d "$tmp"
+	unzip -q "$tmp/bun.zip" -d "$tmp" || die "cannot unpack Bun $version"
 	rm -rf "$dir"
-	mkdir -p "$dir"
-	mv "$tmp/bun-darwin-aarch64/bun" "$dir/bun"
+	mkdir -p "$dir" || die "cannot create $dir"
+	mv "$tmp/bun-darwin-aarch64/bun" "$dir/bun" || die "cannot install Bun $version"
 	touch "$dir/.complete"
 	rm -rf "$tmp"
 }
@@ -141,48 +130,52 @@ ensure_node() {
 	local base=https://nodejs.org/dist/v$version file=node-v$version-darwin-arm64.tar.gz
 	expected=$(expected_sha256 "$version" "$default_node" "$default_node_sha256" \
 		"$base/SHASUMS256.txt" "$file")
-	tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-reproduce-node.XXXXXX")
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/ci-reproduce-node.XXXXXX") || die "cannot make a download folder"
 	say "fetching Node $version into $dir"
-	curl -fsSL -o "$tmp/$file" "$base/$file"
+	fetch "$tmp/$file" "$base/$file"
 	check_sha256 "$tmp/$file" "$expected"
 	rm -rf "$dir"
-	mkdir -p "$dir"
-	tar -xzf "$tmp/$file" -C "$dir" --strip-components 1
+	mkdir -p "$dir" || die "cannot create $dir"
+	tar -xzf "$tmp/$file" -C "$dir" --strip-components 1 || die "cannot install Node $version"
 	touch "$dir/.complete"
 	rm -rf "$tmp"
 }
 
 ensure_toolchains() {
 	[[ $(uname -sm) == "Darwin arm64" ]] || die "needs an Apple silicon Mac, found $(uname -sm)"
-	mkdir -p "$state/runs"
-	take_lock
+	mkdir -p "$state/runs" || die "cannot create $state"
+	exec 9>>"$state/.install.lock" || die "cannot open $state/.install.lock"
+	wait_lock 9 "another toolchain install"
 	ensure_git "$1"
 	ensure_bun "$2"
 	ensure_node "$3"
-	release_lock
-	lock=""
+	exec 9>&-
 }
 
 run_here() {
 	local repo=$1 ref=$2 git_version=$3 bun_version=$4 node_version=$5 keep=$6 command=$7
 	ensure_toolchains "$git_version" "$bun_version" "$node_version"
 
-	local name=${repo##*/} run_dir work sha status started
+	local name=${repo##*/} run_dir work sha status started var
 	run_dir=$state/runs/$(date +%Y%m%dT%H%M%S)-$name-$$
 	# Outside TMPDIR, like the runner's /Users/runner/work: tests that make
 	# relative paths into TMPDIR break when the checkout also sits there.
 	work=$run_dir/work
-	mkdir -p "$work"
+	mkdir -p "$work" || die "cannot create $work"
 
-	# The hosted image's only global git setting; this host's own config stays out.
+	# The caller's git and shell overrides stay out; the hosted image's only
+	# global git setting goes in.
+	for var in $(compgen -e); do
+		case $var in GIT_* | BASH_ENV | ENV) unset "$var" ;; esac
+	done
 	printf '[safe]\n\tdirectory = *\n' >"$run_dir/gitconfig"
 	export GIT_CONFIG_GLOBAL=$run_dir/gitconfig
 	export PATH=$state/git-$git_version/bin:$state/bun-$bun_version:$state/node-$node_version/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 	export CI=true
 
-	git clone --quiet "https://github.com/$repo.git" "$work/$name"
+	git clone --quiet "https://github.com/$repo.git" "$work/$name" || die "cannot clone $repo"
 	if git -C "$work/$name" rev-parse --verify --quiet "refs/remotes/origin/$ref^{commit}" >/dev/null; then
-		git -C "$work/$name" checkout --quiet -B "$ref" "origin/$ref"
+		git -C "$work/$name" checkout --quiet -B "$ref" "origin/$ref" || die "cannot check out $ref"
 	else
 		# A commit no branch holds any more still fetches by its full hash.
 		local target=$ref
@@ -190,7 +183,7 @@ run_here() {
 			git -C "$work/$name" fetch --quiet origin "$ref" || die "$repo has no ref or commit $ref"
 			target=FETCH_HEAD
 		fi
-		git -C "$work/$name" checkout --quiet --detach "$target"
+		git -C "$work/$name" checkout --quiet --detach "$target" || die "cannot check out $ref"
 	fi
 	sha=$(git -C "$work/$name" rev-parse HEAD)
 
@@ -199,12 +192,13 @@ run_here() {
 		printf 'macOS: %s (%s)\n' "$(sw_vers -productVersion)" "$(sw_vers -buildVersion)"
 		printf 'cpus: %s\nmemory bytes: %s\n' "$(sysctl -n hw.ncpu)" "$(sysctl -n hw.memsize)"
 		printf 'git: %s\nbun: %s\n' "$(command -v git) $(git --version)" "$(command -v bun) $(bun --version)"
-		printf 'node: %s\n' "$(command -v node) $(node --version)"
+		printf 'node: %s\nbash: %s\n' "$(command -v node) $(node --version)" "$(command -v bash)"
 	} | tee "$run_dir/environment.txt" >&2
 
+	# A GitHub run step with no shell set runs as bash -e, from the bash on PATH.
 	started=$SECONDS
 	set +e
-	(cd "$work/$name" && exec bash -c "$command") 2>&1 | tee "$run_dir/output.log"
+	(cd "$work/$name" && exec bash -e -c "$command") 2>&1 | tee "$run_dir/output.log"
 	status=${PIPESTATUS[0]}
 	set -e
 	echo "$status" >"$run_dir/exit-code"
@@ -224,69 +218,91 @@ guest_script() {
 	declare -p default_git default_git_sha256 default_bun default_bun_sha256 \
 		default_node default_node_sha256
 	# shellcheck disable=SC2016 # The guest expands these, with its own HOME.
-	printf '%s\n' 'state=${XDG_STATE_HOME:-$HOME/.local/state}/ci-reproduce' 'lock=""' \
+	printf '%s\n' 'state=${XDG_STATE_HOME:-$HOME/.local/state}/ci-reproduce' \
 		'vm_name=""' 'vm_pid=""' 'vm_disposable=false'
-	declare -f say die usage release_lock take_lock check_sha256 expected_sha256 \
-		ensure_git ensure_bun ensure_node ensure_toolchains run_here main
+	declare -f say die usage wait_lock check_sha256 expected_sha256 fetch \
+		ensure_git ensure_bun ensure_node ensure_toolchains run_here stop_vm on_signal main
 	printf 'main'
 	printf ' %q' "$@"
 	printf ' </dev/null\n'
 }
 
+# Syncs, stops and (for a clone) deletes the VM this run started. Runs on
+# every exit, including a dropped ssh connection or an interrupt.
 stop_vm() {
 	[[ -n $vm_name ]] || return 0
-	# tart stop can end in a forced power-off; flush the guest's writes first.
-	tart exec "$vm_name" /bin/sync >/dev/null 2>&1 || true
-	tart stop "$vm_name" >/dev/null 2>&1 || true
-	[[ -n $vm_pid ]] && wait "$vm_pid" 2>/dev/null || true
-	if [[ $vm_disposable == true ]]; then
-		tart delete "$vm_name" >/dev/null 2>&1 || true
-	fi
+	local name=$vm_name
 	vm_name=""
+	# tart stop can end in a forced power-off; flush the guest's writes first.
+	tart exec "$name" /bin/sync >/dev/null 2>&1 || true
+	tart stop --timeout 60 "$name" >/dev/null 2>&1 || true
+	if [[ -n $vm_pid ]]; then
+		kill -0 "$vm_pid" 2>/dev/null && kill "$vm_pid" 2>/dev/null
+		wait "$vm_pid" 2>/dev/null || true
+	fi
+	if [[ $vm_disposable == true ]] && ! tart delete "$name" >/dev/null 2>&1; then
+		say "could not delete clone $name; remove it with: tart delete $name"
+	fi
+}
+
+on_signal() {
+	say "stopped by signal; cleaning up"
+	stop_vm
+	exit "$1"
 }
 
 run_in_vm() {
 	local base=$1 prepare=$2 keep=$3
 	shift 3
 	command -v tart >/dev/null || die "tart is not installed; see the ci-reproduce environment reference"
-	tart get "$base" >/dev/null 2>&1 || die "no Tart VM named $base"
+	local config cpus memory listing
+	config=$(tart get "$base" --format json 2>/dev/null) || die "no Tart VM named $base"
+	cpus=$(printf '%s\n' "$config" | awk -F': *' '/"CPU"/ {gsub(/[ ,]/, "", $2); print $2}')
+	memory=$(printf '%s\n' "$config" | awk -F': *' '/"Memory"/ {gsub(/[ ,]/, "", $2); print $2}')
+	if [[ $cpus != 3 || $memory != 7168 ]]; then
+		say "warning: $base has $cpus CPUs and $memory MB; macos-latest has 3 and 7168 (tart set $base --cpu 3 --memory 7168)"
+	fi
+
 	# Apple's licence and Virtualization.framework allow two macOS guests per
-	# Mac; this script uses one at a time.
-	if tart list | awk 'NR > 1 && $NF == "running"' | grep -q .; then
+	# Mac; this script runs one at a time, held by a lock its VM inherits.
+	mkdir -p "$state/runs" || die "cannot create $state"
+	exec 8>>"$state/.vm.lock" || die "cannot open $state/.vm.lock"
+	wait_lock 8 "another VM run on this Mac"
+	listing=$(tart list) || die "tart list failed"
+	if printf '%s\n' "$listing" | awk 'NR > 1 && $NF == "running"' | grep -q .; then
 		die "a Tart VM is already running; stop it first (tart list)"
 	fi
 
-	local run_dir status started=$SECONDS
-	mkdir -p "$state/runs"
+	local run_dir status started=$SECONDS name
 	run_dir=$state/runs/$(date +%Y%m%dT%H%M%S)-vm-$base-$$
-	mkdir -p "$run_dir"
+	mkdir -p "$run_dir" || die "cannot create $run_dir"
 	if [[ $prepare == true ]]; then
-		vm_name=$base
+		name=$base
 	else
-		vm_name=$base-run-$$
-		vm_disposable=$([[ $keep == true ]] && echo false || echo true)
-		tart clone "$base" "$vm_name"
+		name=$base-run-$$
+		tart clone "$base" "$name" || die "cannot clone $base"
+		[[ $keep == true ]] || vm_disposable=true
 	fi
-	trap stop_vm EXIT
+	vm_name=$name
 
-	tart run --no-graphics --no-audio --no-clipboard "$vm_name" >"$run_dir/tart-run.log" 2>&1 &
+	tart run --no-graphics --no-audio --no-clipboard "$name" >"$run_dir/tart-run.log" 2>&1 &
 	vm_pid=$!
 	local waited=0
-	until tart exec "$vm_name" /usr/bin/true >/dev/null 2>&1; do
-		kill -0 "$vm_pid" 2>/dev/null || die "VM $vm_name stopped while booting; see $run_dir/tart-run.log"
-		((waited >= 180)) && die "VM $vm_name was not ready within 180 s"
+	until tart exec "$name" /usr/bin/true >/dev/null 2>&1; do
+		kill -0 "$vm_pid" 2>/dev/null || die "VM $name stopped while booting; see $run_dir/tart-run.log"
+		((waited >= 180)) && die "VM $name was not ready within 180 s"
 		sleep 3
 		waited=$((waited + 3))
 	done
-	say "VM $vm_name ready after $((SECONDS - started)) s"
+	say "VM $name ready after $((SECONDS - started)) s ($cpus CPUs, $memory MB)"
 
 	set +e
-	guest_script "$@" | tart exec -i "$vm_name" /bin/bash -s 2>&1 | tee "$run_dir/output.log"
+	guest_script "$@" | tart exec -i "$name" /bin/bash -s 2>&1 | tee "$run_dir/output.log"
 	status=${PIPESTATUS[1]}
 	set -e
 	echo "$status" >"$run_dir/exit-code"
 	stop_vm
-	[[ $keep == true && $prepare == false ]] && say "clone $base-run-$$ kept, stopped"
+	[[ $keep == true && $prepare == false ]] && say "clone $name kept, stopped"
 	say "VM run exit $status after $((SECONDS - started)) s in all; log $run_dir/output.log"
 	return "$status"
 }
@@ -296,19 +312,19 @@ main() {
 	local keep=false prepare=false vm="" pass=()
 	while (($#)); do
 		case $1 in
-		--repo | --ref | --git | --bun | --node)
-			[[ $# -ge 2 ]] || usage
-			pass+=("$1" "$2")
+		--repo | --ref | --git | --bun | --node | --vm)
+			[[ $# -ge 2 && -n $2 ]] || usage
 			case $1 in
 			--repo) repo=$2 ;;
 			--ref) ref=$2 ;;
 			--git) git_version=$2 ;;
 			--bun) bun_version=$2 ;;
 			--node) node_version=$2 ;;
+			--vm) vm=$2 ;;
 			esac
+			[[ $1 == --vm ]] || pass+=("$1" "$2")
 			shift 2
 			;;
-		--vm) vm=${2:-} && shift 2 ;;
 		--keep) keep=true && pass+=(--keep) && shift ;;
 		--prepare) prepare=true && pass+=(--prepare) && shift ;;
 		--) shift && break ;;
@@ -317,6 +333,10 @@ main() {
 	done
 	local command="$*"
 
+	trap stop_vm EXIT
+	trap 'on_signal 129' HUP
+	trap 'on_signal 130' INT
+	trap 'on_signal 143' TERM
 	if [[ -n $vm ]]; then
 		[[ $prepare == true || (-n $repo && -n $ref && -n $command) ]] || usage
 		run_in_vm "$vm" "$prepare" "$keep" "${pass[@]}" -- "$command"
