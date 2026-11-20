@@ -780,12 +780,27 @@ Caller `--pure`, `--pure=...`, and the supported `--no-pure` form are refused.
 version preflight because they could bypass the selected route and its billing
 boundary. Other native arguments retain their order and value.
 
+## Worker hand-off
+
+`monash-worker` hands one brief to a non-interactive `codex exec --profile
+monash-sol` worker in the worker Codex home `~/.codex-monash-sol`, bounds it,
+and writes a receipt from the thread's session record. It passes Codex only
+this launcher's allowlisted environment names plus `CODEX_HOME`, and refuses a
+worker home that is a link, not owned, or not mode 700 (files 600). `prepare`
+and `check` serve Herdr pane workers. `install.py` creates that home's `config.toml` (the
+provider block from `monash-codex-desktop`) and `monash-sol.config.toml`,
+refuses files it does not manage, a home that is not mode 700, and a home
+equal to or inside `~/.codex`, or inside an inherited `$CODEX_HOME` other than
+the worker home itself; `--check` verifies both files.
+`--worker-home` selects another home for tests. The agent-facing workflow is
+[`../../skills/monash-foundry/workers.md`](../../skills/monash-foundry/workers.md).
+
 ## Output and ownership
 
 Before a real exec, the launcher writes one concise line to stderr:
 
 ```text
-host=<host> agent=<codex|claude|opencode> provider=<provider> deployment=<deployment>
+host=<host> agent=<codex|claude|opencode> provider=<provider> deployment=<deployment>[ resource=<resource>][ model=<stable-id>][ qualification=explicit]
 ```
 
 It never prints secret values, credential output, or forwarded native argument

@@ -91,7 +91,7 @@ for profile_name in desktop server; do
 done
 
 # Independent oracle: the VM runner is host-only and its trust is item-scoped.
-for vm_case in desktop-disabled server-enabled desktop-enabled; do
+for vm_case in desktop-disabled server-disabled server-enabled desktop-enabled; do
   case "$vm_case" in
     desktop-disabled)
       profile_name=desktop
@@ -99,11 +99,17 @@ for vm_case in desktop-disabled server-enabled desktop-enabled; do
       expected_softnet_row=''
       expected_tart_row=''
       ;;
+    server-disabled)
+      profile_name=server
+      vm_host=0
+      expected_softnet_row=''
+      expected_tart_row=''
+      ;;
     server-enabled)
       profile_name=server
       vm_host=1
-      expected_softnet_row=''
-      expected_tart_row=''
+      expected_softnet_row=$'openai/tools/softnet\ttrue'
+      expected_tart_row=$'openai/tools/tart\ttrue'
       ;;
     desktop-enabled)
       profile_name=desktop
@@ -581,7 +587,7 @@ if [[ -e "$RECORD_DIR/checkpoint" ]]; then
 fi
 pass 'two failed bundle attempts prevent the post-phase checkpoint'
 
-expected_assertions=101
+expected_assertions=103
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

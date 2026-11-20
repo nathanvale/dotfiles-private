@@ -7,6 +7,8 @@ import argparse
 import copy
 import datetime as dt
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -29,6 +31,7 @@ SOURCE_FILES = (
     "foundry",
     "monash-foundry",
     "monash",
+    "monash-worker",
     "monash_hosts.py",
     "monash_remote.py",
     "monash-codex-token",
@@ -38,7 +41,7 @@ SOURCE_FILES = (
     "CODEX-CATALOG-LICENSE",
     "CODEX-CATALOG-NOTICE",
 )
-COMMANDS = ("foundry", "monash-foundry", "monash")
+COMMANDS = ("foundry", "monash-foundry", "monash", "monash-worker")
 # Executable payload that is run by absolute installed path, never linked into bin.
 EXECUTABLE_HELPERS = ("monash_remote.py", "monash-codex-token", "monash-codex-desktop")
 SOURCE_INSTALL_MODES = {
@@ -53,6 +56,13 @@ CLAUDE_ALIAS_MIGRATION = {
     "sonnet5": ("claude-sonnet-5", "claude-sonnet-5-5"),
     "haiku": ("claude-haiku-4-5", "claude-haiku-5-5"),
 }
+
+
+# The Codex home for monash-worker's exec workers: separate from ~/.codex so the
+# Codex app never rewrites it and network access stays limited to these workers.
+WORKER_PROFILE = "monash-sol"
+WORKER_FILES = ("config.toml", f"{WORKER_PROFILE}.config.toml")
+WORKER_HEADER = "# Managed by monash-foundry install.py for monash-worker. Rerun the installer to change it."
 
 
 class InstallRefusal(RuntimeError):
@@ -442,6 +452,76 @@ def atomic_copy(source: Path, destination: Path, mode: int) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def load_desktop_module(source: Path):
+    """monash-codex-desktop owns the provider block; the worker home reuses its text."""
+    path = source / "monash-codex-desktop"
+    loader = importlib.machinery.SourceFileLoader("monash_codex_desktop_for_install", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    # Loading must not write a bytecode cache into the source, even on --dry-run.
+    previous, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
+
+
+def worker_home_files(source: Path, target: Path) -> dict[str, str]:
+    desktop = load_desktop_module(source)
+    config, _ = read_json_object(source / "config.json") or ({}, b"")
+    codex = config.get("codex") if isinstance(config.get("codex"), dict) else {}
+    base_url = codex.get("base_url")
+    if not isinstance(base_url, str) or not base_url:
+        raise InstallRefusal("config.json has no codex.base_url for the worker home")
+    try:
+        provider = desktop.managed_block(base_url, target / "monash-codex-token")
+        catalog = desktop.toml_string(str(target / "codex-models.json"))
+    except desktop.DesktopRefusal as error:
+        raise InstallRefusal(f"the worker home could not be rendered: {error.message}") from error
+    profile = "\n".join((
+        WORKER_HEADER,
+        f'model_provider = "{desktop.PROVIDER_ID}"',
+        f'model = "{desktop.QUALIFIED_MODEL}"',
+        f'model_reasoning_effort = "{desktop.QUALIFIED_EFFORT}"',
+        'service_tier = "priority"',
+        'sandbox_mode = "workspace-write"',
+        'approval_policy = "never"',
+        f"model_catalog_json = {catalog}",
+        "",
+        "[sandbox_workspace_write]",
+        "network_access = true",
+        "",
+    ))
+    return {"config.toml": f"{WORKER_HEADER}\n{provider}", WORKER_FILES[1]: profile}
+
+
+def worker_home_plan(home: Path, files: dict[str, str]) -> list[str]:
+    """The writes the worker home needs; refuses a home or file this installer does not own."""
+    safe_existing_parents((home,))
+    if not os.path.lexists(home):
+        return ["create", *files]
+    info = os.lstat(home)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise InstallRefusal(f"refusing worker Codex home that is not a private directory with mode 700 that you own: {home}")
+    writes = []
+    for name, text in files.items():
+        path = home / name
+        if not os.path.lexists(path):
+            writes.append(name)
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise InstallRefusal(f"refusing unmanaged worker Codex file: {path}")
+        current = path.read_text(encoding="utf-8", errors="replace")
+        info = os.lstat(path)
+        if current == text and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600:
+            continue
+        if current.splitlines()[:1] != [WORKER_HEADER]:
+            raise InstallRefusal(f"refusing unmanaged worker Codex file: {path}; move it aside and rerun")
+        writes.append(name)
+    return writes
+
+
 def atomic_text(destination: Path, text: str, mode: int) -> None:
     with tempfile.NamedTemporaryFile("w", dir=destination.parent, encoding="utf-8", delete=False) as handle:
         handle.write(text)
@@ -543,8 +623,11 @@ def rollback_problems(
     return problems
 
 
-def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role: str, dry_run: bool) -> int:
+def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role: str, dry_run: bool,
+            worker_home: Path) -> int:
     manifest = source_manifest(source, host_role)
+    worker_files = worker_home_files(source, target)
+    worker_writes = worker_home_plan(worker_home, worker_files)
     config = target / "herdr.toml"
     safe_existing_parents((target, target / "backups", config, target / MANIFEST_NAME, bin_dir))
     prior = ensure_owned_target(target)
@@ -586,6 +669,9 @@ def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role
     elif binding_update:
         changes.append(f"add missing managed Ctrl+G F binding to {config}")
     changes.append(f"write revision manifest to {target / MANIFEST_NAME}")
+    if "create" in worker_writes:
+        changes.append(f"create worker Codex home {worker_home} (mode 700)")
+    changes.extend(f"write worker Codex file {worker_home / name}" for name in worker_writes if name != "create")
     if dry_run:
         print("Dry run. No files changed:")
         print("\n".join(f"  {change}" for change in changes))
@@ -616,6 +702,12 @@ def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role
                 continue  # verified above as the expected managed link: never unlinked or rewritten
             os.symlink(expected_link_target(target, command), link)
             created_links.append(link)
+        if "create" in worker_writes:
+            worker_home.mkdir(mode=0o700)
+            os.chmod(worker_home, 0o700)
+        for name in worker_writes:
+            if name != "create":
+                atomic_text(worker_home / name, worker_files[name], 0o600)
     except OSError as error:
         if not migrated or backup_dir is None:
             raise
@@ -637,7 +729,15 @@ def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role
     return 0
 
 
-def check(source: Path, target: Path, bin_dir: Path, host_role: str) -> int:
+def worker_home_problems(source: Path, target: Path, worker_home: Path) -> list[str]:
+    files = worker_home_files(source, target)
+    if not worker_home.is_dir():
+        return [f"missing worker Codex home: {worker_home}"]
+    writes = worker_home_plan(worker_home, files)
+    return [f"worker Codex file missing or out of date: {worker_home / name}" for name in writes]
+
+
+def check(source: Path, target: Path, bin_dir: Path, host_role: str, worker_home: Path) -> int:
     expected = source_manifest(source, host_role)
     problems: list[str] = []
     try:
@@ -653,6 +753,7 @@ def check(source: Path, target: Path, bin_dir: Path, host_role: str) -> int:
         problems.extend(command_target_problems(bin_dir, target, required=True))
         if binding_state(config, target) not in {"owned", "legacy"}:
             problems.append(f"private Herdr config lacks exactly one owned Ctrl+G F binding: {config}")
+        problems.extend(worker_home_problems(source, target, worker_home))
     except InstallRefusal as error:
         problems.append(str(error))
     if problems:
@@ -669,6 +770,12 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--check", action="store_true", help="verify the installed snapshot")
     parser.add_argument("--host-role", choices=HOST_ROLES, default="laptop", help="record host launch default")
     parser.add_argument("--prefix", type=Path, default=Path.home() / ".local", help="installation prefix")
+    parser.add_argument(
+        "--worker-home",
+        type=Path,
+        default=Path.home() / ".codex-monash-sol",
+        help="Codex home for monash-worker exec workers (never ~/.codex)",
+    )
     parser.add_argument(
         "--herdr-config",
         type=Path,
@@ -689,10 +796,20 @@ def main(argv: list[str]) -> int:
     baseline = args.herdr_config.expanduser()
     if not baseline.is_absolute():
         baseline = Path.cwd() / baseline
+    worker_home = args.worker_home.expanduser()
+    if not worker_home.is_absolute():
+        worker_home = Path.cwd() / worker_home
     try:
+        main_homes = {(Path.home() / ".codex").resolve()}
+        inherited = os.environ.get("CODEX_HOME")
+        # A worker that runs the installer inherits CODEX_HOME set to the worker home itself.
+        if inherited and Path(inherited).expanduser().resolve() != worker_home.resolve():
+            main_homes.add(Path(inherited).expanduser().resolve())
+        if any(worker_home.resolve().is_relative_to(main) for main in main_homes):
+            raise InstallRefusal("--worker-home must not be the main Codex home or inside it")
         if args.check:
-            return check(source, target, bin_dir, args.host_role)
-        return install(source, target, bin_dir, baseline, args.host_role, args.dry_run)
+            return check(source, target, bin_dir, args.host_role, worker_home)
+        return install(source, target, bin_dir, baseline, args.host_role, args.dry_run, worker_home)
     except InstallRefusal as error:
         print(f"Installation refused: {error}", file=sys.stderr)
         return 2
