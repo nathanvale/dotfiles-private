@@ -24,6 +24,7 @@ import unittest
 
 
 SOURCE_DIR = Path(__file__).resolve().parent
+WORKERS_DOC = SOURCE_DIR.parent.parent / "skills" / "monash-foundry" / "workers.md"
 
 # The fake launcher's behaviour comes from FAKE_MODE; it records argv and stdin.
 FAKE_FOUNDRY = """#!/usr/bin/env python3
@@ -130,6 +131,25 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(receipt["status"], "blocked")
         self.assertEqual(receipt["handback"], {"status": "blocked", "reason": "no network in the sandbox"})
 
+    def test_handback_marker_must_be_exact(self) -> None:
+        # Independent oracle: the marker contract from the handback rules, as literals.
+        for message in ("Tests failed.\nHANDBACK: done: but tests failed\n",
+                        "HANDBACK: done\nActually the change did not build.\n",
+                        "HANDBACK: done.\n",
+                        "Stuck.\nHANDBACK: blocked\n",
+                        "Stuck.\nHANDBACK: blocked:\n"):
+            with self.subTest(message=message):
+                shutil.rmtree(self.out, ignore_errors=True)
+                code, receipt = self.run_unit(message=message)
+                self.assertEqual(code, 5)
+                self.assertEqual(receipt["status"], "failed")
+                self.assertEqual(receipt["problems"], ["final line is not an exact HANDBACK marker"])
+
+    def test_two_handback_markers_fail(self) -> None:
+        code, receipt = self.run_unit(message="HANDBACK: blocked: no network\nHANDBACK: done\n")
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"], ["final message has more than one HANDBACK line"])
+
     def test_message_without_handback_line_fails(self) -> None:
         code, receipt = self.run_unit(message="This content can't be shown.")
         self.assertEqual(code, 5)
@@ -161,7 +181,9 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(code, 4)
         self.assertEqual(receipt["status"], "timed_out")
         self.assertEqual(receipt["problems"][0], "no handback within 2 seconds")
-        child = int((self.root / "child.pid").read_text())
+        child_file = self.root / "child.pid"
+        self.assertTrue(child_file.is_file(), "fake launcher did not start its child within the bound")
+        child = int(child_file.read_text())
         self.addCleanup(kill_leftover_group, child)
         self.assertTrue(process_gone(child))
 
@@ -215,6 +237,69 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(result["send"], f"Read {self.out / 'prompt.md'} and do exactly what it says.")
         self.assertFalse(self.log.exists())
 
+    def test_check_keeps_a_recorded_timeout_after_a_late_handback(self) -> None:
+        code, _ = self.run_unit("--timeout-seconds", "2", mode="hang")
+        self.assertEqual(code, 4)
+        child_file = self.root / "child.pid"
+        if child_file.is_file():  # Only cleanup needs the child; the claim is about the receipt.
+            self.addCleanup(kill_leftover_group, int(child_file.read_text()))
+        (self.out / "last-message.md").write_text("Finished late.\nHANDBACK: done\n")
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 4)
+        self.assertEqual(receipt["status"], "timed_out")
+        self.assertEqual(json.loads((self.out / "receipt.json").read_text())["status"], "timed_out")
+
+    def test_check_reuses_the_recorded_model_when_none_is_given(self) -> None:
+        code, _ = self.run_unit("--model", "gpt-5.5", message="HANDBACK: done", route_model="gpt-5.5")
+        self.assertEqual(code, 0)
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["requested_model"], "gpt-5.5")
+
+    def test_check_refuses_a_malformed_launch_record(self) -> None:
+        self.out.mkdir()
+        (self.out / "last-message.md").write_text("HANDBACK: done\n")
+        (self.out / "receipt.json").write_text(json.dumps({"launch": {}}))
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("malformed launch record", receipt["message"])
+
+    def test_check_refuses_a_receipt_path_that_is_a_directory(self) -> None:
+        self.out.mkdir()
+        (self.out / "last-message.md").write_text("HANDBACK: done\n")
+        (self.out / "receipt.json").mkdir()
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("is not a readable receipt", receipt["message"])
+
+    def fan_out_example(self, out: Path, briefs: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        """Run the fan-out block from workers.md as written, with `monash-worker` on PATH."""
+        text = WORKERS_DOC.read_text(encoding="utf-8")
+        start = text.index("monash-worker run --brief a.md")
+        block = text[text.rindex("```sh", 0, start) + len("```sh"):text.index("```", start)]
+        script = "\n".join(line.strip() for line in block.strip().splitlines())
+        for name in briefs:
+            (self.root / name).write_text("Count the files.\n", encoding="utf-8")
+        # Run the example's `monash-worker` on the suite's qualified interpreter, as other tests do.
+        shim_dir = self.root / "shim"
+        shim_dir.mkdir()
+        shim = shim_dir / "monash-worker"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{self.bin / "monash-worker"}" "$@"\n')
+        shim.chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim_dir}{os.pathsep}{os.environ['PATH']}", OUT=str(out),
+                   REPO=str(self.cwd), WORKER_TEST_LOG=str(self.log), FAKE_MODE="ok",
+                   FAKE_MESSAGE="Two files.\nHANDBACK: done\n")
+        return subprocess.run(["sh", "-c", script], cwd=self.root, env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, timeout=60)
+
+    def test_documented_fan_out_example_runs_with_a_missing_out_parent(self) -> None:
+        out = self.root / "not-yet" / "workers"
+        result = self.fan_out_example(out, ("a.md", "b.md"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        for unit in ("a", "b"):
+            self.assertEqual(json.loads((out / unit / "receipt.json").read_text())["status"], "done")
+
     def test_check_judges_a_pane_worker_handback(self) -> None:
         self.out.mkdir()
         (self.out / "last-message.md").write_text("Read two files.\nHANDBACK: done\n")
@@ -229,6 +314,11 @@ class MonashWorkerTest(unittest.TestCase):
         code, receipt = self.worker("check", "--out", str(self.out))
         self.assertEqual(code, 5)
         self.assertEqual(receipt["problems"], ["no final message was written"])
+
+
+    def test_documented_fan_out_example_reports_a_failed_unit(self) -> None:
+        result = self.fan_out_example(self.root / "workers", ("a.md",))  # b.md is missing
+        self.assertIn("unit b exited 2", result.stderr)
 
 
 if __name__ == "__main__":

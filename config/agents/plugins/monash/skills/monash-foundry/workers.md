@@ -40,11 +40,14 @@ monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
   `--out`. Wait for every call, then judge each receipt.
 
   ```sh
-  monash-worker run --brief a.md --out "$OUT/a" --cwd "$REPO" > "$OUT/a.json" & a=$!
-  monash-worker run --brief b.md --out "$OUT/b" --cwd "$REPO" > "$OUT/b.json" & b=$!
-  wait $a; wait $b
+  monash-worker run --brief a.md --out "$OUT/a" --cwd "$REPO" >/dev/null & a=$!
+  monash-worker run --brief b.md --out "$OUT/b" --cwd "$REPO" >/dev/null & b=$!
+  wait $a || echo "unit a exited $?" >&2
+  wait $b || echo "unit b exited $?" >&2
   ```
 
+  Each call creates its `--out`, parents included, and writes
+  `receipt.json` there; `test_monash_worker.py` runs this example.
   In Claude Code, a background Bash call per unit works the same way.
 - `--out` must be new or empty; the command refuses to overwrite a unit's
   results. Keep it outside the worker's repository, in the coordinator's
@@ -65,7 +68,10 @@ monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
 Each `--out` holds `brief.md`, `prompt.md` (what the worker received),
 `events.jsonl` (Codex JSON events), `launcher.log` (the launcher's route line
 and errors), `last-message.md` (the handback) and `receipt.json`. The same
-receipt prints as one JSON line on stdout.
+receipt prints as one JSON line on stdout. Rerunning `check` on an exec unit
+keeps its recorded launch facts, so a timeout, launcher failure or wrong route
+stays in the verdict. It checks the route against the receipt's requested
+model unless `--model` names another.
 
 | Exit | `status` | Meaning |
 | --- | --- | --- |
