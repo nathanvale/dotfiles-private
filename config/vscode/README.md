@@ -385,8 +385,10 @@ exclusion policy first.
   versions. No container is contacted by this command. Removing an ID stops
   requesting it; it does not uninstall it.
 
-The declaration captures all 16 observed personal extensions, with the isolated
-transport versions preserved. Prettier and Markdown Preview Enhanced are
+The declaration started from the 16 observed personal extensions. Of the
+remote ones it keeps only Dev Containers, Remote - SSH and its configuration
+editor; the Remote Development pack, WSL, Remote Tunnels and Remote Explorer
+were dropped on 21 November 2026. The isolated transport versions are preserved. Prettier and Markdown Preview Enhanced are
 referenced by personal settings but were absent from that inventory. They are
 not silently added. Terminal profiles and terminal environment settings excluded
 by the isolated policy are not imported; the personal lazygit profile therefore
