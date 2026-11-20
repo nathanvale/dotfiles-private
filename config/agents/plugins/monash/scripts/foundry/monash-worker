@@ -49,7 +49,8 @@ Handback rules (added by monash-worker):
   HANDBACK: blocked: <one-line reason>
 """
 # The final non-blank line must be exactly one marker; `done` takes no suffix.
-HANDBACK_LINE = re.compile(r"^HANDBACK: (?:(?P<done>done)|blocked: (?P<reason>\S.*))$")
+HANDBACK_PREFIX = "HANDBACK:"
+HANDBACK_LINE = re.compile(rf"^{HANDBACK_PREFIX} (?:(?P<done>done)|blocked: (?P<reason>\S.*))$")
 # The launcher's stderr route line; see "Output and ownership" in README.md.
 ROUTE_LINE = re.compile(r"^host=\S+ agent=(?P<agent>\S+) provider=(?P<provider>.+?) "
                         r"deployment=(?P<deployment>\S+)(?: resource=\S+)?"
@@ -70,9 +71,11 @@ def read_handback(out: Path) -> dict[str, Optional[str]]:
         return {"status": None, "reason": "no final message was written"}
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     match = HANDBACK_LINE.match(lines[-1])
+    if match and any(line.startswith(HANDBACK_PREFIX) for line in lines[:-1]):
+        return {"status": None, "reason": "final message has more than one HANDBACK line"}
     if match:
         return {"status": "done" if match.group("done") else "blocked", "reason": match.group("reason")}
-    if any(line.startswith("HANDBACK:") for line in lines):
+    if any(line.startswith(HANDBACK_PREFIX) for line in lines):
         return {"status": None, "reason": "final line is not an exact HANDBACK marker"}
     return {"status": None, "reason": "final message has no HANDBACK line"}
 
@@ -258,17 +261,28 @@ def check(args: argparse.Namespace) -> int:
     out = Path(args.out).expanduser().absolute()
     if not out.is_dir():
         raise UsageError(f"--out {out} is not a directory")
-    return write_receipt(out, judge(out, args.model, recorded_launch(out)))
+    recorded = read_recorded_receipt(out)
+    launch = recorded.get("launch") if recorded else None
+    model = args.model or (recorded or {}).get("requested_model") or DEFAULT_MODEL
+    return write_receipt(out, judge(out, str(model), launch))
 
 
-def recorded_launch(out: Path) -> Optional[dict[str, object]]:
-    """An exec unit's launch facts, such as a timeout, stay part of every later judgement."""
-    try:
-        receipt = json.loads((out / RECEIPT_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+LAUNCH_KEYS = ("exit_code", "start_error", "timed_out", "timeout_seconds")
+
+
+def read_recorded_receipt(out: Path) -> Optional[dict[str, object]]:
+    """An earlier receipt's launch facts and model stay part of every later judgement."""
+    path = out / RECEIPT_FILE
+    if not path.is_file():
         return None
-    launch = receipt.get("launch") if isinstance(receipt, dict) else None
-    return launch if isinstance(launch, dict) else None
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise UsageError(f"{path} is not a readable receipt") from error
+    launch = receipt.get("launch") if isinstance(receipt, dict) else "invalid"
+    if launch is not None and not (isinstance(launch, dict) and all(key in launch for key in LAUNCH_KEYS)):
+        raise UsageError(f"{path} has a malformed launch record")
+    return receipt
 
 
 def parser() -> argparse.ArgumentParser:
@@ -292,7 +306,7 @@ def parser() -> argparse.ArgumentParser:
     prepare_command.set_defaults(handler=prepare)
     check_command = commands.add_parser("check", help=f"judge an existing {HANDBACK_FILE}, such as a pane worker's")
     check_command.add_argument("--out", required=True)
-    check_command.add_argument("--model", default=DEFAULT_MODEL)
+    check_command.add_argument("--model", help="default: the receipt's requested model, else " + DEFAULT_MODEL)
     check_command.set_defaults(handler=check)
     return root
 

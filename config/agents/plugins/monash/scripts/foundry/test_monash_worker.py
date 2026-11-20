@@ -145,6 +145,11 @@ class MonashWorkerTest(unittest.TestCase):
                 self.assertEqual(receipt["status"], "failed")
                 self.assertEqual(receipt["problems"], ["final line is not an exact HANDBACK marker"])
 
+    def test_two_handback_markers_fail(self) -> None:
+        code, receipt = self.run_unit(message="HANDBACK: blocked: no network\nHANDBACK: done\n")
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"], ["final message has more than one HANDBACK line"])
+
     def test_message_without_handback_line_fails(self) -> None:
         code, receipt = self.run_unit(message="This content can't be shown.")
         self.assertEqual(code, 5)
@@ -176,7 +181,9 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(code, 4)
         self.assertEqual(receipt["status"], "timed_out")
         self.assertEqual(receipt["problems"][0], "no handback within 2 seconds")
-        child = int((self.root / "child.pid").read_text())
+        child_file = self.root / "child.pid"
+        self.assertTrue(child_file.is_file(), "fake launcher did not start its child within the bound")
+        child = int(child_file.read_text())
         self.addCleanup(kill_leftover_group, child)
         self.assertTrue(process_gone(child))
 
@@ -233,12 +240,29 @@ class MonashWorkerTest(unittest.TestCase):
     def test_check_keeps_a_recorded_timeout_after_a_late_handback(self) -> None:
         code, _ = self.run_unit("--timeout-seconds", "2", mode="hang")
         self.assertEqual(code, 4)
-        self.addCleanup(kill_leftover_group, int((self.root / "child.pid").read_text()))
+        child_file = self.root / "child.pid"
+        if child_file.is_file():  # Only cleanup needs the child; the claim is about the receipt.
+            self.addCleanup(kill_leftover_group, int(child_file.read_text()))
         (self.out / "last-message.md").write_text("Finished late.\nHANDBACK: done\n")
         code, receipt = self.worker("check", "--out", str(self.out))
         self.assertEqual(code, 4)
         self.assertEqual(receipt["status"], "timed_out")
         self.assertEqual(json.loads((self.out / "receipt.json").read_text())["status"], "timed_out")
+
+    def test_check_reuses_the_recorded_model_when_none_is_given(self) -> None:
+        code, _ = self.run_unit("--model", "gpt-5.5", message="HANDBACK: done", route_model="gpt-5.5")
+        self.assertEqual(code, 0)
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["requested_model"], "gpt-5.5")
+
+    def test_check_refuses_a_malformed_launch_record(self) -> None:
+        self.out.mkdir()
+        (self.out / "last-message.md").write_text("HANDBACK: done\n")
+        (self.out / "receipt.json").write_text(json.dumps({"launch": {}}))
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("malformed launch record", receipt["message"])
 
     def test_documented_fan_out_example_runs_with_a_missing_out_parent(self) -> None:
         text = WORKERS_DOC.read_text(encoding="utf-8")
@@ -248,7 +272,13 @@ class MonashWorkerTest(unittest.TestCase):
         for name in ("a.md", "b.md"):
             (self.root / name).write_text("Count the files.\n", encoding="utf-8")
         out = self.root / "not-yet" / "workers"
-        env = dict(os.environ, PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}", OUT=str(out),
+        # Run the example's `monash-worker` on the suite's qualified interpreter, as other tests do.
+        shim_dir = self.root / "shim"
+        shim_dir.mkdir()
+        shim = shim_dir / "monash-worker"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{self.bin / "monash-worker"}" "$@"\n')
+        shim.chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim_dir}{os.pathsep}{os.environ['PATH']}", OUT=str(out),
                    REPO=str(self.cwd), WORKER_TEST_LOG=str(self.log), FAKE_MODE="ok",
                    FAKE_MESSAGE="Two files.\nHANDBACK: done\n")
         result = subprocess.run(["sh", "-c", script], cwd=self.root, env=env, stdout=subprocess.PIPE,

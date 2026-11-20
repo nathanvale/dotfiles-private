@@ -68,8 +68,8 @@ Each `--out` holds `brief.md`, `prompt.md` (what the worker received),
 `events.jsonl` (Codex JSON events), `launcher.log` (the launcher's route line
 and errors), `last-message.md` (the handback) and `receipt.json`. The same
 receipt prints as one JSON line on stdout. Rerunning `check` on an exec unit
-keeps its recorded launch facts, so a timeout or launcher failure stays in the
-verdict.
+keeps its recorded launch facts and requested model, so a timeout, launcher
+failure or wrong route stays in the verdict.
 
 | Exit | `status` | Meaning |
 | --- | --- | --- |
