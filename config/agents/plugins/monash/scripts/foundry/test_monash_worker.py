@@ -34,7 +34,7 @@ from pathlib import Path
 cfg = json.loads(Path(__file__).with_name('fake.json').read_text())
 Path(cfg['WORKER_TEST_LOG']).write_text(json.dumps(
     {'argv': sys.argv[1:], 'stdin': sys.stdin.read(), 'codex_home': os.environ.get('CODEX_HOME'),
-     'env_names': sorted(os.environ)}))
+     'env_names': sorted(os.environ), 'herdr_pane': os.environ.get('HERDR_PANE_ID')}))
 mode = cfg['FAKE_MODE']
 argv = sys.argv[1:]
 out = Path(argv[argv.index('-o') + 1])
@@ -74,11 +74,13 @@ out.write_text(cfg['FAKE_MESSAGE'])
 # commands as their own process group with a pane-shell environment, as a real pane's
 # job-control shell does.
 FAKE_HERDR = """#!{python}
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 from pathlib import Path
 cfg = json.loads(Path(__file__).with_name('fake.json').read_text())
 argv = sys.argv[1:]
 call = {'argv': argv}
+if 'tab' in argv and 'create' in argv and cfg.get('HERDR_HANG_ON_CREATE'):
+    time.sleep(60)
 if 'tab' in argv and 'close' in argv and cfg.get('HERDR_WATCH'):
     out = Path(cfg['HERDR_WATCH'])
     call['handback_present'] = (out / 'last-message.md').exists()
@@ -88,11 +90,16 @@ if 'status' in argv:
     print(json.dumps({'server': {'running': cfg.get('HERDR_RUNNING', True)}}))
 elif 'tab' in argv and 'create' in argv:
     print(json.dumps({'result': {'root_pane': {'pane_id': 'w9:p1'}, 'tab': {'tab_id': 'w9:t1'}}}))
+elif 'process-info' in argv:
+    foreground = 2 if cfg.get('HERDR_SHELL_BUSY') else 1
+    print(json.dumps({'result': {'process_info': {'foreground_process_group_id': foreground, 'shell_pid': 1}}}))
 elif 'pane' in argv and 'run' in argv:
     command = ' '.join(argv[argv.index('run') + 2:])
-    shell_env = dict(os.environ, PANE_SHELL_SECRET='leak', SSH_CONNECTION='192.0.2.1 50000 192.0.2.2 22')
+    shell_env = dict(os.environ, PANE_SHELL_SECRET='leak', SSH_CONNECTION='192.0.2.1 50000 192.0.2.2 22',
+                     HERDR_PANE_ID='w9:p1', HERDR_SESSION='default')
     subprocess.Popen(['sh', '-c', command], env=shell_env, start_new_session=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(float(cfg.get('HERDR_RUN_RETURNS_AFTER', 0)))
 """
 
 
@@ -511,14 +518,16 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual([call["argv"][:4] for call in calls], [
             ["--session", "default", "status", "--json"],
             ["--session", "default", "tab", "create"],
+            ["--session", "default", "pane", "process-info"],
             ["--session", "default", "pane", "run"],
             ["--session", "default", "tab", "close"]])
         create = calls[1]["argv"]
         self.assertIn("--no-focus", create)
         self.assertEqual(create[create.index("--label") + 1], "sol: out")
-        self.assertEqual(calls[2]["argv"][4], "w9:p1")
-        self.assertEqual(calls[3]["argv"][4], "w9:t1")
-        self.assertTrue(calls[3]["handback_present"])
+        self.assertEqual(calls[2]["argv"][5], "w9:p1")
+        self.assertEqual(calls[3]["argv"][4], "w9:p1")
+        self.assertEqual(calls[4]["argv"][4], "w9:t1")
+        self.assertTrue(calls[4]["handback_present"])
         argv = json.loads(self.log.read_text())["argv"]
         self.assertNotIn("--json", argv)
         self.assertEqual(argv[:3], ["exec", "--profile", "monash-sol"])
@@ -563,6 +572,40 @@ class MonashWorkerTest(unittest.TestCase):
         self.addCleanup(kill_leftover_group, child)
         self.assertTrue(process_gone(child))
         self.assertEqual(self.herdr_calls()[-1]["argv"][2:4], ["tab", "close"])
+
+
+    def test_pane_worker_sees_its_own_pane_not_the_callers(self) -> None:
+        code, _ = self.run_unit("--pane", message="HANDBACK: done",
+                                extra_env={"HERDR_PANE_ID": "w1:p1", "HERDR_SESSION": "coordinator"})
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(self.log.read_text())["herdr_pane"], "w9:p1")
+
+    def test_pane_out_name_cannot_inject_shell(self) -> None:
+        self.out = self.root / "unit\ntouch $HOME/INJECTED\n#"
+        code, receipt = self.run_unit("--pane", message="HANDBACK: done")
+        self.assertEqual(code, 0, receipt)
+        self.assertFalse((self.home / "INJECTED").exists())
+
+    def test_pane_herdr_call_that_hangs_still_writes_a_receipt_within_the_bound(self) -> None:
+        started = time.monotonic()
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
+                                      extra_env={"HERDR_HANG_ON_CREATE": True})
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0], "codex did not start: herdr tab create timed out")
+
+    def test_pane_result_after_the_bound_is_not_done(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "1", message="HANDBACK: done",
+                                      extra_env={"HERDR_RUN_RETURNS_AFTER": 3})
+        self.assertNotEqual(receipt["status"], "done")
+        self.assertIn(code, (4, 5))
+
+    def test_pane_whose_shell_is_not_ready_gets_no_command(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
+                                      extra_env={"HERDR_SHELL_BUSY": True})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0], "codex did not start: the pane's shell was not ready")
+        self.assertNotIn("run", [call["argv"][3] for call in self.herdr_calls()])
 
 
 if __name__ == "__main__":

@@ -2,14 +2,15 @@
 
 Hand one bounded, independent unit to a Monash Codex worker (Sol 6.1,
 `gpt-6.1-sol`, by default) and get a checked handback. Any coordinator,
-orchestrator or agent can use this route; it needs no Herdr session for the
-default shape.
+orchestrator or agent can use this route. The default shape opens the worker in
+a Herdr pane; without a running Herdr session, use the shape with no pane and
+say so.
 
 `monash-worker` owns the brief wrapper, the handback convention, the bound and
 the receipt. Its source is `scripts/foundry/monash-worker`; the installer links
 it as `~/.local/bin/monash-worker`. Read `monash-worker --help` for flags.
 
-Exec workers run `codex exec --profile monash-sol` in the worker Codex home
+Workers, with or without a pane, run `codex exec --profile monash-sol` in the worker Codex home
 `~/.codex-monash-sol`, which `scripts/foundry/install.py` creates and
 `--check` verifies. The profile selects provider `monash_foundry`, model
 `gpt-6.1-sol`, high effort, the priority (fast) tier, and the workspace-write
@@ -50,7 +51,9 @@ monash-worker run --pane --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
 
 - `--pane` opens a new Herdr tab labelled `sol: <OUT_DIR name>` in session
   `default` (`--herdr-session` names another), without taking focus. Codex's
-  live output shows there. The command waits within the bound, writes the same
+  live output shows there once the tab's shell is ready. The worker gets that
+  pane's own Herdr identity, not the caller's. The command waits within the
+  bound (a result after it is not accepted), writes the same
   receipt as a run without a pane, and closes the tab once the handback and
   exit code are captured; the pane's output is kept in `codex.log`.
 - With `--pane` and no running Herdr session, the command refuses (exit 2)

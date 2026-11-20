@@ -52,6 +52,7 @@ RUN_SCRIPT = "run.sh"
 PID_FILE = "worker.pid"
 EXIT_CODE_FILE = "exit-code"
 PANE_START_SECONDS = 30
+HERDR_CALL_SECONDS = 30
 PANE_POLL_SECONDS = 0.2
 DEFAULT_HERDR_SESSION = "default"
 
@@ -306,9 +307,13 @@ class Herdr:
                              "that no Herdr session was available")
         self.binary = binary
 
-    def call(self, *args: str) -> dict[str, object]:
-        result = subprocess.run([self.binary, "--session", self.session, *args], stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    def call(self, *args: str, timeout: float = HERDR_CALL_SECONDS) -> dict[str, object]:
+        try:
+            result = subprocess.run([self.binary, "--session", self.session, *args], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    timeout=max(0.5, timeout))
+        except subprocess.TimeoutExpired as error:
+            raise OSError(0, f"herdr {' '.join(args[:2])} timed out") from error
         if result.returncode != 0:
             raise OSError(0, f"herdr {' '.join(args[:2])} exited {result.returncode}")
         try:
@@ -359,14 +364,18 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
     """Run the same codex command in a new unfocused Herdr tab; close it once the result is captured."""
     q = shlex.quote
     exit_partial, exit_file, pid_file = out / f"{EXIT_CODE_FILE}.partial", out / EXIT_CODE_FILE, out / PID_FILE
-    assignments = " ".join(q(f"{name}={value}") for name, value in environment.items() if name != "SSH_CONNECTION")
-    # The pane's own SSH_CONNECTION (public metadata) tells the 1Password wrapper to use the desktop
-    # keychain, as the launcher route forwards it; the caller's value describes a different shell.
-    assignments += ' ${SSH_CONNECTION:+"SSH_CONNECTION=$SSH_CONNECTION"}'
+    # Names that describe a shell (SSH_CONNECTION, and the launcher's Herdr identity names) come from the
+    # pane's own shell, not the caller's: the 1Password wrapper reads the desktop keychain only in an SSH
+    # context, and the worker must not address its coordinator's pane.
+    from_pane = ["SSH_CONNECTION", *(name for name in load_launcher().CODEX_ENV_HOP_NAMES
+                                     if name.startswith("HERDR_") and name != "HERDR_AGENT")]
+    assignments = " ".join(q(f"{name}={value}") for name, value in environment.items()
+                           if name not in from_pane and name != "HERDR_AGENT")
+    assignments += "".join(f' ${{{name}:+"{name}=${name}"}}' for name in from_pane)
     script = out / RUN_SCRIPT
     script.write_text("\n".join((
         "#!/bin/sh",
-        f"# monash-worker pane unit: {out}",
+        "# monash-worker pane unit; every path below is shell-quoted.",
         f"echo $$ > {q(str(pid_file))}",
         # env -i: the pane's own shell environment never reaches the worker.
         f"( env -i {assignments} {' '.join(q(arg) for arg in argv)} < {q(str(out / PROMPT_FILE))}; "
@@ -377,32 +386,46 @@ def run_in_pane(herdr: Herdr, argv: list[str], environment: dict[str, str], out:
     facts: dict[str, object] = {"session": herdr.session}
     timed_out, start_error, exit_code, pid = False, None, None, None
     started = time.monotonic()
+
+    def remaining() -> float:
+        return timeout_seconds - (time.monotonic() - started)
+
     try:
-        created = herdr.call("tab", "create", "--no-focus", "--label", f"sol: {out.name}", "--cwd", str(cwd))
+        created = herdr.call("tab", "create", "--no-focus", "--label", f"sol: {out.name}", "--cwd", str(cwd),
+                             timeout=min(HERDR_CALL_SECONDS, remaining()))
         result = created.get("result") or {}
         facts["tab"] = (result.get("tab") or {}).get("tab_id")
         facts["pane"] = (result.get("root_pane") or {}).get("pane_id")
         if not facts["tab"] or not facts["pane"]:
             raise OSError(0, "herdr tab create returned no tab or pane")
-        herdr.call("pane", "run", str(facts["pane"]), f"sh {q(str(script))}")
+        # Creation is not readiness: send the command only once the pane's shell owns the foreground.
         while True:
-            if exit_file.is_file():
-                exit_code = int(exit_file.read_text().strip() or "-1")
+            info = (herdr.call("pane", "process-info", "--pane", str(facts["pane"]),
+                               timeout=min(HERDR_CALL_SECONDS, remaining())).get("result") or {})
+            info = info.get("process_info") or {}
+            if info.get("shell_pid") and info.get("foreground_process_group_id") == info.get("shell_pid"):
                 break
+            if time.monotonic() - started > min(PANE_START_SECONDS, timeout_seconds):
+                raise OSError(0, "the pane's shell was not ready")
+            time.sleep(PANE_POLL_SECONDS)
+        herdr.call("pane", "run", str(facts["pane"]), f"sh {q(str(script))}",
+                   timeout=min(HERDR_CALL_SECONDS, remaining()))
+        while True:
             if pid is None and pid_file.is_file() and pid_file.read_text().strip():
                 pid = int(pid_file.read_text().strip())
-            now = time.monotonic()
-            if pid is None and now - started > min(PANE_START_SECONDS, timeout_seconds):
-                start_error = f"the pane did not start the worker within {PANE_START_SECONDS} seconds"
-                break
-            if pid is not None and not alive(pid):
-                if exit_file.is_file():
-                    continue
-                break
-            if now - started >= timeout_seconds:
+            # The bound comes first: a result that lands after it is not accepted.
+            if remaining() <= 0:
                 timed_out = True
                 if pid is not None:
                     stop_pane_group(pid)
+                break
+            if exit_file.is_file():
+                exit_code = int(exit_file.read_text().strip() or "-1")
+                break
+            if pid is None and time.monotonic() - started > min(PANE_START_SECONDS, timeout_seconds):
+                start_error = f"the pane did not start the worker within {PANE_START_SECONDS} seconds"
+                break
+            if pid is not None and not alive(pid) and not exit_file.is_file():
                 break
             time.sleep(PANE_POLL_SECONDS)
     except OSError as error:
