@@ -103,7 +103,7 @@ test("apply preserves protections, targets only isolated client installs, is ide
 		expect(settings["dev.containers.defaultExtensions"]).toEqual(["vsls-contrib.codetour", "dbaeumer.vscode-eslint", "mermaidchart.vscode-mermaid-chart", "fallow-rs.fallow-vscode"]);
 		expect(readFileSync(join(f.user, "keybindings.json"), "utf8")).toBe(readFileSync(join(f.source, "keybindings.json"), "utf8"));
 		const calls = f.calls();
-		expect(calls).toHaveLength(7);
+		expect(calls).toHaveLength(4);
 		for (const call of calls) {
 			expect(call.args.slice(0, 4)).toEqual(["--user-data-dir", join(f.target, "user-data"), "--extensions-dir", f.extensions]);
 			expect(call.args[4]).toBe("--install-extension");
@@ -119,11 +119,11 @@ test("apply preserves protections, targets only isolated client installs, is ide
 		const modified = statSync(f.settings).mtimeMs;
 		expect(f.apply(preview.data.plan).causeCode).toBe("SUCCESS_UNCHANGED");
 		expect(statSync(f.settings).mtimeMs).toBe(modified);
-		expect(f.calls()).toHaveLength(7);
+		expect(f.calls()).toHaveLength(4);
 		expect(f.run("rollback", "--plan", preview.data.plan, "--editor-closed").causeCode).toBe("SUCCESS_COMPLETED");
 		expect(readFileSync(f.settings, "utf8")).toBe(f.before);
 		expect(existsSync(join(f.user, "keybindings.json"))).toBe(false);
-		expect(JSON.parse(readFileSync(join(f.extensions, "extensions.json"), "utf8"))).toHaveLength(12);
+		expect(JSON.parse(readFileSync(join(f.extensions, "extensions.json"), "utf8"))).toHaveLength(9);
 		expect(f.run("rollback", "--plan", preview.data.plan, "--editor-closed").causeCode).toBe("SUCCESS_UNCHANGED");
 		expect(f.apply(preview.data.plan).causeCode).toBe("DOMAIN_PRECONDITION_UNMET");
 		expect(f.apply(f.preview().data.plan).exitCode).toBe(0);
@@ -164,7 +164,7 @@ test("source changes need a new preview, removed settings disappear, and direct 
 		expect(settings["remote.SSH.path"]).toBeUndefined();
 		expect(settings["files.autoSave"]).toBe("off");
 		expect(settings["custom.keep"]).toBe(true);
-		expect(f.calls()).toHaveLength(7);
+		expect(f.calls()).toHaveLength(4);
 	} finally { f.cleanup(); }
 });
 
