@@ -24,6 +24,7 @@ import unittest
 
 
 SOURCE_DIR = Path(__file__).resolve().parent
+WORKERS_DOC = SOURCE_DIR.parent.parent / "skills" / "monash-foundry" / "workers.md"
 
 # The fake launcher's behaviour comes from FAKE_MODE; it records argv and stdin.
 FAKE_FOUNDRY = """#!/usr/bin/env python3
@@ -130,6 +131,20 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertEqual(receipt["status"], "blocked")
         self.assertEqual(receipt["handback"], {"status": "blocked", "reason": "no network in the sandbox"})
 
+    def test_handback_marker_must_be_exact(self) -> None:
+        # Independent oracle: the marker contract from the handback rules, as literals.
+        for message in ("Tests failed.\nHANDBACK: done: but tests failed\n",
+                        "HANDBACK: done\nActually the change did not build.\n",
+                        "HANDBACK: done.\n",
+                        "Stuck.\nHANDBACK: blocked\n",
+                        "Stuck.\nHANDBACK: blocked:\n"):
+            with self.subTest(message=message):
+                shutil.rmtree(self.out, ignore_errors=True)
+                code, receipt = self.run_unit(message=message)
+                self.assertEqual(code, 5)
+                self.assertEqual(receipt["status"], "failed")
+                self.assertEqual(receipt["problems"], ["final line is not an exact HANDBACK marker"])
+
     def test_message_without_handback_line_fails(self) -> None:
         code, receipt = self.run_unit(message="This content can't be shown.")
         self.assertEqual(code, 5)
@@ -214,6 +229,33 @@ class MonashWorkerTest(unittest.TestCase):
         self.assertIn(f"- Also write the complete final message to {self.out / 'last-message.md'}", prompt)
         self.assertEqual(result["send"], f"Read {self.out / 'prompt.md'} and do exactly what it says.")
         self.assertFalse(self.log.exists())
+
+    def test_check_keeps_a_recorded_timeout_after_a_late_handback(self) -> None:
+        code, _ = self.run_unit("--timeout-seconds", "2", mode="hang")
+        self.assertEqual(code, 4)
+        self.addCleanup(kill_leftover_group, int((self.root / "child.pid").read_text()))
+        (self.out / "last-message.md").write_text("Finished late.\nHANDBACK: done\n")
+        code, receipt = self.worker("check", "--out", str(self.out))
+        self.assertEqual(code, 4)
+        self.assertEqual(receipt["status"], "timed_out")
+        self.assertEqual(json.loads((self.out / "receipt.json").read_text())["status"], "timed_out")
+
+    def test_documented_fan_out_example_runs_with_a_missing_out_parent(self) -> None:
+        text = WORKERS_DOC.read_text(encoding="utf-8")
+        start = text.index("monash-worker run --brief a.md")
+        block = text[text.rindex("```sh", 0, start) + len("```sh"):text.index("```", start)]
+        script = "\n".join(line.strip() for line in block.strip().splitlines())
+        for name in ("a.md", "b.md"):
+            (self.root / name).write_text("Count the files.\n", encoding="utf-8")
+        out = self.root / "not-yet" / "workers"
+        env = dict(os.environ, PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}", OUT=str(out),
+                   REPO=str(self.cwd), WORKER_TEST_LOG=str(self.log), FAKE_MODE="ok",
+                   FAKE_MESSAGE="Two files.\nHANDBACK: done\n")
+        result = subprocess.run(["sh", "-c", script], cwd=self.root, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for unit in ("a", "b"):
+            self.assertEqual(json.loads((out / unit / "receipt.json").read_text())["status"], "done")
 
     def test_check_judges_a_pane_worker_handback(self) -> None:
         self.out.mkdir()

@@ -48,7 +48,8 @@ Handback rules (added by monash-worker):
   HANDBACK: done
   HANDBACK: blocked: <one-line reason>
 """
-HANDBACK_LINE = re.compile(r"^HANDBACK: (done|blocked)(?:: (.+))?$")
+# The final non-blank line must be exactly one marker; `done` takes no suffix.
+HANDBACK_LINE = re.compile(r"^HANDBACK: (?:(?P<done>done)|blocked: (?P<reason>\S.*))$")
 # The launcher's stderr route line; see "Output and ownership" in README.md.
 ROUTE_LINE = re.compile(r"^host=\S+ agent=(?P<agent>\S+) provider=(?P<provider>.+?) "
                         r"deployment=(?P<deployment>\S+)(?: resource=\S+)?"
@@ -67,10 +68,12 @@ def read_handback(out: Path) -> dict[str, Optional[str]]:
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     if not text.strip():
         return {"status": None, "reason": "no final message was written"}
-    for line in reversed(text.splitlines()):
-        match = HANDBACK_LINE.match(line.strip())
-        if match:
-            return {"status": match.group(1), "reason": match.group(2)}
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    match = HANDBACK_LINE.match(lines[-1])
+    if match:
+        return {"status": "done" if match.group("done") else "blocked", "reason": match.group("reason")}
+    if any(line.startswith("HANDBACK:") for line in lines):
+        return {"status": None, "reason": "final line is not an exact HANDBACK marker"}
     return {"status": None, "reason": "final message has no HANDBACK line"}
 
 
@@ -255,7 +258,17 @@ def check(args: argparse.Namespace) -> int:
     out = Path(args.out).expanduser().absolute()
     if not out.is_dir():
         raise UsageError(f"--out {out} is not a directory")
-    return write_receipt(out, judge(out, args.model, None))
+    return write_receipt(out, judge(out, args.model, recorded_launch(out)))
+
+
+def recorded_launch(out: Path) -> Optional[dict[str, object]]:
+    """An exec unit's launch facts, such as a timeout, stay part of every later judgement."""
+    try:
+        receipt = json.loads((out / RECEIPT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    launch = receipt.get("launch") if isinstance(receipt, dict) else None
+    return launch if isinstance(launch, dict) else None
 
 
 def parser() -> argparse.ArgumentParser:
