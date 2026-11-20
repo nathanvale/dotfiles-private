@@ -34,12 +34,13 @@ from pathlib import Path
 cfg = json.loads(Path(__file__).with_name('fake.json').read_text())
 Path(cfg['WORKER_TEST_LOG']).write_text(json.dumps(
     {'argv': sys.argv[1:], 'stdin': sys.stdin.read(), 'codex_home': os.environ.get('CODEX_HOME'),
-     'env_names': sorted(os.environ)}))
+     'env_names': sorted(os.environ), 'herdr_pane': os.environ.get('HERDR_PANE_ID')}))
 mode = cfg['FAKE_MODE']
 argv = sys.argv[1:]
 out = Path(argv[argv.index('-o') + 1])
 thread = 'thread-fixture-1'
 print(json.dumps({'type': 'thread.started', 'thread_id': thread}))
+print(f'session id: {thread}', file=sys.stderr, flush=True)  # the human header a pane shows
 if cfg.get('FAKE_SESSION', '1') == '1':
     sessions = Path(os.environ['CODEX_HOME']) / 'sessions' / '2026' / '11' / '20'
     sessions.mkdir(parents=True, exist_ok=True)
@@ -66,6 +67,43 @@ if mode == 'refuse':
     raise SystemExit(2)
 print(json.dumps({'type': 'turn.completed', 'usage': {'output_tokens': 7}}))
 out.write_text(cfg['FAKE_MESSAGE'])
+"""
+
+
+# The fake herdr records each call, answers status and tab create, and runs `pane run`
+# commands as their own process group with a pane-shell environment, as a real pane's
+# job-control shell does.
+FAKE_HERDR = """#!{python}
+import json, os, subprocess, sys, time
+from pathlib import Path
+cfg = json.loads(Path(__file__).with_name('fake.json').read_text())
+argv = sys.argv[1:]
+call = {'argv': argv}
+if 'tab' in argv and 'create' in argv and cfg.get('FAKE_HERDR_HANG_ON_CREATE'):
+    time.sleep(60)
+if 'process-info' in argv and cfg.get('FAKE_HERDR_SLOW_INFO'):
+    time.sleep(float(cfg['FAKE_HERDR_SLOW_INFO']))
+if 'tab' in argv and 'close' in argv and cfg.get('FAKE_HERDR_HANG_ON_CLOSE'):
+    time.sleep(60)
+if 'tab' in argv and 'close' in argv and cfg.get('FAKE_HERDR_WATCH'):
+    out = Path(cfg['FAKE_HERDR_WATCH'])
+    call['handback_present'] = (out / 'last-message.md').exists()
+with Path(cfg['FAKE_HERDR_CALLS']).open('a') as log:
+    log.write(json.dumps(call) + '\\n')
+if 'status' in argv:
+    print(json.dumps({'server': {'running': cfg.get('FAKE_HERDR_RUNNING', True)}}))
+elif 'tab' in argv and 'create' in argv:
+    print(json.dumps({'result': {'root_pane': {'pane_id': 'w9:p1'}, 'tab': {'tab_id': 'w9:t1'}}}))
+elif 'process-info' in argv:
+    foreground = 2 if cfg.get('FAKE_HERDR_SHELL_BUSY') else 1
+    print(json.dumps({'result': {'process_info': {'foreground_process_group_id': foreground, 'shell_pid': 1}}}))
+elif 'pane' in argv and 'run' in argv:
+    command = ' '.join(argv[argv.index('run') + 2:])
+    shell_env = dict(os.environ, PANE_SHELL_SECRET='leak', SSH_CONNECTION='192.0.2.1 50000 192.0.2.2 22',
+                     HERDR_PANE_ID='w9:p1', HERDR_SESSION='default')
+    subprocess.Popen(['sh', '-c', command], env=shell_env, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(float(cfg.get('FAKE_HERDR_RUN_RETURNS_AFTER', 0)))
 """
 
 
@@ -101,6 +139,10 @@ class MonashWorkerTest(unittest.TestCase):
         fake = self.bin / "codex"
         fake.write_text(FAKE_CODEX.replace("{python}", sys.executable), encoding="utf-8")
         fake.chmod(0o755)
+        herdr = self.bin / "herdr"
+        herdr.write_text(FAKE_HERDR.replace("{python}", sys.executable), encoding="utf-8")
+        herdr.chmod(0o755)
+        self.herdr_log = self.root / "herdr-calls.jsonl"
         self.home = self.root / "home"
         self.codex_home = self.home / ".codex-monash-sol"
         self.codex_home.mkdir(parents=True, mode=0o700)
@@ -119,7 +161,8 @@ class MonashWorkerTest(unittest.TestCase):
             extra_env: dict[str, str] | None = None, path_first: str = "") -> dict[str, str]:
         """The worker's environment; the fake's settings go in fake.json, since the worker strips extras."""
         fake = {"WORKER_TEST_LOG": str(self.log), "FAKE_MODE": mode, "FAKE_MESSAGE": message,
-                "FAKE_ROUTE_MODEL": route_model, "WORKER_TEST_CHILD": str(self.root / "child.pid")}
+                "FAKE_ROUTE_MODEL": route_model, "WORKER_TEST_CHILD": str(self.root / "child.pid"),
+                "FAKE_HERDR_CALLS": str(self.herdr_log), "FAKE_HERDR_WATCH": str(self.out)}
         env = {"HOME": str(self.home), "PATH": f"{path_first}{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"}
         for name, value in (extra_env or {}).items():
             (fake if name.startswith("FAKE_") else env)[name] = value
@@ -413,7 +456,7 @@ class MonashWorkerTest(unittest.TestCase):
     def fan_out_example(self, out: Path, briefs: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         """Run the fan-out block from workers.md as written, with `monash-worker` on PATH."""
         text = WORKERS_DOC.read_text(encoding="utf-8")
-        start = text.index("monash-worker run --brief a.md")
+        start = text.index("monash-worker run --pane --brief a.md")
         block = text[text.rindex("```sh", 0, start) + len("```sh"):text.index("```", start)]
         script = "\n".join(line.strip() for line in block.strip().splitlines())
         for name in briefs:
@@ -433,6 +476,7 @@ class MonashWorkerTest(unittest.TestCase):
         out = self.root / "not-yet" / "workers"
         result = self.fan_out_example(out, ("a.md", "b.md"))
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sum(call["argv"][2:4] == ["tab", "create"] for call in self.herdr_calls()), 2)
         self.assertEqual(result.stderr, "")
         for unit in ("a", "b"):
             self.assertEqual(json.loads((out / unit / "receipt.json").read_text())["status"], "done")
@@ -456,6 +500,168 @@ class MonashWorkerTest(unittest.TestCase):
     def test_documented_fan_out_example_reports_a_failed_unit(self) -> None:
         result = self.fan_out_example(self.root / "workers", ("a.md",))  # b.md is missing
         self.assertIn("unit b exited 2", result.stderr)
+
+
+    def herdr_calls(self) -> list[list[str]]:
+        if not self.herdr_log.exists():
+            return []
+        return [json.loads(line) for line in self.herdr_log.read_text().splitlines()]
+
+    def test_pane_run_opens_an_unfocused_tab_and_writes_the_exec_receipt(self) -> None:
+        code, receipt = self.run_unit("--pane", message="Three files.\nHANDBACK: done\n")
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["status"], "done")
+        self.assertEqual({key: receipt["route"][key] for key in ("model", "provider", "service_tier", "effort")},
+                         {"model": "gpt-6.1-sol", "provider": "monash_foundry", "service_tier": "priority",
+                          "effort": "high"})
+        self.assertEqual(receipt["thread_id"], "thread-fixture-1")
+        self.assertEqual(receipt["launch"]["shape"], "pane")
+        self.assertEqual(receipt["launch"]["herdr"], {"session": "default", "tab": "w9:t1", "pane": "w9:p1"})
+        calls = self.herdr_calls()
+        # Independent oracle: the Herdr calls a visible, unfocused, closed-after-capture worker needs.
+        self.assertEqual([call["argv"][:4] for call in calls], [
+            ["--session", "default", "status", "--json"],
+            ["--session", "default", "tab", "create"],
+            ["--session", "default", "pane", "process-info"],
+            ["--session", "default", "pane", "run"],
+            ["--session", "default", "tab", "close"]])
+        create = calls[1]["argv"]
+        self.assertIn("--no-focus", create)
+        self.assertEqual(create[create.index("--label") + 1], "sol: out")
+        self.assertEqual(calls[2]["argv"][5], "w9:p1")
+        self.assertEqual(calls[3]["argv"][4], "w9:p1")
+        self.assertEqual(calls[4]["argv"][4], "w9:t1")
+        self.assertTrue(calls[4]["handback_present"])
+        argv = json.loads(self.log.read_text())["argv"]
+        self.assertNotIn("--json", argv)
+        self.assertEqual(argv[:3], ["exec", "--profile", "monash-sol"])
+
+    def test_pane_worker_gets_only_the_allowlisted_environment(self) -> None:
+        code, _ = self.run_unit("--pane", message="HANDBACK: done")
+        self.assertEqual(code, 0)
+        names = set(json.loads(self.log.read_text())["env_names"])
+        self.assertNotIn("PANE_SHELL_SECRET", names)
+        self.assertIn("CODEX_HOME", names)
+        # The pane's own SSH_CONNECTION reaches the 1Password wrapper, as the launcher route forwards it.
+        self.assertIn("SSH_CONNECTION", names)
+
+    def test_pane_run_with_a_wrong_provider_fails(self) -> None:
+        code, receipt = self.run_unit("--pane", message="HANDBACK: done", extra_env={"FAKE_PROVIDER": "openai"})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"], ["route used provider openai, not monash_foundry"])
+
+    def test_pane_run_refuses_without_a_running_herdr_session(self) -> None:
+        code, receipt = self.run_unit("--pane", message="HANDBACK: done", extra_env={"FAKE_HERDR_RUNNING": False})
+        self.assertEqual(code, 2)
+        self.assertIn("no Herdr session 'default' is running", receipt["message"])
+        self.assertIn("start Herdr", receipt["message"])
+        self.assertEqual([call["argv"][2] for call in self.herdr_calls()], ["status"])
+        self.assertFalse(self.out.exists())
+        self.assertFalse(self.log.exists())
+
+    def test_pane_run_refuses_without_herdr_on_path(self) -> None:
+        (self.bin / "herdr").unlink()
+        code, receipt = self.run_unit("--pane", message="HANDBACK: done")
+        self.assertEqual(code, 2)
+        self.assertIn("herdr is not on PATH", receipt["message"])
+        self.assertFalse(self.out.exists())
+
+    def test_pane_timeout_stops_the_worker_group_and_closes_the_tab(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "3", mode="hang")
+        self.assertEqual(code, 4)
+        self.assertEqual(receipt["status"], "timed_out")
+        child_file = self.root / "child.pid"
+        self.assertTrue(child_file.is_file(), "fake codex did not start its child within the bound")
+        child = int(child_file.read_text())
+        self.addCleanup(kill_leftover_group, child)
+        self.assertTrue(process_gone(child))
+        self.assertEqual(self.herdr_calls()[-1]["argv"][2:4], ["tab", "close"])
+
+
+    def test_pane_worker_sees_its_own_pane_not_the_callers(self) -> None:
+        code, _ = self.run_unit("--pane", message="HANDBACK: done",
+                                extra_env={"HERDR_PANE_ID": "w1:p1", "HERDR_SESSION": "coordinator"})
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(self.log.read_text())["herdr_pane"], "w9:p1")
+
+    def test_pane_out_name_cannot_inject_shell(self) -> None:
+        self.out = self.root / "unit\ntouch $HOME/INJECTED\n#"
+        code, receipt = self.run_unit("--pane", message="HANDBACK: done")
+        self.assertEqual(code, 0, receipt)
+        self.assertFalse((self.home / "INJECTED").exists())
+
+    def test_pane_herdr_call_that_hangs_still_writes_a_receipt_within_the_bound(self) -> None:
+        started = time.monotonic()
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
+                                      extra_env={"FAKE_HERDR_HANG_ON_CREATE": True})
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0], "codex did not start: herdr tab create timed out")
+
+    def test_pane_run_that_times_out_after_starting_the_worker_stops_it(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", mode="hang",
+                                      extra_env={"FAKE_HERDR_RUN_RETURNS_AFTER": 5})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0],
+                         "codex did not start: herdr pane run timed out; the worker had started and was stopped")
+        child_file = self.root / "child.pid"
+        self.assertTrue(child_file.is_file(), "fake codex did not start its child")
+        child = int(child_file.read_text())
+        self.addCleanup(kill_leftover_group, child)
+        self.assertTrue(process_gone(child))
+
+    def test_pane_whose_shell_is_not_ready_gets_no_command(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
+                                      extra_env={"FAKE_HERDR_SHELL_BUSY": True})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0], "codex did not start: the pane's shell was not ready")
+        self.assertNotIn("run", [call["argv"][3] for call in self.herdr_calls()])
+
+
+    def test_pane_readiness_probe_that_times_out_means_not_ready(self) -> None:
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "2", message="HANDBACK: done",
+                                      extra_env={"FAKE_HERDR_SHELL_BUSY": True, "FAKE_HERDR_SLOW_INFO": 0.7})
+        self.assertEqual(code, 5)
+        self.assertEqual(receipt["problems"][0], "codex did not start: the pane's shell was not ready")
+
+    def test_pane_tab_close_that_hangs_stays_near_the_bound(self) -> None:
+        started = time.monotonic()
+        code, receipt = self.run_unit("--pane", "--timeout-seconds", "3", message="HANDBACK: done",
+                                      extra_env={"FAKE_HERDR_HANG_ON_CLOSE": True})
+        self.assertLess(time.monotonic() - started, 7)
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["launch"]["herdr"]["close_error"], "herdr tab close timed out")
+
+
+    def test_interrupt_during_pane_run_stops_a_started_worker(self) -> None:
+        env = self.env(mode="hang", extra_env={"FAKE_HERDR_RUN_RETURNS_AFTER": 20})
+        worker = subprocess.Popen([sys.executable, str(self.bin / "monash-worker"), "run", "--pane", "--brief",
+                                   str(self.brief), "--out", str(self.out), "--cwd", str(self.cwd)],
+                                  env=env, stdout=subprocess.PIPE, text=True)
+        child_file = self.root / "child.pid"
+        deadline = time.monotonic() + 30
+        while not child_file.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(child_file.is_file(), "fake codex never started its child")
+        child = int(child_file.read_text())
+        self.addCleanup(kill_leftover_group, child)
+        worker.send_signal(signal.SIGINT)  # herdr pane run is still in flight
+        stdout, _ = worker.communicate(timeout=60)
+        self.assertEqual(worker.returncode, 130)
+        self.assertEqual(json.loads(stdout)["status"], "interrupted")
+        self.assertTrue(process_gone(child))
+
+
+    def test_pane_script_writes_no_environment_values(self) -> None:
+        # The repository's Secrets Pattern: no on-disk file projects a set of values into the environment.
+        code, _ = self.run_unit("--pane", message="HANDBACK: done",
+                                extra_env={"LANG": "C.monash-marker", "TERM": "xterm-marker"})
+        self.assertEqual(code, 0)
+        script = (self.out / "run.sh").read_text()
+        for value in ("C.monash-marker", "xterm-marker", str(self.home)):
+            self.assertNotIn(value, script)
+        names = set(json.loads(self.log.read_text())["env_names"])
+        self.assertTrue({"HOME", "PATH", "LANG", "TERM", "CODEX_HOME"} <= names, names)
 
 
 if __name__ == "__main__":
