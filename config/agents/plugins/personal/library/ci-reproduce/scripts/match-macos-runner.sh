@@ -23,6 +23,7 @@ state=${XDG_STATE_HOME:-$HOME/.local/state}/ci-reproduce
 vm_name=""
 vm_pid=""
 vm_disposable=false
+transport_pid=""
 
 say() { printf 'match-macos-runner: %s\n' "$*" >&2; }
 die() {
@@ -219,7 +220,7 @@ guest_script() {
 		default_node default_node_sha256
 	# shellcheck disable=SC2016 # The guest expands these, with its own HOME.
 	printf '%s\n' 'state=${XDG_STATE_HOME:-$HOME/.local/state}/ci-reproduce' \
-		'vm_name=""' 'vm_pid=""' 'vm_disposable=false'
+		'vm_name=""' 'vm_pid=""' 'vm_disposable=false' 'transport_pid=""'
 	declare -f say die usage wait_lock check_sha256 expected_sha256 fetch \
 		ensure_git ensure_bun ensure_node ensure_toolchains run_here stop_vm on_signal main
 	printf 'main'
@@ -235,6 +236,11 @@ stop_vm() {
 	vm_name=""
 	# tart stop can end in a forced power-off; flush the guest's writes first.
 	tart exec "$name" /bin/sync >/dev/null 2>&1 || true
+	if [[ -n $transport_pid ]]; then
+		kill "$transport_pid" 2>/dev/null || true
+		wait "$transport_pid" 2>/dev/null || true
+		transport_pid=""
+	fi
 	tart stop --timeout 60 "$name" >/dev/null 2>&1 || true
 	if [[ -n $vm_pid ]]; then
 		kill -0 "$vm_pid" 2>/dev/null && kill "$vm_pid" 2>/dev/null
@@ -296,10 +302,14 @@ run_in_vm() {
 	done
 	say "VM $name ready after $((SECONDS - started)) s ($cpus CPUs, $memory MB)"
 
-	set +e
-	guest_script "$@" | tart exec -i "$name" /bin/bash -s 2>&1 | tee "$run_dir/output.log"
-	status=${PIPESTATUS[1]}
-	set -e
+	# The guest runs in the background and this shell waits on it: bash runs a
+	# TERM or INT trap only between commands, so a foreground pipeline holding a
+	# hung guest command would keep the VM and its lock up until it ended.
+	tart exec -i "$name" /bin/bash -s < <(guest_script "$@") > >(tee "$run_dir/output.log") 2>&1 &
+	transport_pid=$!
+	status=0
+	wait "$transport_pid" || status=$?
+	transport_pid=""
 	echo "$status" >"$run_dir/exit-code"
 	stop_vm
 	[[ $keep == true && $prepare == false ]] && say "clone $name kept, stopped"

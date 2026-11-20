@@ -68,6 +68,7 @@ jobs:
             bin/test/ghh-test.sh
             bin/test/git-effective-behavior-test.sh
             bin/test/lm-studio-ensure-test.sh
+            bin/test/match-macos-runner-test.sh
             bin/test/profile-link-parity-test.sh
             bin/test/setup-completion-test.sh
             bin/test/setup-state-recovery-test.sh
