@@ -2,14 +2,15 @@
 
 Hand one bounded, independent unit to a Monash Codex worker (Sol 6.1,
 `gpt-6.1-sol`, by default) and get a checked handback. Any coordinator,
-orchestrator or agent can use this route; it needs no Herdr session for the
-default shape.
+orchestrator or agent can use this route. The default shape opens the worker in
+a Herdr pane; without a running Herdr session, use the shape with no pane and
+say so.
 
 `monash-worker` owns the brief wrapper, the handback convention, the bound and
 the receipt. Its source is `scripts/foundry/monash-worker`; the installer links
 it as `~/.local/bin/monash-worker`. Read `monash-worker --help` for flags.
 
-Exec workers run `codex exec --profile monash-sol` in the worker Codex home
+Workers, with or without a pane, run `codex exec --profile monash-sol` in the worker Codex home
 `~/.codex-monash-sol`, which `scripts/foundry/install.py` creates and
 `--check` verifies. The profile selects provider `monash_foundry`, model
 `gpt-6.1-sol`, high effort, the priority (fast) tier, and the workspace-write
@@ -17,10 +18,15 @@ sandbox with network access. Nathan's `~/.codex` is not touched.
 
 ## Pick the shape
 
+Start every new worker in a Herdr pane, so Nathan can watch it. Nathan, 20
+November 2026, 16:54: "Change it so future workers can do it. So I can see it
+and heard it from the future workers."
+
 | Shape | Use for | Command |
 | --- | --- | --- |
-| Exec (default) | Unattended units: questions, reviews, analysis, a patch in a worktree | `monash-worker run` |
-| Herdr pane | Long work a coordinator watches or steers between turns | `monash spawn`, then `monash-worker prepare` and `check` |
+| Herdr pane (default) | Every new unit | `monash-worker run --pane` |
+| No pane | Only when no Herdr session is available; say so in your report | `monash-worker run` |
+| Interactive pane | Steering a worker turn by turn by hand | `monash spawn`, then `monash-worker prepare` and `check` |
 
 ## Write the brief
 
@@ -37,18 +43,30 @@ sandbox with network access. Nathan's `~/.codex` is not touched.
 - Leave the handback rules out of the brief: `monash-worker` appends them,
   and each unit's `prompt.md` shows the exact text the worker received.
 
-## Run exec workers
+## Run a worker
 
 ```sh
-monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
+monash-worker run --pane --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
 ```
+
+- `--pane` opens a new Herdr tab labelled `sol: <OUT_DIR name>` in session
+  `default` (`--herdr-session` names another), without taking focus. Codex's
+  live output shows there once the tab's shell is ready. The worker gets that
+  pane's own Herdr identity, not the caller's. The command waits within the
+  bound (a result after it is not accepted), writes the same
+  receipt as a run without a pane, and closes the tab once the handback and
+  exit code are captured; the pane's output is kept in `codex.log`.
+- With `--pane` and no running Herdr session, the command refuses (exit 2)
+  before writing anything and names the repair. It never falls back to a run
+  without a pane; drop `--pane` only when no Herdr session is available, and
+  say so.
 
 - Fan out by running one call per unit at the same time, each with its own new
   `--out`. Wait for every call, then judge each receipt.
 
   ```sh
-  monash-worker run --brief a.md --out "$OUT/a" --cwd "$REPO" >/dev/null & a=$!
-  monash-worker run --brief b.md --out "$OUT/b" --cwd "$REPO" >/dev/null & b=$!
+  monash-worker run --pane --brief a.md --out "$OUT/a" --cwd "$REPO" >/dev/null & a=$!
+  monash-worker run --pane --brief b.md --out "$OUT/b" --cwd "$REPO" >/dev/null & b=$!
   wait $a || echo "unit a exited $?" >&2
   wait $b || echo "unit b exited $?" >&2
   ```
@@ -91,7 +109,9 @@ model unless `--model` names another.
 | 5 | `failed` | Codex did not start or exited nonzero, no session record, wrong model or provider, a model reroute, or no exact `HANDBACK` line; see `problems`. |
 | 130 | `interrupted` | The caller interrupted the run; the worker's process group was stopped. |
 
-## Run a pane worker
+## Steer an interactive pane by hand
+
+Use this only to talk to a worker between turns; `run --pane` covers watching.
 
 1. Spawn one fresh pane per unit, without focus:
    `monash spawn --host laptop --model gpt-6.1-sol --agent codex --cwd /abs/repo --pane EXISTING_PANE --no-input --verify`.
@@ -110,8 +130,8 @@ model unless `--model` names another.
    which tells the worker to write its handback to `OUT_DIR/last-message.md`,
    and prints the one line to send. Send it:
    `herdr --session default agent prompt NAME "<send>" --wait --until done --until idle --until blocked --timeout 1800000`.
-5. `monash-worker check --out OUT_DIR` writes and prints the receipt. A pane
-   receipt has `launch: null` and no route check, so confirm the model from
+5. `monash-worker check --out OUT_DIR` writes and prints the receipt. An
+   interactive pane's receipt has `launch: null` and no route check (unlike `run --pane`), so confirm the model from
    the pane footer or `/status`.
 6. Close the pane once the handback is captured:
    `herdr --session default pane close PANE`.
@@ -143,7 +163,7 @@ When the coordinator writes the change itself, it runs steps 1 and 2 too.
 
 ## Check before use
 
-1. Require `status: done`; for exec, the receipt has already checked
+1. Require `status: done`; for `run`, with or without `--pane`, the receipt has already checked
    `route.model` and `route.provider`. Treat `blocked`, `timed_out` and `failed` as no result: read the
    reason, fix the brief or inputs, and run a new unit with a new `--out`.
 2. Open every cited `path:line` or rerun the cited command, and confirm the
