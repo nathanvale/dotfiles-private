@@ -1,0 +1,42 @@
+{
+  "cause": "link-stale-route",
+  "origin": "recorded",
+  "summary": "VS Code 1.147 stalled uploading its server into agents-pilot because the shared SSH link to the Mini still ran over WireGuard after the laptop came home.",
+  "target": "pilot",
+  "observed": {
+    "sshConfig": { "alias": "mac-mini", "hostname": "192.168.1.100", "controlMaster": "auto", "controlPersist": "600" },
+    "route": { "host": "en0", "default": "utun7" },
+    "sharedLink": { "pid": 79434, "etime": "15:33:12", "clientAddress": "192.168.2.2", "mibPerSecond": 3.125 },
+    "directConnection": { "clientAddress": "192.168.1.104", "mibPerSecond": 78.1 },
+    "container": "running",
+    "editor": {
+      "version": "1.147.0",
+      "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5",
+      "servers": [
+        "ready 69047191fc427f2f92828279aae1d90d8eeda7ab",
+        "partial 8a14f0cc1b08d531eb83255ea3764ae22aa932b5_1795215793849",
+        "ready c4453f8ea430795f941c1b2ff6c9321135a74a02"
+      ]
+    },
+    "install": "absent"
+  },
+  "expect": {
+    "cause": "link-stale-route",
+    "exitCode": 3,
+    "repairAction": "ssh -O stop mac-mini",
+    "messageIncludes": ["pid 79434", "15h 33m old", "from 192.168.2.2", "from 192.168.1.104"]
+  },
+  "evidence": {
+    "recorded": "2026-11-21T10:03:00+11:00",
+    "rates": "50 MB through the old link took 16 s; 50 MB over a fresh link took 0.64 to 2 s.",
+    "sources": [
+      "Dev Containers log trial-01/user-data/logs/20261121T100159/window1/exthost/ms-vscode-remote.remote-containers/remoteContainers-2026-11-20T23-02-00.740Z.log",
+      "ssh -G mac-mini; ssh -O check mac-mini; ps -o etime= -p 79434; lsof -a -p 79434 -i; route -n get 192.168.1.100; route -n get default",
+      "ls /home/agent/.vscode-server/bin in agents-pilot"
+    ],
+    "devContainersLog": [
+      "[2026-11-20T23:02:35.178Z] Failed to download VS Code Server (https://update.code.visualstudio.com/commit:8a14f0cc1b08d531eb83255ea3764ae22aa932b5/server-linux-arm64/stable): SHA mismatch",
+      "[2026-11-20T23:03:14.058Z] Start: Run in container: (dd iflag=fullblock bs=8192 count=29452; dd iflag=fullblock bs=4932 count=1) | tar --no-same-owner -xz -C /home/agent/.vscode-server/bin/8a14f0cc1b08d531eb83255ea3764ae22aa932b5_1795215793849"
+    ]
+  }
+}

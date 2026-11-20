@@ -28,6 +28,7 @@ export function psOutput(...rows: string[]): string {
 export interface LinkSample {
   client: string;
   mibPerSecond: number;
+  responds?: boolean;
 }
 
 export interface DoctorScenario {

@@ -37,7 +37,8 @@ const HOME_CLIENT = { client: "192.168.1.104", mibPerSecond: 100 };
 const MASTER = { etime: "06:07", pid: 70549 };
 
 /** Replay one SSH sample: sshd's view of the client, then the bytes at the scenario's rate. */
-function sample(link: { client: string; mibPerSecond: number }, command: string): number {
+function sample(link: { client: string; mibPerSecond: number; responds?: boolean }, command: string): number {
+  if (link.responds === false) return 255;
   writeSync(1, `${link.client} 50888 192.168.1.100 22\n`);
   const total = Number(/head -c (\d+)/.exec(command)?.[1] ?? "0");
   const chunk = 256 * 1024;

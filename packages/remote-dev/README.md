@@ -17,6 +17,7 @@ remote-dev choose             interactive chooser (terminal only)
 remote-dev list [--all]       configured targets; --all adds unclassified containers
 remote-dev open TARGET        open the running target in isolated VS Code
 remote-dev start TARGET       start the opted-in target, then open isolated VS Code
+remote-dev doctor TARGET      check each step to the target; name the cause and repair
 remote-dev logs TARGET        recheck, then print the native service log tail (redacted)
 remote-dev board TARGET       recheck, then open the configured task board
 remote-dev --help | --discover --json | --discover-command ID --json
@@ -110,6 +111,34 @@ receipt stay private in `~/.local/state/pilot-runtime/remote-dev` inside the con
 - **Logs:** `docker exec <id> tail` of the configured service log, with
   credentials, tokens, URL queries and terminal control sequences removed.
   Editor connection logs (View > Output) and Docker stdout are separate.
+
+## Diagnose a target that won't open
+
+`remote-dev doctor TARGET` checks each step in order and changes nothing:
+
+```text
+network        this Mac's route to the host, and the default route
+link           the shared SSH link: age, the address sshd sees, an 8 MiB sample
+host           Docker on the host answers
+container      the target runs with its configured identity
+editor-server  the container holds the VS Code server for this Mac's VS Code commit
+install        ~/.local/bin/remote-dev resolves into the main checkout
+```
+
+The first failing step names its cause in the message (`Cause NAME.`) and puts
+the exact repair in `repairAction`:
+
+| Cause | Meaning | Repair |
+| --- | --- | --- |
+| `network-no-route` | No route from this Mac to the host | Join its network or connect the VPN |
+| `link-stale-route` | sshd sees the shared link and a new connection from different addresses | `ssh -O stop ALIAS` |
+| `link-degraded` | The shared link moves under half the rate of a direct connection | `ssh -O stop ALIAS` |
+| `install-from-worktree` | The installed command runs from a git worktree | the `ln -sfn` command it prints |
+
+`ssh -O stop` stops the shared link from taking new sessions; open sessions keep
+running and the next connection builds a fresh link. Host, container, tool and
+configuration failures keep the same causes as `open`. A missing VS Code server
+is a note, not a failure: VS Code uploads it on the next open.
 
 ## Reconnect a disconnected editor
 

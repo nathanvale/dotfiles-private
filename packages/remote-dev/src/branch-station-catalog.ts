@@ -183,6 +183,13 @@ export const REASONS = {
     repairAction: "Stop the shared SSH link with ssh -O stop.",
     trigger: "The shared link and a direct connection leave from the same address, but the shared link moves under half the direct rate.",
   },
+  "link-unresponsive": {
+    cause: "DOMAIN_PRECONDITION_UNMET",
+    guidance: "Stop the shared SSH link with the repair command; open sessions keep running and new connections get a fresh link. Then run remote-dev doctor again.",
+    message: "Cause link-unresponsive. The shared SSH link carried no new session, but a direct connection works.",
+    repairAction: "Stop the shared SSH link with ssh -O stop.",
+    trigger: "A session through the shared link prints nothing before its timeout while a direct session answers.",
+  },
   "link-stale-route": {
     cause: "DOMAIN_PRECONDITION_UNMET",
     guidance: "Stop the shared SSH link with the repair command; open sessions keep running and new connections get a fresh link. Then run remote-dev doctor again.",
@@ -321,7 +328,7 @@ const COMMAND_REASONS: Record<string, Reason[]> = {
   "remote-dev.command-discovery": ["inspected"],
   "remote-dev.discovery": ["inspected"],
   "remote-dev.dispatch": ["usage"],
-  "remote-dev.doctor": [...SOURCE, ...TARGET, "inspected", "install-from-worktree", "link-degraded", "link-stale-route", "network-no-route"],
+  "remote-dev.doctor": [...SOURCE, ...TARGET, "inspected", "install-from-worktree", "link-degraded", "link-stale-route", "link-unresponsive", "network-no-route"],
   "remote-dev.help": ["inspected"],
   "remote-dev.list": [...SOURCE, "inspected"],
   "remote-dev.logs": [...SOURCE, ...TARGET, "action-unconfigured", "inspected"],

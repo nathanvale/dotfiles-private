@@ -131,15 +131,24 @@ async function link(probe: Probe): Promise<Found> {
   const alias = probe.host.sshAlias;
   const shared = await master(probe);
   const through = await measure(probe, false);
-  if (typeof through === "string") return fail(probe, through);
   const direct = await measure(probe, true);
   if (typeof direct === "string") return fail(probe, direct);
   if (shared === null) {
+    if (typeof through === "string") return fail(probe, through);
     return ok({ detail: `No shared SSH link is open; new connections go direct from ${direct.client} at ${rate(direct)}.`, id: "link", status: "ok" });
   }
   const repair = `ssh -O stop ${alias}`;
-  const next = `Run ${repair}. Open sessions keep running; new connections get a fresh link. Then run remote-dev doctor ${probe.target.id} and remote-dev open ${probe.target.id}.`;
+  const next = `Run ${repair}. It is not a kill: open sessions keep running, and new connections get a fresh link. Then run remote-dev doctor ${probe.target.id} and remote-dev open ${probe.target.id}.`;
   const described = `The shared SSH link to ${alias} (pid ${shared.pid}, ${shared.age})`;
+  if (typeof through === "string") {
+    return refuse(
+      probe,
+      "link-unresponsive",
+      `Cause link-unresponsive. ${described} carried no new session, but a direct connection from ${direct.client} works. The address it was opened on may be gone, such as a VPN tunnel that turned off.`,
+      repair,
+      next,
+    );
+  }
   if (through.client !== direct.client) {
     return refuse(
       probe,

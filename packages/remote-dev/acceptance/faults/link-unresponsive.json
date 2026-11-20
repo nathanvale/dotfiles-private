@@ -1,0 +1,25 @@
+{
+  "cause": "link-unresponsive",
+  "origin": "derived",
+  "summary": "WireGuard turned off while the shared link was bound to its address (192.168.2.2). The link stops answering; a direct connection over en0 works.",
+  "target": "pilot",
+  "observed": {
+    "sshConfig": { "alias": "mac-mini", "hostname": "192.168.1.100" },
+    "route": { "host": "en0", "default": "en0" },
+    "sharedLink": { "pid": 79434, "etime": "15:45:00", "clientAddress": "192.168.2.2", "responds": false },
+    "directConnection": { "clientAddress": "192.168.1.104", "mibPerSecond": 45 },
+    "container": "running",
+    "editor": { "version": "1.147.0", "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5", "servers": [] },
+    "install": "absent"
+  },
+  "expect": {
+    "cause": "link-unresponsive",
+    "exitCode": 3,
+    "repairAction": "ssh -O stop mac-mini",
+    "messageIncludes": ["pid 79434"]
+  },
+  "evidence": {
+    "recorded": "2026-11-21T10:15:00+11:00",
+    "observation": "After WireGuard On-Demand turned the tunnel off at home, utun7 vanished and three SSH connections (66258, 68957 and the stopped mux 79434) still held sockets from 192.168.2.2."
+  }
+}
