@@ -9,6 +9,12 @@ default shape.
 the receipt. Its source is `scripts/foundry/monash-worker`; the installer links
 it as `~/.local/bin/monash-worker`. Read `monash-worker --help` for flags.
 
+Exec workers run `codex exec --profile monash-sol` in the worker Codex home
+`~/.codex-monash-sol`, which `scripts/foundry/install.py` creates and
+`--check` verifies. The profile selects provider `monash_foundry`, model
+`gpt-6.1-sol`, high effort, the priority (fast) tier, and the workspace-write
+sandbox with network access. Nathan's `~/.codex` is not touched.
+
 ## Pick the shape
 
 | Shape | Use for | Command |
@@ -21,9 +27,10 @@ it as `~/.local/bin/monash-worker`. Read `monash-worker --help` for flags.
 - One unit per brief. Name the scope, absolute input paths, the question or
   change, and the evidence form you need (`path:line`, or a command and its
   output).
-- Give the worker every input it needs on disk. The worker's sandbox has no
-  network, so fetch a pull request diff, Linear issue text or remote state first
-  (for example `gh pr diff 18 > /abs/out/pr-18.diff`).
+- Name the inputs. An exec worker has network, so it can fetch a pull request
+  or public page itself; a file on disk is still faster and pins what it read.
+  It has no credentials for private services such as Linear, so copy that text
+  into an input file.
 - Phrase review work as expected behaviour to confirm. Attack wording ("try
   to break it") has tripped the provider's content filter, which replaces the
   answer with "This content can't be shown".
@@ -52,34 +59,36 @@ monash-worker run --brief BRIEF.md --out OUT_DIR --cwd /abs/repo
 - `--out` must be new or empty; the command refuses to overwrite a unit's
   results. Keep it outside the worker's repository, in the coordinator's
   scratch or shared notes folder (`<notes>/workers/<unit>/`).
-- `--sandbox read-only` is the default. Use `workspace-write` only with
-  `--cwd` set to a worktree made for that unit. The worker's edits there are a
-  proposal: the coordinator reviews the diff, runs checks, and commits and
-  pushes itself.
-- Effort: `high` by default; the launcher validates the value against its
-  catalogue.
-- Tier: exec runs on the default tier. The launcher passes
-  `service_tier="default"` and refuses `-c service_tier=...` and `-p` with
-  exit 2 before launch. Use a pane worker when a unit needs the fast tier.
+- Sandbox: by default the profile's workspace-write, with network; the worker
+  can write in `--cwd`, `/tmp` and `$TMPDIR`. Point `--cwd` at a worktree or
+  scratch directory made for that unit, never a checkout someone else is
+  using. `--sandbox read-only` keeps the worker from writing and also turns
+  network off. The worker's edits are a proposal: the coordinator reviews the
+  diff, runs checks, and commits and pushes itself.
+- Effort: `high` by default (`--effort`). Tier: the profile asks for priority
+  (fast); the receipt's `route.service_tier` records what Codex applied.
 - Bound: the default 1800 seconds suits reviews (Sol reviews have taken 3.5 to
   6 minutes; small read-only questions 20 to 45 seconds). A timeout stops the
   whole worker process group.
 
 Each `--out` holds `brief.md`, `prompt.md` (what the worker received),
-`events.jsonl` (Codex JSON events), `launcher.log` (the launcher's route line
-and errors), `last-message.md` (the handback) and `receipt.json`. The same
+`events.jsonl` (Codex JSON events), `codex.log` (Codex's stderr),
+`last-message.md` (the handback) and `receipt.json`. The receipt's `route`
+comes from the thread's session record in the worker home: the last applied
+model, provider, service tier, effort and network, plus any model reroute,
+which fails the run. The same
 receipt prints as one JSON line on stdout. Rerunning `check` on an exec unit
-keeps its recorded launch facts, so a timeout, launcher failure or wrong route
+keeps its recorded launch facts, so a timeout, start failure or wrong route
 stays in the verdict. It checks the route against the receipt's requested
 model unless `--model` names another.
 
 | Exit | `status` | Meaning |
 | --- | --- | --- |
-| 0 | `done` | Handback says done and the route ran the requested model. |
-| 2 | `usage` | Refused before launch (bad flag, missing brief, used `--out`). |
+| 0 | `done` | Handback says done and the route ran the requested model on `monash_foundry`. |
+| 2 | `usage` | Refused before launch (bad flag, missing brief, used `--out`, no worker profile). |
 | 3 | `blocked` | Worker handed back blocked; `handback.reason` says why. |
 | 4 | `timed_out` | No handback within the bound. |
-| 5 | `failed` | Launcher did not start, refused or exited nonzero, wrong model, or no `HANDBACK` line; see `problems`. |
+| 5 | `failed` | Codex did not start or exited nonzero, no session record, wrong model or provider, a model reroute, or no exact `HANDBACK` line; see `problems`. |
 | 130 | `interrupted` | The caller interrupted the run; the worker's process group was stopped. |
 
 ## Run a pane worker
@@ -109,9 +118,9 @@ model unless `--model` names another.
 
 ## Units that end in a pull request
 
-Every pull request follows three rules (Nathan, 20 November 2026). A worker
-has no network, so it prepares and the coordinator publishes. Put the
-worker's half in the brief.
+Every pull request follows three rules (Nathan, 20 November 2026). External
+writes stay with the coordinator, so the worker prepares and the coordinator
+publishes. Put the worker's half in the brief.
 
 Worker, in its unit worktree (`--sandbox workspace-write`):
 
@@ -134,19 +143,34 @@ When the coordinator writes the change itself, it runs steps 1 and 2 too.
 
 ## Check before use
 
-1. Require `status: done` and, for exec, `route.model` equal to the requested
-   model. Treat `blocked`, `timed_out` and `failed` as no result: read the
+1. Require `status: done`; for exec, the receipt has already checked
+   `route.model` and `route.provider`. Treat `blocked`, `timed_out` and `failed` as no result: read the
    reason, fix the brief or inputs, and run a new unit with a new `--out`.
 2. Open every cited `path:line` or rerun the cited command, and confirm the
    claim before acting on it. A done receipt proves delivery, not correctness.
 3. Keep external writes (push, pull request, comments, messages) in the
    coordinator.
 
+## Route trade-off
+
+Exec workers bypass `monash-foundry launch` (Nathan, 20 November 2026), which
+pinned the default tier and allowed no network. The cost:
+
+- Workers inherit only the environment names the launcher route passed to
+  Codex (`monash-foundry`'s allowlist) plus `CODEX_HOME`, so credentials and
+  proxy settings stay out. The launcher's argument guard no longer applies:
+  the profile pins the provider and model instead, and the receipt fails a run
+  whose session record names another model or provider.
+- `monash-worker run` refuses a worker home that is a link, not yours, or not
+  mode 700, or managed files that are not mode 600; rerun the installer.
+- Network access applies to every workspace-write exec worker, and only to
+  them: the separate home keeps it out of Nathan's own Codex sessions.
+- The worker home has no `AGENTS.md`, so Nathan's global Codex instructions do
+  not load in exec workers. The appended handback rules still apply.
+
 ## Known gaps
 
-- Fast stays pane-only (Nathan, 20 November 2026): the launcher keeps
-  exec on the default tier.
-- A pane worker's tier is client-side evidence: the request asked for
+- A worker's tier is client-side evidence: the request asked for
   priority and the turns completed. Whether Azure served priority is not
   observed.
 - `monash doctor` reports Herdr `failed` while `herdr status --json` shows the
