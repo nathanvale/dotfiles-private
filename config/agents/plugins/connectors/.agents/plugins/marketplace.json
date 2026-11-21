@@ -1,0 +1,20 @@
+{
+	"name": "connectors",
+	"interface": {
+		"displayName": "Connectors"
+	},
+	"plugins": [
+		{
+			"name": "connectors",
+			"source": {
+				"source": "local",
+				"path": "./"
+			},
+			"policy": {
+				"installation": "AVAILABLE",
+				"authentication": "ON_INSTALL"
+			},
+			"category": "Productivity"
+		}
+	]
+}

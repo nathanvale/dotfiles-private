@@ -65,13 +65,16 @@ WORKER_FILES = ("config.toml", f"{WORKER_PROFILE}.config.toml")
 WORKER_HEADER = "# Managed by monash-foundry install.py for monash-worker. Rerun the installer to change it."
 # Plugins the worker home enables. Each marketplace entry is copied from the main Codex config,
 # so workers load the same plugin sources (and, for local marketplaces, the same versions) as
-# Nathan's own Codex. Personal stays out: Monash work keeps the personal domain separate.
+# Nathan's own Codex. Personal is never available here, not merely off (Nathan, 21 November 2026):
+# connectors comes from its own connectors-only marketplace, and no worker marketplace may list personal.
 WORKER_PLUGINS = (
     "pstack@pstack-codex-compat",
     "mattpocock-skills@mattpocock",
-    "connectors@personal",
+    "connectors@connectors",
     "monash-tools@monash-plugins",
 )
+EXCLUDED_PLUGIN = "personal"
+LOCAL_MARKETPLACE_MANIFESTS = (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json")
 WORKER_PLUGINS_BEGIN = "# >>> monash-worker plugins: marketplaces copied from the main Codex config by install.py >>>"
 WORKER_PLUGINS_END = "# <<< monash-worker plugins <<<"
 # A first `codex plugin add` would write inside the managed provider block, so the installer writes the
@@ -522,8 +525,26 @@ def main_codex_marketplaces(main_config: Path) -> dict[str, object]:
     return marketplaces if isinstance(marketplaces, dict) else {}
 
 
+def local_marketplace_plugins(name: str, root: Path) -> list[str]:
+    """Plugin names a local marketplace offers, from every manifest Codex may read there."""
+    names: list[str] = []
+    manifests = [root / relative for relative in LOCAL_MARKETPLACE_MANIFESTS if (root / relative).is_file()]
+    if not manifests:
+        raise InstallRefusal(f"cannot confirm local marketplace '{name}' at {root} excludes "
+                             f"{EXCLUDED_PLUGIN}: it has no marketplace manifest")
+    for manifest in manifests:
+        loaded, _ = read_json_object(manifest) or ({}, b"")
+        plugins = loaded.get("plugins") if isinstance(loaded, dict) else None
+        if not isinstance(plugins, list):
+            raise InstallRefusal(f"cannot read the plugin list in {manifest}")
+        names.extend(str(plugin.get("name")) for plugin in plugins if isinstance(plugin, dict))
+    return names
+
+
 def worker_plugin_block(desktop, main_config: Path) -> str:
     """The worker home's plugin section: the main Codex marketplace entries for WORKER_PLUGINS."""
+    if any(plugin.split("@", 1)[0] == EXCLUDED_PLUGIN for plugin in WORKER_PLUGINS):
+        raise InstallRefusal(f"the {EXCLUDED_PLUGIN} plugin is never enabled for Monash workers")
     marketplaces = main_codex_marketplaces(main_config)
     lines = [WORKER_PLUGINS_BEGIN]
     for name in dict.fromkeys(plugin.split("@", 1)[1] for plugin in WORKER_PLUGINS):
@@ -534,6 +555,10 @@ def worker_plugin_block(desktop, main_config: Path) -> str:
             plugins = ", ".join(plugin for plugin in WORKER_PLUGINS if plugin.endswith(f"@{name}"))
             raise InstallRefusal(f"the main Codex config {main_config} has no usable marketplace '{name}' for "
                                  f"{plugins}; add it there with `codex plugin marketplace add` and rerun")
+        # Registering a marketplace makes every plugin in it available, so personal must not be in any.
+        if source_type == "local" and EXCLUDED_PLUGIN in local_marketplace_plugins(name, Path(source)):
+            raise InstallRefusal(f"marketplace '{name}' at {source} lists the {EXCLUDED_PLUGIN} plugin, which "
+                                 "Monash workers must not have available; use a marketplace without it")
         lines += [f"[marketplaces.{name}]", f"source_type = {desktop.toml_string(source_type)}",
                   f"source = {desktop.toml_string(source)}"]
         # A pinned ref keeps workers on the exact commit Nathan's Codex uses.

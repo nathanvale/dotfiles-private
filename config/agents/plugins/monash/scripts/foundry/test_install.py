@@ -24,6 +24,11 @@ import tempfile
 import textwrap
 import unittest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.9 and 3.10
+    tomllib = None
+
 
 INSTALLER = Path(__file__).resolve().with_name("install.py")
 SOURCE_DIR = INSTALLER.parent
@@ -160,11 +165,15 @@ MAIN_CODEX_CONFIG = textwrap.dedent(
 
     [marketplaces.pstack-codex-compat]
     source_type = "local"
-    source = "/fixture/plugin-compat/pstack/0.15.32-codex.1/marketplace"
+    source = "@ROOT@/plugin-compat/pstack/0.15.32-codex.1/marketplace"
 
     [marketplaces.personal]
     source_type = "local"
-    source = "/fixture/dotfiles/config/agents/plugins"
+    source = "@ROOT@/dotfiles/config/agents/plugins"
+
+    [marketplaces.connectors]
+    source_type = "local"
+    source = "@ROOT@/dotfiles/config/agents/plugins/connectors"
 
     [marketplaces.monash-plugins]
     source_type = "git"
@@ -294,7 +303,19 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.worker_home = self.root / "worker codex home"
         # ...and a temporary main Codex config, so no test reads the real one.
         self.main_codex_config = self.root / "main codex config.toml"
-        self.main_codex_config.write_text(MAIN_CODEX_CONFIG, encoding="utf-8")
+        self.main_codex_config_text = MAIN_CODEX_CONFIG.replace("@ROOT@", str(self.root))
+        self.main_codex_config.write_text(self.main_codex_config_text, encoding="utf-8")
+        # The local marketplaces the fixture names, each offering what its real counterpart offers.
+        for relative, manifest, plugins in (
+            ("plugin-compat/pstack/0.15.32-codex.1/marketplace", ".agents/plugins/marketplace.json", ["pstack"]),
+            ("plugin-compat/pstack/0.15.46-codex.1/marketplace", ".agents/plugins/marketplace.json", ["pstack"]),
+            ("dotfiles/config/agents/plugins", ".claude-plugin/marketplace.json", ["personal", "connectors"]),
+            ("dotfiles/config/agents/plugins/connectors", ".agents/plugins/marketplace.json", ["connectors"]),
+        ):
+            path = self.root / relative / manifest
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"name": "fixture", "plugins": [{"name": name} for name in plugins]}),
+                            encoding="utf-8")
 
     def target(self, prefix: Path | None = None) -> Path:
         return (prefix or self.prefix) / "share" / "monash-foundry"
@@ -497,13 +518,13 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.assertGreater(config.index("# >>> monash-worker plugins:"), provider_end)
         # Independent oracle: the fixture's marketplace sources, restated as TOML lines.
         for line in ("[marketplaces.pstack-codex-compat]", 'source_type = "local"',
-                     'source = "/fixture/plugin-compat/pstack/0.15.32-codex.1/marketplace"',
+                     f'source = "{self.root}/plugin-compat/pstack/0.15.32-codex.1/marketplace"',
                      "[marketplaces.mattpocock]", 'source = "https://github.com/mattpocock/skills.git"',
                      'ref = "d1478fcb140db0b93c0c8df17bcfd311844749d0"',
-                     "[marketplaces.personal]", 'source = "/fixture/dotfiles/config/agents/plugins"',
+                     "[marketplaces.connectors]", f'source = "{self.root}/dotfiles/config/agents/plugins/connectors"',
                      "[marketplaces.monash-plugins]", 'source = "git@github.com:nathanvale/monash-plugins.git"',
                      '[plugins."pstack@pstack-codex-compat"]', '[plugins."mattpocock-skills@mattpocock"]',
-                     '[plugins."connectors@personal"]', '[plugins."monash-tools@monash-plugins"]'):
+                     '[plugins."connectors@connectors"]', '[plugins."monash-tools@monash-plugins"]'):
             self.assertIn(line + "\n", block)
         self.assertEqual(block.count("enabled = true"), 4)
         # The personal plugin and unrelated marketplaces stay out of Monash workers.
@@ -511,8 +532,45 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.assertNotIn("unrelated", config)
         self.assertTrue(block.rstrip().endswith("# <<< monash-worker plugins <<<"))
 
+    def test_worker_home_never_makes_the_personal_plugin_available(self) -> None:
+        # The rule itself: no registered marketplace offers personal, and no personal@ plugin is enabled.
+        if tomllib is None:
+            self.skipTest("reading the worker config needs tomllib (Python 3.11 or later)")
+        self.install_initial()
+        parsed = tomllib.loads((self.worker_home / "config.toml").read_text(encoding="utf-8"))
+        enabled = sorted(parsed.get("plugins", {}))
+        self.assertEqual(enabled, ["connectors@connectors", "mattpocock-skills@mattpocock",
+                                   "monash-tools@monash-plugins", "pstack@pstack-codex-compat"])
+        self.assertFalse([plugin for plugin in enabled if plugin.split("@")[0] == "personal"])
+        for name, entry in parsed.get("marketplaces", {}).items():
+            self.assertNotEqual(name, "personal")
+            if entry["source_type"] == "local":
+                offered = [plugin["name"]
+                           for relative in (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json")
+                           if (Path(entry["source"]) / relative).is_file()
+                           for plugin in json.loads((Path(entry["source"]) / relative).read_text())["plugins"]]
+                self.assertNotIn("personal", offered, name)
+
+    def test_worker_home_refuses_a_marketplace_that_offers_personal(self) -> None:
+        # The connectors marketplace pointed at the shared plugins folder, which also offers personal.
+        self.main_codex_config.write_text(self.main_codex_config_text.replace(
+            f'source = "{self.root}/dotfiles/config/agents/plugins/connectors"',
+            f'source = "{self.root}/dotfiles/config/agents/plugins"'), encoding="utf-8")
+        before = tree_snapshot(self.root)
+        result = self.run_installer("--host-role", "mini")
+        self.assert_refusal(result)
+        self.assertIn("marketplace 'connectors'", result.stderr)
+        self.assertIn("lists the personal plugin", result.stderr)
+        self.assertEqual(tree_snapshot(self.root), before)
+
+    def test_worker_home_refuses_a_local_marketplace_it_cannot_read(self) -> None:
+        (self.root / "dotfiles/config/agents/plugins/connectors/.agents/plugins/marketplace.json").unlink()
+        result = self.run_installer("--host-role", "mini")
+        self.assert_refusal(result)
+        self.assertIn("cannot confirm local marketplace 'connectors'", result.stderr)
+
     def test_worker_home_refuses_a_main_config_without_a_worker_marketplace(self) -> None:
-        self.main_codex_config.write_text(MAIN_CODEX_CONFIG.replace("[marketplaces.mattpocock]", "[marketplaces.other]"),
+        self.main_codex_config.write_text(self.main_codex_config_text.replace("[marketplaces.mattpocock]", "[marketplaces.other]"),
                                           encoding="utf-8")
         before = tree_snapshot(self.root)
         result = self.run_installer("--host-role", "mini")
@@ -523,7 +581,7 @@ class TerraInstallerProcessTests(unittest.TestCase):
     def test_worker_home_check_follows_a_main_codex_marketplace_change(self) -> None:
         self.install_initial()
         config = self.worker_home / "config.toml"
-        self.main_codex_config.write_text(MAIN_CODEX_CONFIG.replace("0.15.32-codex.1", "0.15.46-codex.1"),
+        self.main_codex_config.write_text(self.main_codex_config_text.replace("0.15.32-codex.1", "0.15.46-codex.1"),
                                           encoding="utf-8")
         checked = self.run_installer("--check", "--host-role", "mini")
         self.assert_check_failure(checked)
@@ -534,7 +592,7 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.assertIn(f"{home} codex plugin marketplace upgrade && {home} codex plugin add pstack@pstack-codex-compat",
                       installed.stdout)
         self.assertIn(f"{home} codex plugin add monash-tools@monash-plugins", installed.stdout)
-        self.assertIn('source = "/fixture/plugin-compat/pstack/0.15.46-codex.1/marketplace"\n',
+        self.assertIn(f'source = "{self.root}/plugin-compat/pstack/0.15.46-codex.1/marketplace"\n',
                       config.read_text(encoding="utf-8"))
         self.assert_success(self.run_installer("--check", "--host-role", "mini"))
 

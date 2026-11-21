@@ -17,9 +17,15 @@ Workers, with or without a pane, run `codex exec --profile monash-sol` in the wo
 sandbox with network access. Nathan's `~/.codex` is not touched.
 
 The worker home also enables pstack, Matt Pocock's skills, connectors and
-monash-tools, never personal. `install.py` copies their marketplace entries
-from `~/.codex/config.toml`, so workers use the same plugin sources as Nathan's
-Codex; it refuses when one is missing there. Never run a first
+monash-tools. Personal is never available there, not merely off: connectors
+comes from its own marketplace (`connectors@connectors`, the
+`config/agents/plugins/connectors` folder), and the installer refuses any local
+worker marketplace that lists personal. `install.py` copies the marketplace
+entries from `~/.codex/config.toml`, so workers use the same plugin sources as
+Nathan's Codex; it refuses when one is missing there. Register connectors there
+the same way:
+`codex plugin marketplace add ~/code/dotfiles/config/agents/plugins/connectors`,
+then `codex plugin add connectors@connectors`. Never run a first
 `codex plugin add` in the worker home: Codex writes inside the managed
 provider block. After an install that changes the plugins, run the fetch
 command the installer prints (`codex plugin marketplace upgrade`, then
