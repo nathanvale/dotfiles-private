@@ -1,0 +1,14 @@
+#!/bin/sh
+# remote-dev launcher: resolves its own package (following symlinks) and runs
+# the CLI with Bun. It never installs anything.
+set -eu
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+package=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd -P)
+exec bun "$package/src/cli.ts" "$@"

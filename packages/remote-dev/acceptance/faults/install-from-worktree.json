@@ -1,0 +1,43 @@
+{
+  "cause": "install-from-worktree",
+  "origin": "derived",
+  "summary": "~/.local/bin/remote-dev runs from a worktree while the main checkout already tracks remote-dev.",
+  "target": "pilot",
+  "observed": {
+    "sshConfig": {
+      "alias": "mac-mini",
+      "hostname": "192.168.1.100"
+    },
+    "route": {
+      "host": "en0",
+      "default": "en0"
+    },
+    "sharedLink": {
+      "pid": 70549,
+      "etime": "06:07",
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 45
+    },
+    "directConnection": {
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 45
+    },
+    "container": "running",
+    "editor": {
+      "version": "1.147.0",
+      "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5",
+      "servers": [
+        "ready 8a14f0cc1b08d531eb83255ea3764ae22aa932b5"
+      ]
+    },
+    "install": "worktree"
+  },
+  "expect": {
+    "cause": "install-from-worktree",
+    "exitCode": 3,
+    "repairAction": "ln -sfn '{main}/packages/remote-dev/bin/remote-dev' '{home}/.local/bin/remote-dev'",
+    "messageIncludes": [
+      ".worktrees/"
+    ]
+  }
+}

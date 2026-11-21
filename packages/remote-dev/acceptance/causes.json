@@ -1,0 +1,50 @@
+[
+  {
+    "name": "network-no-route",
+    "detects": "This Mac has no route to the host's address.",
+    "detect": "Resolve the host with `ssh -G ALIAS` (hostname line), then `route -n get HOSTNAME`. The cause is a non-zero exit, no `interface:` line, or `destination: default` for a private (RFC 1918, link-local or 100.64/10) address on an interface that is not a VPN tunnel (`utun*`, `ipsec*`, `ppp*`). macOS answers any unknown address with the default route; a full-tunnel VPN as the default route does reach the host.",
+    "repair": "Join the host's network or connect the VPN that reaches it. Then run `remote-dev doctor TARGET` again.",
+    "faults": [
+      "faults/network-no-route.json"
+    ]
+  },
+  {
+    "name": "link-unresponsive",
+    "detects": "The shared SSH link exists but cannot complete a test transfer, while a direct connection can. Either it carries no new session (typically it is bound to an address that vanished, such as a VPN tunnel that turned off) or it resets part way.",
+    "detect": "`ssh -O check ALIAS` reports a master pid. The 8 MiB sample through it (`-o ControlMaster=no`) prints no marker line, exits non-zero, delivers fewer than 8388608 bytes, or passes its timeout, while the direct sample (`-o ControlPath=none`) completes.",
+    "repair": "`ssh -O stop ALIAS`. Open sessions keep running; the next connection builds a fresh link.",
+    "faults": [
+      "faults/link-unresponsive.json",
+      "faults/link-unresponsive-partial.json"
+    ]
+  },
+  {
+    "name": "link-stale-route",
+    "detects": "The shared SSH link leaves this Mac from an address it no longer uses for the host, in either direction: opened away and used at home, or opened at home and used away.",
+    "detect": "Run `echo \"remote-dev-sample $SSH_CONNECTION\"` once through the shared link (`-o ControlMaster=no`) and once direct (`-o ControlPath=none`). The first field after the marker (the client address sshd sees) differs.",
+    "repair": "`ssh -O stop ALIAS`. Open sessions keep running; the next connection builds a fresh link.",
+    "faults": [
+      "faults/link-stale-route-20261121.json",
+      "faults/link-stale-route-away.json"
+    ]
+  },
+  {
+    "name": "link-degraded",
+    "detects": "The shared SSH link and a direct connection leave from the same address, but the shared link moves data at under half the direct rate.",
+    "detect": "Time 8 MiB of `head -c 8388608 /dev/zero` from the end of the `$SSH_CONNECTION` header line, through the shared link and direct. Shared rate below 0.5 times the direct rate is the cause.",
+    "repair": "`ssh -O stop ALIAS`. Open sessions keep running; the next connection builds a fresh link.",
+    "faults": [
+      "faults/link-degraded-20261121.json"
+    ]
+  },
+  {
+    "name": "install-from-worktree",
+    "detects": "`~/.local/bin/remote-dev` resolves into a linked git worktree, so the installed command changes whenever that branch changes.",
+    "detect": "Resolve the link with realpath and walk up to the nearest `.git`. A `.git` file (not a directory) whose `gitdir:` names `MAIN/.git/worktrees/NAME` is the cause.",
+    "repair": "When the main checkout tracks the command: `ln -sfn 'MAIN/RELATIVE/PATH' '~/.local/bin/remote-dev'`, with the same path relative to the main checkout. When it does not (the path is missing or resolves outside the main checkout): land remote-dev on main first, then relink.",
+    "faults": [
+      "faults/install-from-worktree.json",
+      "faults/install-from-worktree-unlanded.json"
+    ]
+  }
+]

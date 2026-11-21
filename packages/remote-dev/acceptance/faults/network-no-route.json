@@ -1,0 +1,21 @@
+{
+  "cause": "network-no-route",
+  "origin": "derived",
+  "summary": "Away from home with WireGuard off: this Mac has no route to the Mini's LAN address.",
+  "target": "pilot",
+  "observed": {
+    "sshConfig": { "alias": "mac-mini", "hostname": "192.168.1.100" },
+    "route": { "host": null, "default": "en0" },
+    "sharedLink": null,
+    "directConnection": { "clientAddress": "192.168.1.104", "mibPerSecond": 45 },
+    "container": "running",
+    "editor": { "version": "1.147.0", "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5", "servers": [] },
+    "install": "absent"
+  },
+  "expect": {
+    "cause": "network-no-route",
+    "exitCode": 3,
+    "repairAction": "Join the host's network or connect the VPN that reaches it.",
+    "messageIncludes": ["192.168.1.100", "mac-mini"]
+  }
+}
