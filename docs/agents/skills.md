@@ -5,7 +5,8 @@
 | Skill | Owner | Everyday action |
 | --- | --- | --- |
 | Personal | `config/agents/plugins/personal/` | Edit the plugin source and refresh the native plugin. |
-| Matt Pocock and other standalone third-party skills | `npx skills` | Use its global add, list, update, and remove commands; follow [third-party skills](third-party-skills.md). |
+| Matt Pocock | His `mattpocock-skills` plugin in each Harness's native manager | Follow the installation rules below. |
+| Other standalone third-party skills | `npx skills` | Use its global add, list, update, and remove commands; follow [third-party skills](third-party-skills.md). |
 | pstack | Each Harness's native plugin or package manager | Keep the complete upstream package and a qualified Harness adapter; follow the installation rules below. |
 | GOG, Herdr, `find-skills` (pending migration to the installer) | `config/agents/skills/third-party/` | Leave as is; [third-party skills](third-party-skills.md) records the pending migration. |
 | Project-only | Owning project | Keep discovery within that project. |
@@ -19,10 +20,17 @@ manifest selection. Claude's `skillOverrides` does not apply to plugin skills.
 
 ## Matt Pocock and pstack installations
 
-- Keep Matt Pocock installer-owned. Preserve the selected skills and each
-  Harness's disabled choices; an upstream recommendation does not authorise a
-  switch to plugins or installation of the whole collection.
-- Keep pstack plugin-owned in Claude Code and Codex. Use Pi's native package
+- Keep Matt Pocock plugin-owned: `mattpocock-skills@mattpocock` from his
+  marketplace (`mattpocock/skills`) in Claude Code and Codex, and an installed
+  copy in Antigravity. Its skills are `mattpocock-skills:<name>`. The skills
+  his plugin does not ship stay installer-owned until audited (Nathan,
+  21 November 2026).
+- Run every plugin at one exact revision on every Harness and machine. Keep
+  Claude marketplace auto-update off and pin each Codex git marketplace with
+  `ref`; Codex otherwise refreshes it at startup. Update on purpose, all
+  machines together, and compare commits: a version label can stay the same
+  while content changes.
+- Keep pstack plugin-owned in Claude Code, Codex and Antigravity. Use Pi's native package
   route for its complete package and adapter. Installing only its skill folders
   loses shared documentation, agent definitions and plugin namespaces.
 - Give each package one enabled source per Harness. Keep pstack out of the

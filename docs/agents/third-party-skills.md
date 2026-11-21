@@ -2,9 +2,9 @@
 
 ## Standalone skills: the installer
 
-Standalone skills you did not write follow the Matt Pocock pattern: `npx skills`
+Standalone skills you did not write follow the installer pattern: `npx skills`
 owns their files, links, and machine lock. Complete native plugin packages,
-including pstack, follow
+including pstack and Matt Pocock's plugin, follow
 [the native installation owner](skills.md#matt-pocock-and-pstack-installations).
 Keep installed payloads outside this repository. Add no copy under `config/agents/skills/third-party/`, no
 repository lock record, and no `topology.json#thirdParty` declaration.
@@ -51,8 +51,8 @@ Stage before installing for an author you do not know:
 
 Review is practice, not a gate: the inventory does not require it.
 
-Use [the personal plugin cutover](../../config/agents/plugins/personal/README.md)
-to adopt the existing 35 Matt payloads without fetching an upgrade.
+Matt Pocock's skills moved to his plugin on 21 November 2026. The installer
+still holds the few of his skills that the plugin does not ship, pending audit.
 
 ## Pending migration: GOG, Herdr, `find-skills`
 
