@@ -16,10 +16,11 @@ Workers, with or without a pane, run `codex exec --profile monash-sol` in the wo
 `gpt-6.1-sol`, high effort, the priority (fast) tier, and the workspace-write
 sandbox with network access. Nathan's `~/.codex` is not touched.
 
-The worker home also enables pstack, Matt Pocock's skills, connectors and
-monash-tools, never personal. `install.py` copies their marketplace entries
-from `~/.codex/config.toml`, so workers use the same plugin sources as Nathan's
-Codex; it refuses when one is missing there. Never run a first
+The worker home also enables the same five plugins as every other harness:
+pstack, Matt Pocock's skills, personal, connectors and monash-tools.
+`install.py` copies their marketplace entries from `~/.codex/config.toml`, so
+workers use the same plugin sources as Nathan's Codex; it refuses when one is
+missing there, or when a git marketplace's `ref` is not a full commit. Never run a first
 `codex plugin add` in the worker home: Codex writes inside the managed
 provider block. After an install that changes the plugins, run the fetch
 command the installer prints (`codex plugin marketplace upgrade`, then
