@@ -40,6 +40,44 @@ export type ProgramResult =
 
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
 
+type Reader = ReadableStreamDefaultReader<Uint8Array>;
+
+function readerOf(stream: unknown): Reader {
+  return (stream as ReadableStream<Uint8Array>).getReader();
+}
+
+/**
+ * At the deadline, kill the child and cancel its captured streams. A descendant
+ * that inherited a pipe can hold it open after the child dies, so waiting for
+ * the streams to close on their own would outlive the timeout.
+ */
+function deadline(child: { kill(signal: "SIGKILL"): void }, readers: Reader[], timeoutMs: number) {
+  let passed = false;
+  const timer = setTimeout(() => {
+    passed = true;
+    child.kill("SIGKILL");
+    for (const reader of readers) void reader.cancel().catch(() => undefined);
+  }, timeoutMs);
+  return { clear: () => clearTimeout(timer), passed: () => passed };
+}
+
+async function* chunksOf(reader: Reader): AsyncGenerator<Uint8Array> {
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    yield value;
+  }
+}
+
+async function readBounded(reader: Reader): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of chunksOf(reader)) {
+    if (text.length < OUTPUT_LIMIT) text += decoder.decode(chunk, { stream: true });
+  }
+  return text.slice(0, OUTPUT_LIMIT);
+}
+
 /**
  * Run one local program without a shell, with stdin closed so it can never
  * wait on keyboard input. Output is captured, bounded, and never inherited.
@@ -60,24 +98,20 @@ export async function runProgram(
   } catch {
     return { kind: "missing" };
   }
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGKILL");
-  }, options.timeoutMs);
-  const [stdout, stderr] = await Promise.all([
-    readBounded(child.stdout as ReadableStream<Uint8Array>),
-    options.captureStderr === true ? readBounded(child.stderr as ReadableStream<Uint8Array>) : "",
-  ]);
+  const stdoutReader = readerOf(child.stdout);
+  const stderrReader = options.captureStderr === true ? readerOf(child.stderr) : null;
+  const limit = deadline(child, stderrReader === null ? [stdoutReader] : [stdoutReader, stderrReader], options.timeoutMs);
+  const [stdout, stderr] = await Promise.all([readBounded(stdoutReader), stderrReader === null ? "" : readBounded(stderrReader)]);
   const exitCode = await child.exited;
-  clearTimeout(timer);
-  if (timedOut) return { kind: "timeout" };
+  limit.clear();
+  if (limit.passed()) return { kind: "timeout" };
   return { exitCode, kind: "exited", stderr, stdout };
 }
 
 export type Transfer =
   | { kind: "missing" }
-  | { bytes: number; exitCode: number; header: string; kind: "measured"; milliseconds: number };
+  | { bytes: number; exitCode: number; header: string; kind: "measured"; milliseconds: number }
+  | { kind: "timeout" };
 
 const HEADER_LIMIT = 4096;
 
@@ -97,13 +131,14 @@ export async function measureTransfer(
   } catch {
     return { kind: "missing" };
   }
-  const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs);
+  const reader = readerOf(child.stdout);
+  const limit = deadline(child, [reader], options.timeoutMs);
   const decoder = new TextDecoder("latin1");
   let preamble = "";
   let header: string | null = null;
   let bytes = 0;
   let started = performance.now();
-  for await (const chunk of child.stdout as ReadableStream<Uint8Array>) {
+  for await (const chunk of chunksOf(reader)) {
     if (header !== null) {
       bytes += chunk.length;
       continue;
@@ -120,18 +155,11 @@ export async function measureTransfer(
     started = performance.now();
     bytes = text.length - end - 1;
   }
+  const milliseconds = performance.now() - started;
   const exitCode = await child.exited;
-  clearTimeout(timer);
-  return { bytes, exitCode, header: header ?? "", kind: "measured", milliseconds: performance.now() - started };
-}
-
-async function readBounded(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const decoder = new TextDecoder();
-  let text = "";
-  for await (const chunk of stream) {
-    if (text.length < OUTPUT_LIMIT) text += decoder.decode(chunk, { stream: true });
-  }
-  return text.slice(0, OUTPUT_LIMIT);
+  limit.clear();
+  if (limit.passed()) return { kind: "timeout" };
+  return { bytes, exitCode, header: header ?? "", kind: "measured", milliseconds };
 }
 
 export async function directoriesExist(paths: string[]): Promise<boolean> {
@@ -173,7 +201,7 @@ export async function pick(
   } catch {
     return { kind: "missing" };
   }
-  const stdout = await readBounded(child.stdout as ReadableStream<Uint8Array>);
+  const stdout = await readBounded(readerOf(child.stdout));
   const exitCode = await child.exited;
   if (exitCode === 1 || exitCode === 130) return { kind: "cancelled" };
   if (exitCode !== 0) return { kind: "failed" };

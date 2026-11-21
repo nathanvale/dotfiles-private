@@ -1,0 +1,31 @@
+{
+  "cause": "link-unresponsive",
+  "origin": "derived",
+  "summary": "The shared link resets part way through the test transfer: 1 MiB of 8 MiB arrives, then ssh exits 255. A direct connection completes.",
+  "target": "pilot",
+  "observed": {
+    "sshConfig": { "alias": "mac-mini", "hostname": "192.168.1.100" },
+    "route": { "host": "en0", "default": "en0" },
+    "sharedLink": {
+      "pid": 70549,
+      "etime": "03:10:00",
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 500,
+      "transfer": { "bytes": 1048576, "exitCode": 255 }
+    },
+    "directConnection": { "clientAddress": "192.168.1.104", "mibPerSecond": 96 },
+    "container": "running",
+    "editor": { "version": "1.147.0", "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5", "servers": [] },
+    "install": "absent"
+  },
+  "expect": {
+    "cause": "link-unresponsive",
+    "exitCode": 3,
+    "repairAction": "ssh -O stop mac-mini",
+    "messageIncludes": ["pid 70549", "from 192.168.1.104"]
+  },
+  "evidence": {
+    "recorded": "2026-11-21T11:18:00+11:00",
+    "observation": "A reviewer's reproduction: the shared sample sent 1 MiB and exited 255, and doctor reported link ok at 591.4 MiB/s shared against 96.3 MiB/s direct."
+  }
+}

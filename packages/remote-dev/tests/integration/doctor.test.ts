@@ -31,7 +31,14 @@ interface Fault {
     editor: { commit: string; servers: string[] };
     install: Install;
     route: { default: string; host: string | null };
-    sharedLink: { clientAddress: string; etime: string; mibPerSecond?: number; pid: number; responds?: boolean } | null;
+    sharedLink: {
+      clientAddress: string;
+      etime: string;
+      mibPerSecond?: number;
+      pid: number;
+      responds?: boolean;
+      transfer?: { bytes: number; exitCode: number };
+    } | null;
     sshConfig: { alias: string; hostname: string };
   };
   target: string;
@@ -64,7 +71,14 @@ function scenarioOf(observed: Fault["observed"]): DoctorScenario {
     servers: observed.editor.servers,
     ...(shared === null
       ? {}
-      : { shared: { client: shared.clientAddress, mibPerSecond: shared.mibPerSecond ?? 1, responds: shared.responds ?? true } }),
+      : {
+          shared: {
+            client: shared.clientAddress,
+            mibPerSecond: shared.mibPerSecond ?? 1,
+            responds: shared.responds ?? true,
+            ...(shared.transfer === undefined ? {} : { transfer: shared.transfer }),
+          },
+        }),
   };
 }
 

@@ -118,10 +118,12 @@ function sampleArguments(alias: string, direct: boolean): string[] {
   ];
 }
 
+/** Only a complete transfer is a sample: a timeout, a non-zero exit or a short body is a failed connection. */
 function sampleOf(transfer: Transfer): Sample | Reason {
   if (transfer.kind === "missing") return "tool-unavailable";
+  if (transfer.kind === "timeout" || transfer.exitCode !== 0 || transfer.bytes < SAMPLE_BYTES) return "host-unreachable";
   const client = transfer.header.split(" ")[0] ?? "";
-  if (client === "" || transfer.bytes === 0) return "host-unreachable";
+  if (client === "") return "host-unreachable";
   return { client, rate: transfer.bytes / MIB / (Math.max(transfer.milliseconds, 1) / 1000) };
 }
 
@@ -166,7 +168,7 @@ async function link(probe: Probe): Promise<Found> {
     return refuse(
       probe,
       "link-unresponsive",
-      `Cause link-unresponsive. ${described} carried no new session, but a direct connection from ${direct.client} works. The address it was opened on may be gone, such as a VPN tunnel that turned off.`,
+      `Cause link-unresponsive. ${described} could not complete a test transfer, but a direct connection from ${direct.client} did. The link may be bound to an address that is gone, such as a VPN tunnel that turned off, or it may be resetting.`,
       repair,
       next,
     );

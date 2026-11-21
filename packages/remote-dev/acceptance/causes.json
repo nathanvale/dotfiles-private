@@ -10,11 +10,12 @@
   },
   {
     "name": "link-unresponsive",
-    "detects": "The shared SSH link exists but carries no new session, while a direct connection works. Typically the link is bound to an address that vanished, such as a VPN tunnel that turned off.",
-    "detect": "`ssh -O check ALIAS` reports a master pid. A session through it (`-o ControlMaster=no`) prints nothing before its timeout, while a direct session (`-o ControlPath=none`) prints `$SSH_CONNECTION`.",
+    "detects": "The shared SSH link exists but cannot complete a test transfer, while a direct connection can. Either it carries no new session (typically it is bound to an address that vanished, such as a VPN tunnel that turned off) or it resets part way.",
+    "detect": "`ssh -O check ALIAS` reports a master pid. The 8 MiB sample through it (`-o ControlMaster=no`) prints no marker line, exits non-zero, delivers fewer than 8388608 bytes, or passes its timeout, while the direct sample (`-o ControlPath=none`) completes.",
     "repair": "`ssh -O stop ALIAS`. Open sessions keep running; the next connection builds a fresh link.",
     "faults": [
-      "faults/link-unresponsive.json"
+      "faults/link-unresponsive.json",
+      "faults/link-unresponsive-partial.json"
     ]
   },
   {

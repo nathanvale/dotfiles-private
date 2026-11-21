@@ -29,6 +29,8 @@ export interface LinkSample {
   client: string;
   mibPerSecond: number;
   responds?: boolean;
+  /** A sample that stops early: the bytes that arrive, then the ssh exit code. */
+  transfer?: { bytes: number; exitCode: number };
 }
 
 export interface DoctorScenario {

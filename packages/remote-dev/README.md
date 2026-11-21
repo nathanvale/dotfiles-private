@@ -131,6 +131,7 @@ the exact repair in `repairAction`:
 | Cause | Meaning | Repair |
 | --- | --- | --- |
 | `network-no-route` | No route from this Mac to the host | Join its network or connect the VPN |
+| `link-unresponsive` | The shared link cannot complete a test transfer; a direct connection can | `ssh -O stop ALIAS` |
 | `link-stale-route` | sshd sees the shared link and a new connection from different addresses | `ssh -O stop ALIAS` |
 | `link-degraded` | The shared link moves under half the rate of a direct connection | `ssh -O stop ALIAS` |
 | `install-from-worktree` | The installed command runs from a git worktree | the `ln -sfn` command it prints |

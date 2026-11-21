@@ -19,6 +19,7 @@ depend on the package's source layout, so a rewrite can replay them unchanged.
 | `sharedLink` | `ssh -O check`, `ps -o etime=`, a session with `ControlMaster=no` | `null` when no shared link is open. `responds: false` when a session through it prints nothing |
 | `sharedLink.clientAddress`, `directConnection.clientAddress` | `echo "remote-dev-sample $SSH_CONNECTION"` | The client address sshd sees |
 | `mibPerSecond` | 8 MiB of `/dev/zero`, timed after the header line | Transfer rate |
+| `sharedLink.transfer` | the same sample | Present when the sample did not complete: the `bytes` that arrived and the ssh `exitCode` |
 | `container` | `docker ps` on the host | `running` or `stopped` |
 | `editor` | `code --version`; `ls ~/.vscode-server/bin` in the container | Local VS Code release and commit; server folders as `ready NAME` or `partial NAME` |
 | `install` | `realpath ~/.local/bin/remote-dev` | `absent`, `main-checkout`, `worktree` (main tracks the command) or `worktree-unlanded` (main does not) |

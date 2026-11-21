@@ -2,7 +2,7 @@
 // It records its argv and selected environment facts, then replays the
 // scenario named by FAKE_SCENARIO. It never touches Docker, SSH, or editors.
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from "node:fs";
-import type { Scenario } from "./harness.ts";
+import type { LinkSample, Scenario } from "./harness.ts";
 
 const [tool = "unknown", ...argv] = process.argv.slice(2);
 const scenarioPath = process.env.FAKE_SCENARIO ?? "";
@@ -33,21 +33,22 @@ appendFileSync(
 );
 
 const doctor = scenario.doctor ?? {};
-const HOME_CLIENT = { client: "192.168.1.104", mibPerSecond: 100 };
+const HOME_CLIENT: LinkSample = { client: "192.168.1.104", mibPerSecond: 100 };
 const MASTER = { etime: "06:07", pid: 70549 };
 
 /** Replay one SSH sample: sshd's view of the client, then the bytes at the scenario's rate. */
-function sample(link: { client: string; mibPerSecond: number; responds?: boolean }, command: string): number {
+function sample(link: LinkSample, command: string): number {
   if (link.responds === false) return 255;
   writeSync(1, `Last login: Sat Nov 21 10:00:00 2026\nremote-dev-sample ${link.client} 50888 192.168.1.100 22\n`);
-  const total = Number(/head -c (\d+)/.exec(command)?.[1] ?? "0");
+  const requested = Number(/head -c (\d+)/.exec(command)?.[1] ?? "0");
+  const total = Math.min(requested, link.transfer?.bytes ?? requested);
   const chunk = 256 * 1024;
   for (let sent = 0; sent < total; sent += chunk) {
     const size = Math.min(chunk, total - sent);
     writeSync(1, Buffer.alloc(size));
     Bun.sleepSync((size / (link.mibPerSecond * 1024 * 1024)) * 1000);
   }
-  return 0;
+  return link.transfer?.exitCode ?? 0;
 }
 
 function sshLocal(): number | null {

@@ -186,9 +186,9 @@ export const REASONS = {
   "link-unresponsive": {
     cause: "DOMAIN_PRECONDITION_UNMET",
     guidance: "Stop the shared SSH link with the repair command; open sessions keep running and new connections get a fresh link. Then run remote-dev doctor again.",
-    message: "Cause link-unresponsive. The shared SSH link carried no new session, but a direct connection works.",
+    message: "Cause link-unresponsive. The shared SSH link could not complete a test transfer, but a direct connection did.",
     repairAction: "Stop the shared SSH link with ssh -O stop.",
-    trigger: "A session through the shared link prints nothing before its timeout while a direct session answers.",
+    trigger: "The sample through the shared link times out, exits non-zero or arrives short while the direct sample completes.",
   },
   "link-stale-route": {
     cause: "DOMAIN_PRECONDITION_UNMET",
