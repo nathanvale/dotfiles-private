@@ -11,6 +11,7 @@
 import path from "node:path";
 import { DEPENDENCY_TOOLS, dependencyStatus, type DependencyStatus, type DependencyTool } from "./dependency-status.ts";
 import { repairMcporter, withSelectionLock } from "./mcporter-custody.ts";
+import { PACKAGED_REPAIR, usesPackagedMcporter } from "./mcporter-packaged.ts";
 import { ownedDirectory, publishPrivateFileOnce, readPrivateFile, stateRoot, stateRootAdmitsSetup, writePrivateFile } from "./private-state.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 import { downloadAndInstallMise, downloadAndInstallOp, type ReleaseSource } from "./setup/download.ts";
@@ -64,6 +65,8 @@ const MISE_FIRST: PreviewResult = { kind: "prerequisite", nextAction: "connector
 // Q13c: absent MCPorter is first use's to install. Update converges only
 // present selections; an absent tool stays with its own setup or first use.
 function planFor(request: DepsRequest, observed: DependencyStatus[]): DependencyTool[] | PreviewResult {
+	// The Linux pilot's staged MCPorter is never repaired in place.
+	if (usesPackagedMcporter()) return observed.every((row) => row.ready) ? [] : { kind: "prerequisite", nextAction: "connectors.deps.status", repairAction: PACKAGED_REPAIR };
 	if (request.kind === "repair") {
 		if (observed[0]!.ready) return [];
 		if (request.tool === "mcporter" && observed[0]!.state === "absent") return { kind: "prerequisite", nextAction: "connectors.run", repairAction: "MCPorter is not installed yet; run connectors run <connector> <operation> and first use installs it" };

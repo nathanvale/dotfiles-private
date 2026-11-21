@@ -13,7 +13,7 @@
 // unobserved rather than promoted. A write is never proven without an exact
 // effect receipt, and status reads none.
 import type { Adapter, CustodyResolution } from "./adapters/contract.ts";
-import { dependencyStatus, isDependencyTool } from "./dependency-status.ts";
+import { dependencyStatus, isDependencyTool, notRequiredOnPlatform } from "./dependency-status.ts";
 import { type ObservationKind, readFixtureObservation, readObservation } from "./evidence-record.ts";
 import type { ConnectorManifest } from "./manifest.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
@@ -48,9 +48,11 @@ interface DependencyRow {
 }
 
 // A declared requirement outside the plugin's selection owners can never be
-// ready, so it is reported as such rather than skipped.
+// ready, so it is reported as such rather than skipped. A macOS tool this
+// platform replaces (op, mise, and uv in the Linux pilot) is not required.
 function unreadyDependencies(requirements: readonly string[], env: EnvironmentSource): DependencyRow[] {
 	return requirements.flatMap((name): DependencyRow[] => {
+		if (notRequiredOnPlatform(name)) return [];
 		if (!isDependencyTool(name)) return [{ tool: name, state: "not-ready", cause: "no-selection-owner" }];
 		const [row] = dependencyStatus(env, [name]);
 		return row && !row.ready ? [{ tool: name, state: row.state, cause: row.cause }] : [];

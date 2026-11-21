@@ -61,6 +61,9 @@ imports, rotates, or prints it.
   Nathan's 1Password handoff), `service-token-missing` or `op-unavailable`
   (follow the repair), `registration-invalid` (the repair names the file to
   remove). Report the repair; do not retry keyless.
+- In the Linux agents pilot, `credential-not-delivered` or `receiver-invalid`
+  means the operator's key delivery is absent or broken: report the repair to
+  the operator. The pilot has no op, Keychain, or `setup` route.
 - `USAGE_OPERATION_UNKNOWN` (`operation-not-allowed`): only the two tools
   above are admitted.
 - A rate limit in keyless mode: report it. Ask Nathan for an item ID rather

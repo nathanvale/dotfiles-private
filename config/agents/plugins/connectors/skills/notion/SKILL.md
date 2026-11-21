@@ -24,6 +24,9 @@ stay where they are; a copied laptop handoff does not authenticate this route.
 
 The agent runs `auth login` in its own PTY and follows
 `$HOME/code/dotfiles/docs/agents/browser-authorization.md`: Nathan only opens the consent URL.
+In the Linux agents pilot the callback lands on the container's loopback, so
+consent completes only in the task's own browser (`herdr-browser`), with
+Nathan signing in there; this pilot login is not yet proven.
 `--no-browser` prints that URL; `--reset` clears this account's cached grant
 before consent. `SUCCESS_AUTH_LOGIN` is consent and grant storage only. Prove live access with
 an admitted read such as `notion-get-tool-access` or `notion-search` before

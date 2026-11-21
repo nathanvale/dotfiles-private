@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { MCPORTER_RELEASE, type ReleaseFailure, verifyAndExtractMcporterRelease, verifyInstalledMcporter } from "./mcporter-release.ts";
+import { PACKAGED_MCPORTER, PACKAGED_REPAIR, runningPluginRoot, selectPackagedMcporter, usesPackagedMcporter } from "./mcporter-packaged.ts";
 import { ownedDirectory, stateRoot } from "./private-state.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 
@@ -73,6 +74,10 @@ function selected(root: string, revision = "current"): McporterSelection | null 
 // selection lock, recovery, or first-use bootstrap. It never creates state.
 // A leftover .previous beside a failing selection is an interrupted repair.
 export function inspectSelectedMcporter(env: EnvironmentSource): { required: string; present: boolean; executable: string | null; cause: string | null } {
+	if (usesPackagedMcporter()) {
+		const packaged = selectPackagedMcporter(runningPluginRoot());
+		return packaged.ok ? { required: PACKAGED_MCPORTER.version, present: true, executable: packaged.binary, cause: null } : { required: PACKAGED_MCPORTER.version, present: packaged.cause !== "packaged-mcporter-missing", executable: null, cause: packaged.cause };
+	}
 	const root = ownedRoot(env);
 	const selection = selected(root);
 	if (selection?.ok) return { required: MCPORTER_RELEASE.version, present: true, executable: selection.binary, cause: null };
@@ -323,6 +328,8 @@ async function repairLocked(root: string, env: EnvironmentSource): Promise<Repai
 }
 
 export async function repairMcporter(env: EnvironmentSource = process.env): Promise<RepairResult> {
+	// The Linux copy is staged by the pilot build and is never repaired in place.
+	if (usesPackagedMcporter()) return { ok: false, cause: "packaged-not-repairable", effect: "unchanged" };
 	const root = ownedRoot(env);
 	if (!ownedDirectory(root).ok) return { ok: false, cause: "state-invalid", effect: "unchanged" };
 	try { return await withSelectionLock(root, () => repairLocked(root, env)); }
@@ -363,6 +370,10 @@ async function ensureLocked(root: string, env: EnvironmentSource): Promise<Mcpor
 }
 
 export async function ensureMcporter(env: EnvironmentSource = process.env): Promise<McporterSelection> {
+	if (usesPackagedMcporter()) {
+		const packaged = selectPackagedMcporter(runningPluginRoot());
+		return packaged.ok ? { ok: true, binary: packaged.binary, bootstrapped: false } : { ok: false, cause: packaged.cause, repair: PACKAGED_REPAIR, firstUse: "handoff" };
+	}
 	const root = ownedRoot(env);
 	if (!ownedDirectory(root).ok) return { ok: false, cause: "state-invalid", repair };
 	try { return await withSelectionLock(root, () => ensureLocked(root, env)); }

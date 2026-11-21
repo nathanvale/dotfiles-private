@@ -8,7 +8,8 @@
 // environment, a file, or any output, and it ends when MCPorter closes stdin.
 // A request the endpoint rejects for authentication is answered with a fixed
 // error naming key-rejected, and the relay never retries without the key.
-import { CREDENTIAL_VAULT, type KeychainReader, readOnePasswordItem } from "../one-password-custody.ts";
+import { readCredentialItem } from "../credential-item.ts";
+import { CREDENTIAL_VAULT, type KeychainReader } from "../one-password-custody.ts";
 import { type ProviderProcess, providerProcess } from "../provider-process.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, type EnvironmentSource } from "../safe-environment.ts";
 import { isItemId } from "./registration.ts";
@@ -122,7 +123,7 @@ export async function runProvider(connector: ProviderConnector, argv: readonly s
 	if (!preflight) proc.refuseArguments([...argv]);
 	const item = contextItem(process.env);
 	if (item === null) fail("context-invalid", `restart through connectors run ${connector.id}`, 2);
-	const read = readOnePasswordItem(item, process.env, connector.readKeychain);
+	const read = readCredentialItem(connector.id, item, process.env, connector.readKeychain);
 	if (!read.ok) fail(read.cause, `account custody could not produce the ${CREDENTIAL_VAULT} key`, 3);
 	const key = keyOf(read.item, item);
 	if (key === null) fail("credential-invalid", "the item has no single header-safe credential field", 3);

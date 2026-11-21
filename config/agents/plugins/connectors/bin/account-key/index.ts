@@ -16,12 +16,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Adapter, AdapterRefusal, CustodyResolution, ExecutionCapabilities, Executed, Prepared, SchemaRequest } from "../adapters/contract.ts";
+import { deliveredRepair } from "../delivered-credential.ts";
 import { CREDENTIAL_VAULT, OP_SETUP_REPAIR, SERVICE_TOKEN_HANDOFF } from "../one-password-custody.ts";
 import { MCPORTER_REPAIR_ACTION } from "../mcporter-custody.ts";
 import { planDispatcherRoute, RouteError } from "../provider-route.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../safe-environment.ts";
 import { accountContext, keyRejectedMarker, type ProviderConnector, runProvider } from "./provider.ts";
 import { accountMode, configureAccount, isItemId, itemIdRepair } from "./registration.ts";
+import { accountCustodyMode } from "../credential-item.ts";
 
 export interface AccountKeyConnector extends ProviderConnector {
 	readonly label: string;
@@ -67,6 +69,8 @@ function keyHandoff(connector: AccountKeyConnector, item: string): string {
 }
 
 function preflightRepair(connector: AccountKeyConnector, code: string, item: string): string {
+	const delivered = deliveredRepair(code, connector.label, connector.id, item);
+	if (delivered !== null) return delivered;
 	if (code === "op-unavailable") return OP_SETUP_REPAIR;
 	if (code === "service-token-missing") return SERVICE_TOKEN_HANDOFF;
 	if (code === "item-missing" || code === "credential-invalid") return keyHandoff(connector, item);
@@ -211,8 +215,8 @@ function prepareAuth(connector: AccountKeyConnector, request: SchemaRequest, ver
 function resolveCustody(connector: AccountKeyConnector, request: SchemaRequest): CustodyResolution {
 	const mode = accountMode(connector.id, connector.label, request.env);
 	if (mode.kind === "invalid") return { kind: "refused", refusal: { kind: "domain", connectorCause: "registration-invalid", repair: mode.repair } };
-	if (mode.kind === "account") return { kind: "resolved", effective: { mode: "1password-below-mcporter", source: "plugin-state:registration" }, notYetEffective: null, subject: null };
-	return { kind: "resolved", effective: { mode: "keyless", source: "plugin-state:registration-absent" }, notYetEffective: { mode: "1password-below-mcporter", source: "plugin-state:registration-absent" }, subject: null };
+	if (mode.kind === "account") return { kind: "resolved", effective: { mode: accountCustodyMode(), source: "plugin-state:registration" }, notYetEffective: null, subject: null };
+	return { kind: "resolved", effective: { mode: "keyless", source: "plugin-state:registration-absent" }, notYetEffective: { mode: accountCustodyMode(), source: "plugin-state:registration-absent" }, subject: null };
 }
 
 export function accountKeyAdapter(connector: AccountKeyConnector): Adapter {

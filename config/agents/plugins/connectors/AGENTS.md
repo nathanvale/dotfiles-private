@@ -14,7 +14,8 @@ Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before Connectors code or test w
 - Canva's OAuth grant lives in MCPorter's native vault under one private root per Canva Account. Its current owner is the custody interface [`skills/canva/scripts/custody/index.ts`](skills/canva/scripts/custody/index.ts), composed by the packaged adapter [`skills/canva/adapter.ts`](skills/canva/adapter.ts) behind the front door's `bin/connectors auth`, `run`, and `schema`. Read accepted [`docs/adr/0004-move-canva-custody-into-mcporter-native-vault.md`](docs/adr/0004-move-canva-custody-into-mcporter-native-vault.md) before changing it.
 - Notion co-locates its complete qualified tool catalogue and account-isolated native OAuth adapter under `skills/notion/`. Its write verification declaration, one-use previews, and account-scoped unknown-effect recovery are described in [`docs/adr/0006-add-notion-complete-mcp-route.md`](docs/adr/0006-add-notion-complete-mcp-route.md).
 - Only non-secret Route Selection values cross the route; secret values never enter plugin config, arguments, envelopes, tests, or docs. No document claims a vault is encrypted.
-- Shared Provider plumbing lives in `bin/`: `provider-process.ts` (refusal prefix, PATH lookup, scrub, exec), `private-state.ts` (owned 0700 directories, exact-0600 files), `one-password-custody.ts` (scoped item reads), `keychain-read.ts` (fixed macOS reader), and `account-key/` (optional account registration and Provider relay). A skill's custody module is imported only through its `index.ts`.
+- Shared Provider plumbing lives in `bin/`: `provider-process.ts` (refusal prefix, PATH lookup, scrub, exec), `private-state.ts` (owned 0700 directories, exact-0600 files), `credential-item.ts` (the platform's item read), `one-password-custody.ts` (macOS scoped item reads), `delivered-credential.ts` (Linux receiver reads), `keychain-read.ts` (fixed macOS reader), and `account-key/` (optional account registration and Provider relay). A skill's custody module is imported only through its `index.ts`.
+- The Linux agents pilot runs a separate build from `pilot/build.ts`: staged MCPorter (`bin/mcporter-packaged.ts`), admitted Skills only, and account keys from the operator's delivery receiver, never op or the service-account token. Read [`docs/adr/0009-run-connectors-in-the-linux-pilot.md`](docs/adr/0009-run-connectors-in-the-linux-pilot.md) before changing any of them.
 - Each service family co-locates its `SKILL.md`, `config/mcporter.json`, `config/route.json`, owned tests, and any launcher or Provider code under `skills/<name>/`.
 - Report configured, fixture-tested, schema-qualified, authenticated, live-read-proven, and live-write-proven as distinct states. Claim only the state current evidence proves.
 
@@ -30,6 +31,6 @@ Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before Connectors code or test w
 
 ## Verification
 
-- Plugin gates: `bun run test` and `bun run typecheck` in this directory.
+- Plugin gates: `bun run test` and `bun run typecheck` in this directory. `bun run test` builds for macOS; on the Linux pilot host run `bun test tests/linux-pilot.test.ts` instead.
 - Repository gates from the worktree root: `bun run biome:check`, `bun run typecheck`, and `bun run --silent quality:fallow --changed-since <task-start-commit>` (see `docs/agents/fallow.md`).
 - Completion reports name each gate's result, then separately list the live proof that was unavailable: authentication, live schema, live reads, and any write.
