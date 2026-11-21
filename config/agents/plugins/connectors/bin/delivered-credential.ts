@@ -14,7 +14,7 @@
 // Nothing here prints, logs, stores, or returns the value elsewhere. Read
 // docs/adr/0009-run-connectors-in-the-linux-pilot.md before changing it.
 import { spawnSync } from "node:child_process";
-import { lstatSync } from "node:fs";
+import { lstatSync, type Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isItemId } from "./account-key/registration.ts";
@@ -37,22 +37,25 @@ const nativeRun: ReceiverRun = (argv, input, env) => {
 	return { status: read.status, stdout: typeof read.stdout === "string" ? read.stdout : null };
 };
 
+// How a receiver path is inspected: lstat, so a symlink is seen as one.
+export type ReceiverInspect = (target: string) => Stats;
+
 const CONNECTOR_ID = /^[a-z][a-z0-9-]{0,31}$/;
 
 // The receiver directory must be this user's own private 0700 directory, as
 // the operator's sender requires before it stores anything.
-function privateDirectory(directory: string): "absent" | "private" | "invalid" {
+function privateDirectory(directory: string, inspect: ReceiverInspect): "absent" | "private" | "invalid" {
 	try {
-		const entry = lstatSync(directory);
+		const entry = inspect(directory);
 		return entry.isDirectory() && !entry.isSymbolicLink() && entry.uid === os.userInfo().uid && (entry.mode & 0o777) === 0o700 ? "private" : "invalid";
 	} catch {
 		return "absent";
 	}
 }
 
-function socketPresent(socket: string): "absent" | "socket" | "invalid" {
+function socketPresent(socket: string, inspect: ReceiverInspect): "absent" | "socket" | "invalid" {
 	try {
-		const entry = lstatSync(socket);
+		const entry = inspect(socket);
 		return entry.isSocket() && entry.uid === os.userInfo().uid ? "socket" : "invalid";
 	} catch {
 		return "absent";
@@ -81,14 +84,14 @@ function deliveredValue(stdout: string, itemId: string): { kind: "empty" } | { k
 	return { kind: "value", value };
 }
 
-export function readDeliveredItem(connectorId: string, itemId: string, env: EnvironmentSource, run: ReceiverRun = nativeRun): DeliveredRead {
+export function readDeliveredItem(connectorId: string, itemId: string, env: EnvironmentSource, run: ReceiverRun = nativeRun, inspect: ReceiverInspect = lstatSync): DeliveredRead {
 	const home = env.HOME ?? "";
 	if (!CONNECTOR_ID.test(connectorId) || !isItemId(itemId) || !path.isAbsolute(home)) return { ok: false, cause: "receiver-invalid" };
-	const directory = privateDirectory(receiverDirectory(home, connectorId));
+	const directory = privateDirectory(receiverDirectory(home, connectorId), inspect);
 	if (directory === "absent") return { ok: false, cause: "credential-not-delivered" };
 	if (directory === "invalid") return { ok: false, cause: "receiver-invalid" };
 	const socket = receiverSocket(home, connectorId);
-	const present = socketPresent(socket);
+	const present = socketPresent(socket, inspect);
 	if (present === "absent") return { ok: false, cause: "credential-not-delivered" };
 	if (present === "invalid") return { ok: false, cause: "receiver-invalid" };
 	// No user or system git configuration can redirect the helper.
