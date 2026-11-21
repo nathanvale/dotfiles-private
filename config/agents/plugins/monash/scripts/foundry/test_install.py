@@ -178,6 +178,7 @@ MAIN_CODEX_CONFIG = textwrap.dedent(
     [marketplaces.monash-plugins]
     source_type = "git"
     source = "git@github.com:nathanvale/monash-plugins.git"
+    ref = "3f45cccd62662de139d4015837f7bf38272f7f87"
 
     [marketplaces.mattpocock]
     source_type = "git"
@@ -188,6 +189,16 @@ MAIN_CODEX_CONFIG = textwrap.dedent(
     enabled = true
     """
 )
+
+# The shared worker pin record the fixture installs against (independent oracle for the renderer).
+MATT_REF = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
+MONASH_REF = "3f45cccd62662de139d4015837f7bf38272f7f87"
+WORKER_PINS = {"plugins": {
+    "pstack@pstack-codex-compat": {"version": "0.15.32-codex.1"},
+    "mattpocock-skills@mattpocock": {"ref": MATT_REF},
+    "connectors@connectors": {"version": "0.8.9"},
+    "monash-tools@monash-plugins": {"ref": MONASH_REF},
+}}
 
 BASELINE_TEXT = textwrap.dedent(
     """
@@ -307,15 +318,26 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.main_codex_config.write_text(self.main_codex_config_text, encoding="utf-8")
         # The local marketplaces the fixture names, each offering what its real counterpart offers.
         for relative, manifest, plugins in (
-            ("plugin-compat/pstack/0.15.32-codex.1/marketplace", ".agents/plugins/marketplace.json", ["pstack"]),
-            ("plugin-compat/pstack/0.15.46-codex.1/marketplace", ".agents/plugins/marketplace.json", ["pstack"]),
-            ("dotfiles/config/agents/plugins", ".claude-plugin/marketplace.json", ["personal", "connectors"]),
-            ("dotfiles/config/agents/plugins/connectors", ".agents/plugins/marketplace.json", ["connectors"]),
+            ("plugin-compat/pstack/0.15.32-codex.1/marketplace", ".agents/plugins/marketplace.json",
+             {"pstack": ("./pstack", "0.15.32-codex.1")}),
+            ("plugin-compat/pstack/0.15.46-codex.1/marketplace", ".agents/plugins/marketplace.json",
+             {"pstack": ("./pstack", "0.15.46-codex.1")}),
+            ("dotfiles/config/agents/plugins", ".claude-plugin/marketplace.json",
+             {"personal": ("./personal", "0.4.75"), "connectors": ("./connectors", "0.8.9")}),
+            ("dotfiles/config/agents/plugins/connectors", ".agents/plugins/marketplace.json",
+             {"connectors": ("./", "0.8.9")}),
         ):
-            path = self.root / relative / manifest
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"name": "fixture", "plugins": [{"name": name} for name in plugins]}),
-                            encoding="utf-8")
+            root = self.root / relative
+            (root / manifest).parent.mkdir(parents=True, exist_ok=True)
+            (root / manifest).write_text(json.dumps({"name": "fixture", "plugins": [
+                {"name": name, "source": {"source": "local", "path": path}} for name, (path, _) in plugins.items()]}),
+                encoding="utf-8")
+            for name, (path, version) in plugins.items():
+                (root / path / ".codex-plugin").mkdir(parents=True, exist_ok=True)
+                (root / path / ".codex-plugin" / "plugin.json").write_text(
+                    json.dumps({"name": name, "version": version}), encoding="utf-8")
+        self.worker_pins = self.root / "worker pins.json"
+        self.worker_pins.write_text(json.dumps(WORKER_PINS), encoding="utf-8")
 
     def target(self, prefix: Path | None = None) -> Path:
         return (prefix or self.prefix) / "share" / "monash-foundry"
@@ -346,6 +368,7 @@ class TerraInstallerProcessTests(unittest.TestCase):
                 str(selected_baseline),
                 *(() if "--worker-home" in args else ("--worker-home", str(self.worker_home))),
                 *(() if "--main-codex-config" in args else ("--main-codex-config", str(self.main_codex_config))),
+                *(() if "--worker-pins" in args else ("--worker-pins", str(self.worker_pins))),
                 *args,
             ],
             cwd=REPO_ROOT,
@@ -520,7 +543,7 @@ class TerraInstallerProcessTests(unittest.TestCase):
         for line in ("[marketplaces.pstack-codex-compat]", 'source_type = "local"',
                      f'source = "{self.root}/plugin-compat/pstack/0.15.32-codex.1/marketplace"',
                      "[marketplaces.mattpocock]", 'source = "https://github.com/mattpocock/skills.git"',
-                     'ref = "d1478fcb140db0b93c0c8df17bcfd311844749d0"',
+                     f'ref = "{MATT_REF}"', f'ref = "{MONASH_REF}"',
                      "[marketplaces.connectors]", f'source = "{self.root}/dotfiles/config/agents/plugins/connectors"',
                      "[marketplaces.monash-plugins]", 'source = "git@github.com:nathanvale/monash-plugins.git"',
                      '[plugins."pstack@pstack-codex-compat"]', '[plugins."mattpocock-skills@mattpocock"]',
@@ -563,6 +586,52 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.assertIn("lists the personal plugin", result.stderr)
         self.assertEqual(tree_snapshot(self.root), before)
 
+    def test_worker_home_refuses_a_git_pin_that_is_not_a_full_commit(self) -> None:
+        for bad in (None, "", "3f45ccc", "main", "v1.6.5"):
+            with self.subTest(ref=bad):
+                pins = copy.deepcopy(WORKER_PINS)
+                if bad is None:
+                    del pins["plugins"]["monash-tools@monash-plugins"]["ref"]
+                else:
+                    pins["plugins"]["monash-tools@monash-plugins"]["ref"] = bad
+                self.worker_pins.write_text(json.dumps(pins), encoding="utf-8")
+                before = tree_snapshot(self.root)
+                result = self.run_installer("--host-role", "mini")
+                self.assert_refusal(result)
+                self.assertIn("the worker pin for monash-tools@monash-plugins", result.stderr)
+                self.assertIn("needs `ref` as a full 40-character commit", result.stderr)
+                self.assertIn("git ls-remote", result.stderr)
+                self.assertEqual(tree_snapshot(self.root), before)
+
+    def test_worker_home_refuses_a_main_codex_ref_that_differs_from_the_pin(self) -> None:
+        for main_ref in ("", 'ref = "main"\n', 'ref = "0000000000000000000000000000000000000000"\n'):
+            with self.subTest(main_ref=main_ref):
+                text = self.main_codex_config_text.replace(f'ref = "{MONASH_REF}"\n', main_ref)
+                self.main_codex_config.write_text(text, encoding="utf-8")
+                result = self.run_installer("--host-role", "mini")
+                self.assert_refusal(result)
+                self.assertIn("main Codex marketplace 'monash-plugins' is at ref", result.stderr)
+                self.assertIn(f'set `ref = "{MONASH_REF}"` under [marketplaces.monash-plugins]', result.stderr)
+
+    def test_worker_home_refuses_a_local_plugin_at_another_release(self) -> None:
+        manifest = self.root / "dotfiles/config/agents/plugins/connectors/.codex-plugin/plugin.json"
+        manifest.write_text(json.dumps({"name": "connectors", "version": "0.9.0"}), encoding="utf-8")
+        result = self.run_installer("--host-role", "mini")
+        self.assert_refusal(result)
+        self.assertIn("local marketplace 'connectors'", result.stderr)
+        self.assertIn("offers connectors '0.9.0', not the worker pin '0.8.9'", result.stderr)
+
+    def test_two_main_configs_with_the_same_pins_render_the_same_worker_home(self) -> None:
+        self.install_initial()
+        first = (self.worker_home / "config.toml").read_text(encoding="utf-8")
+        # Another machine: same marketplace sources and pins, other tables, another order.
+        tables = self.main_codex_config_text.split("\n\n")
+        other = "\n\n".join([tables[0], 'model_reasoning_effort = "low"', *reversed(tables[1:])])
+        self.main_codex_config.write_text(other.replace('model = "gpt-6.1"', 'model = "gpt-6.1-mini"'),
+                                          encoding="utf-8")
+        self.assert_success(self.run_installer("--check", "--host-role", "mini"))
+        self.assertEqual((self.worker_home / "config.toml").read_text(encoding="utf-8"), first)
+
     def test_worker_home_refuses_a_local_marketplace_it_cannot_read(self) -> None:
         (self.root / "dotfiles/config/agents/plugins/connectors/.agents/plugins/marketplace.json").unlink()
         result = self.run_installer("--host-role", "mini")
@@ -583,6 +652,9 @@ class TerraInstallerProcessTests(unittest.TestCase):
         config = self.worker_home / "config.toml"
         self.main_codex_config.write_text(self.main_codex_config_text.replace("0.15.32-codex.1", "0.15.46-codex.1"),
                                           encoding="utf-8")
+        pins = copy.deepcopy(WORKER_PINS)
+        pins["plugins"]["pstack@pstack-codex-compat"]["version"] = "0.15.46-codex.1"
+        self.worker_pins.write_text(json.dumps(pins), encoding="utf-8")
         checked = self.run_installer("--check", "--host-role", "mini")
         self.assert_check_failure(checked)
         self.assertIn(f"worker Codex file missing or out of date: {config}", checked.stderr)

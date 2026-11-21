@@ -1,0 +1,16 @@
+{
+	"plugins": {
+		"pstack@pstack-codex-compat": {
+			"version": "0.15.46-codex.1"
+		},
+		"mattpocock-skills@mattpocock": {
+			"ref": "abeeaf95660ba9e8b7c753eb38f441ca707a8823"
+		},
+		"connectors@connectors": {
+			"version": "0.8.9"
+		},
+		"monash-tools@monash-plugins": {
+			"ref": "3f45cccd62662de139d4015837f7bf38272f7f87"
+		}
+	}
+}

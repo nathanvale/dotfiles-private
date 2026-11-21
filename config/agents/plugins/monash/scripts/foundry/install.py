@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import stat
@@ -75,6 +76,11 @@ WORKER_PLUGINS = (
 )
 EXCLUDED_PLUGIN = "personal"
 LOCAL_MARKETPLACE_MANIFESTS = (".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json")
+PLUGIN_MANIFESTS = (".codex-plugin/plugin.json", ".claude-plugin/plugin.json", "plugin.json")
+# One shared record of what workers run, so every machine installs the same thing whatever its own
+# Codex config says: a full commit for each git marketplace, a release version for each local plugin.
+WORKER_PINS_NAME = "worker-pins.json"
+FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
 WORKER_PLUGINS_BEGIN = "# >>> monash-worker plugins: marketplaces copied from the main Codex config by install.py >>>"
 WORKER_PLUGINS_END = "# <<< monash-worker plugins <<<"
 # A first `codex plugin add` would write inside the managed provider block, so the installer writes the
@@ -541,33 +547,75 @@ def local_marketplace_plugins(name: str, root: Path) -> list[str]:
     return names
 
 
-def worker_plugin_block(desktop, main_config: Path) -> str:
-    """The worker home's plugin section: the main Codex marketplace entries for WORKER_PLUGINS."""
+def load_worker_pins(pins_path: Path) -> dict[str, dict[str, object]]:
+    loaded, _ = read_json_object(pins_path) or ({}, b"")
+    plugins = loaded.get("plugins")
+    if not isinstance(plugins, dict) or sorted(plugins) != sorted(WORKER_PLUGINS) or not all(
+            isinstance(pin, dict) for pin in plugins.values()):
+        raise InstallRefusal(f"the worker pins {pins_path} must name exactly {', '.join(WORKER_PLUGINS)}, "
+                             "each with a ref (git marketplace) or version (local marketplace)")
+    return plugins
+
+
+def local_plugin_version(root: Path, plugin: str) -> object:
+    """The version a local marketplace's plugin manifest declares, or None."""
+    for relative in LOCAL_MARKETPLACE_MANIFESTS:
+        loaded, _ = read_json_object(root / relative) or ({}, b"")
+        for entry in loaded.get("plugins") or []:
+            if not isinstance(entry, dict) or entry.get("name") != plugin:
+                continue
+            location = entry.get("source")
+            path = location.get("path") if isinstance(location, dict) else location
+            if not isinstance(path, str):
+                return None
+            for manifest in PLUGIN_MANIFESTS:
+                declared, _ = read_json_object(root / path / manifest) or ({}, b"")
+                if "version" in declared:
+                    return declared["version"]
+    return None
+
+
+def worker_plugin_block(desktop, main_config: Path, pins_path: Path) -> str:
+    """The worker home's plugin section: marketplace sources from the main Codex config, pins from the record."""
     if any(plugin.split("@", 1)[0] == EXCLUDED_PLUGIN for plugin in WORKER_PLUGINS):
         raise InstallRefusal(f"the {EXCLUDED_PLUGIN} plugin is never enabled for Monash workers")
+    pins = load_worker_pins(pins_path)
     marketplaces = main_codex_marketplaces(main_config)
     lines = [WORKER_PLUGINS_BEGIN]
-    for name in dict.fromkeys(plugin.split("@", 1)[1] for plugin in WORKER_PLUGINS):
+    for plugin in WORKER_PLUGINS:
+        plugin_name, name = plugin.split("@", 1)
+        pin = pins[plugin]
         entry = marketplaces.get(name)
         source_type = entry.get("source_type") if isinstance(entry, dict) else None
         source = entry.get("source") if isinstance(entry, dict) else None
         if not isinstance(source_type, str) or not isinstance(source, str) or not name.replace("-", "").isalnum():
-            plugins = ", ".join(plugin for plugin in WORKER_PLUGINS if plugin.endswith(f"@{name}"))
             raise InstallRefusal(f"the main Codex config {main_config} has no usable marketplace '{name}' for "
-                                 f"{plugins}; add it there with `codex plugin marketplace add` and rerun")
-        # Registering a marketplace makes every plugin in it available, so personal must not be in any.
-        if source_type == "local" and EXCLUDED_PLUGIN in local_marketplace_plugins(name, Path(source)):
-            raise InstallRefusal(f"marketplace '{name}' at {source} lists the {EXCLUDED_PLUGIN} plugin, which "
-                                 "Monash workers must not have available; use a marketplace without it")
+                                 f"{plugin}; add it there with `codex plugin marketplace add` and rerun")
         lines += [f"[marketplaces.{name}]", f"source_type = {desktop.toml_string(source_type)}",
                   f"source = {desktop.toml_string(source)}"]
-        # A pinned ref keeps workers on the exact commit Nathan's Codex uses.
-        ref = entry.get("ref")
-        if isinstance(ref, str):
+        if source_type == "git":
+            ref = pin.get("ref")
+            if not isinstance(ref, str) or not FULL_COMMIT.fullmatch(ref):
+                raise InstallRefusal(f"the worker pin for {plugin} in {pins_path} needs `ref` as a full 40-character "
+                                     f"commit, not {ref!r}; resolve one with `git ls-remote {source}`")
+            if entry.get("ref") != ref:
+                raise InstallRefusal(f"main Codex marketplace '{name}' is at ref {entry.get('ref')!r}, not the worker "
+                                     f"pin {ref}; set `ref = \"{ref}\"` under [marketplaces.{name}] in {main_config}, "
+                                     f"run `codex plugin marketplace upgrade {name}`, or change {pins_path}")
             lines.append(f"ref = {desktop.toml_string(ref)}")
-        sparse = entry.get("sparse_paths")
-        if isinstance(sparse, list) and all(isinstance(path, str) for path in sparse):
-            lines.append(f"sparse_paths = [{', '.join(desktop.toml_string(path) for path in sparse)}]")
+            sparse = entry.get("sparse_paths")
+            if isinstance(sparse, list) and all(isinstance(path, str) for path in sparse):
+                lines.append(f"sparse_paths = [{', '.join(desktop.toml_string(path) for path in sparse)}]")
+        else:
+            # Registering a marketplace makes every plugin in it available, so personal must not be in any.
+            if EXCLUDED_PLUGIN in local_marketplace_plugins(name, Path(source)):
+                raise InstallRefusal(f"marketplace '{name}' at {source} lists the {EXCLUDED_PLUGIN} plugin, which "
+                                     "Monash workers must not have available; use a marketplace without it")
+            version = pin.get("version")
+            found = local_plugin_version(Path(source), plugin_name)
+            if not isinstance(version, str) or not version or found != version:
+                raise InstallRefusal(f"local marketplace '{name}' at {source} offers {plugin_name} {found!r}, not the "
+                                     f"worker pin {version!r} in {pins_path}; bring both to the same release")
         lines.append("")
     for plugin in WORKER_PLUGINS:
         lines += [f'[plugins."{plugin}"]', "enabled = true", ""]
@@ -575,7 +623,7 @@ def worker_plugin_block(desktop, main_config: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def worker_home_files(source: Path, target: Path, main_config: Path) -> dict[str, str]:
+def worker_home_files(source: Path, target: Path, main_config: Path, pins_path: Path) -> dict[str, str]:
     desktop = load_desktop_module(source)
     config, _ = read_json_object(source / "config.json") or ({}, b"")
     codex = config.get("codex") if isinstance(config.get("codex"), dict) else {}
@@ -601,7 +649,7 @@ def worker_home_files(source: Path, target: Path, main_config: Path) -> dict[str
         "network_access = true",
         "",
     ))
-    plugins = worker_plugin_block(desktop, main_config)
+    plugins = worker_plugin_block(desktop, main_config, pins_path)
     return {"config.toml": f"{WORKER_HEADER}\n{provider}\n{plugins}", WORKER_FILES[1]: profile}
 
 
@@ -733,9 +781,9 @@ def rollback_problems(
 
 
 def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role: str, dry_run: bool,
-            worker_home: Path, main_codex_config: Path) -> int:
+            worker_home: Path, main_codex_config: Path, pins_path: Path) -> int:
     manifest = source_manifest(source, host_role)
-    worker_files = worker_home_files(source, target, main_codex_config)
+    worker_files = worker_home_files(source, target, main_codex_config, pins_path)
     worker_writes = worker_home_plan(worker_home, worker_files)
     config = target / "herdr.toml"
     safe_existing_parents((target, target / "backups", config, target / MANIFEST_NAME, bin_dir))
@@ -840,8 +888,9 @@ def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role
     return 0
 
 
-def worker_home_problems(source: Path, target: Path, worker_home: Path, main_codex_config: Path) -> list[str]:
-    files = worker_home_files(source, target, main_codex_config)
+def worker_home_problems(source: Path, target: Path, worker_home: Path, main_codex_config: Path,
+                         pins_path: Path) -> list[str]:
+    files = worker_home_files(source, target, main_codex_config, pins_path)
     if not worker_home.is_dir():
         return [f"missing worker Codex home: {worker_home}"]
     writes = worker_home_plan(worker_home, files)
@@ -849,7 +898,7 @@ def worker_home_problems(source: Path, target: Path, worker_home: Path, main_cod
 
 
 def check(source: Path, target: Path, bin_dir: Path, host_role: str, worker_home: Path,
-          main_codex_config: Path) -> int:
+          main_codex_config: Path, pins_path: Path) -> int:
     expected = source_manifest(source, host_role)
     problems: list[str] = []
     try:
@@ -865,7 +914,7 @@ def check(source: Path, target: Path, bin_dir: Path, host_role: str, worker_home
         problems.extend(command_target_problems(bin_dir, target, required=True))
         if binding_state(config, target) not in {"owned", "legacy"}:
             problems.append(f"private Herdr config lacks exactly one owned Ctrl+G F binding: {config}")
-        problems.extend(worker_home_problems(source, target, worker_home, main_codex_config))
+        problems.extend(worker_home_problems(source, target, worker_home, main_codex_config, pins_path))
     except InstallRefusal as error:
         problems.append(str(error))
     if problems:
@@ -895,6 +944,11 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         help="Codex config whose marketplaces the worker plugins are copied from (read only)",
     )
     parser.add_argument(
+        "--worker-pins",
+        type=Path,
+        help=f"shared record of the worker plugin pins (default: {WORKER_PINS_NAME} beside this installer)",
+    )
+    parser.add_argument(
         "--herdr-config",
         type=Path,
         default=Path.home() / ".config/herdr/config.toml",
@@ -920,6 +974,9 @@ def main(argv: list[str]) -> int:
     main_codex_config = args.main_codex_config.expanduser()
     if not main_codex_config.is_absolute():
         main_codex_config = Path.cwd() / main_codex_config
+    pins_path = (args.worker_pins or source / WORKER_PINS_NAME).expanduser()
+    if not pins_path.is_absolute():
+        pins_path = Path.cwd() / pins_path
     try:
         main_homes = {(Path.home() / ".codex").resolve()}
         inherited = os.environ.get("CODEX_HOME")
@@ -929,9 +986,9 @@ def main(argv: list[str]) -> int:
         if any(worker_home.resolve().is_relative_to(main) for main in main_homes):
             raise InstallRefusal("--worker-home must not be the main Codex home or inside it")
         if args.check:
-            return check(source, target, bin_dir, args.host_role, worker_home, main_codex_config)
+            return check(source, target, bin_dir, args.host_role, worker_home, main_codex_config, pins_path)
         return install(source, target, bin_dir, baseline, args.host_role, args.dry_run, worker_home,
-                       main_codex_config)
+                       main_codex_config, pins_path)
     except InstallRefusal as error:
         print(f"Installation refused: {error}", file=sys.stderr)
         return 2

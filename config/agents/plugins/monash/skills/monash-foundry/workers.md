@@ -25,7 +25,14 @@ entries from `~/.codex/config.toml`, so workers use the same plugin sources as
 Nathan's Codex; it refuses when one is missing there. Register connectors there
 the same way:
 `codex plugin marketplace add ~/code/dotfiles/config/agents/plugins/connectors`,
-then `codex plugin add connectors@connectors`. Never run a first
+then `codex plugin add connectors@connectors`.
+
+`scripts/foundry/worker-pins.json` is the one record of what workers run on
+every machine: a full commit `ref` for each git marketplace and a release
+`version` for each local plugin. The installer refuses a short, branch or
+missing ref, a main Codex `ref` that differs from the record, and a local
+plugin at another release. To move a plugin, change the record, the main Codex
+pin and the plugin together on every machine, then reinstall. Never run a first
 `codex plugin add` in the worker home: Codex writes inside the managed
 provider block. After an install that changes the plugins, run the fetch
 command the installer prints (`codex plugin marketplace upgrade`, then
