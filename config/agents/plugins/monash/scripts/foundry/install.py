@@ -65,10 +65,11 @@ WORKER_FILES = ("config.toml", f"{WORKER_PROFILE}.config.toml")
 WORKER_HEADER = "# Managed by monash-foundry install.py for monash-worker. Rerun the installer to change it."
 # Plugins the worker home enables. Each marketplace entry is copied from the main Codex config,
 # so workers load the same plugin sources (and, for local marketplaces, the same versions) as
-# Nathan's own Codex. Personal stays out: Monash work keeps the personal domain separate.
+# Nathan's own Codex. Every harness runs the same five plugins (Nathan, 21 November 2026, 13:24).
 WORKER_PLUGINS = (
     "pstack@pstack-codex-compat",
     "mattpocock-skills@mattpocock",
+    "personal@personal",
     "connectors@personal",
     "monash-tools@monash-plugins",
 )
@@ -536,8 +537,13 @@ def worker_plugin_block(desktop, main_config: Path) -> str:
                                  f"{plugins}; add it there with `codex plugin marketplace add` and rerun")
         lines += [f"[marketplaces.{name}]", f"source_type = {desktop.toml_string(source_type)}",
                   f"source = {desktop.toml_string(source)}"]
-        # A pinned ref keeps workers on the exact commit Nathan's Codex uses.
+        # A git marketplace without an exact commit moves by itself, so machines drift apart.
         ref = entry.get("ref")
+        if source_type == "git" and not (isinstance(ref, str) and len(ref) == 40
+                                         and all(character in "0123456789abcdef" for character in ref)):
+            raise InstallRefusal(f"marketplace '{name}' in {main_config} needs `ref` set to a full 40-character "
+                                 f"commit, not {ref!r}; resolve one with `git ls-remote {source}`, set it under "
+                                 f"[marketplaces.{name}] and run `codex plugin marketplace upgrade {name}`")
         if isinstance(ref, str):
             lines.append(f"ref = {desktop.toml_string(ref)}")
         sparse = entry.get("sparse_paths")

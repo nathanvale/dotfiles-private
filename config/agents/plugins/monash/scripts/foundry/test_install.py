@@ -169,6 +169,7 @@ MAIN_CODEX_CONFIG = textwrap.dedent(
     [marketplaces.monash-plugins]
     source_type = "git"
     source = "git@github.com:nathanvale/monash-plugins.git"
+    ref = "3f45cccd62662de139d4015837f7bf38272f7f87"
 
     [marketplaces.mattpocock]
     source_type = "git"
@@ -502,14 +503,28 @@ class TerraInstallerProcessTests(unittest.TestCase):
                      'ref = "d1478fcb140db0b93c0c8df17bcfd311844749d0"',
                      "[marketplaces.personal]", 'source = "/fixture/dotfiles/config/agents/plugins"',
                      "[marketplaces.monash-plugins]", 'source = "git@github.com:nathanvale/monash-plugins.git"',
+                     'ref = "3f45cccd62662de139d4015837f7bf38272f7f87"',
                      '[plugins."pstack@pstack-codex-compat"]', '[plugins."mattpocock-skills@mattpocock"]',
-                     '[plugins."connectors@personal"]', '[plugins."monash-tools@monash-plugins"]'):
+                     '[plugins."personal@personal"]', '[plugins."connectors@personal"]',
+                     '[plugins."monash-tools@monash-plugins"]'):
             self.assertIn(line + "\n", block)
-        self.assertEqual(block.count("enabled = true"), 4)
-        # The personal plugin and unrelated marketplaces stay out of Monash workers.
-        self.assertNotIn("personal@personal", config)
+        # The same five plugins as every other harness, and nothing else.
+        self.assertEqual(block.count("enabled = true"), 5)
         self.assertNotIn("unrelated", config)
         self.assertTrue(block.rstrip().endswith("# <<< monash-worker plugins <<<"))
+
+    def test_worker_home_refuses_a_git_marketplace_without_an_exact_commit(self) -> None:
+        pinned = 'ref = "3f45cccd62662de139d4015837f7bf38272f7f87"\n'
+        for ref_line in ("", 'ref = ""\n', 'ref = "main"\n', 'ref = "3f45ccc"\n', 'ref = "v1.6.5"\n'):
+            with self.subTest(ref_line=ref_line):
+                self.main_codex_config.write_text(MAIN_CODEX_CONFIG.replace(pinned, ref_line), encoding="utf-8")
+                before = tree_snapshot(self.root)
+                result = self.run_installer("--host-role", "mini")
+                self.assert_refusal(result)
+                self.assertIn("marketplace 'monash-plugins'", result.stderr)
+                self.assertIn("needs `ref` set to a full 40-character commit", result.stderr)
+                self.assertIn("git ls-remote git@github.com:nathanvale/monash-plugins.git", result.stderr)
+                self.assertEqual(tree_snapshot(self.root), before)
 
     def test_worker_home_refuses_a_main_config_without_a_worker_marketplace(self) -> None:
         self.main_codex_config.write_text(MAIN_CODEX_CONFIG.replace("[marketplaces.mattpocock]", "[marketplaces.other]"),
