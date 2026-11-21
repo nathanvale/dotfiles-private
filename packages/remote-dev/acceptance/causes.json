@@ -40,10 +40,11 @@
   {
     "name": "install-from-worktree",
     "detects": "`~/.local/bin/remote-dev` resolves into a linked git worktree, so the installed command changes whenever that branch changes.",
-    "detect": "Resolve the link with realpath and walk up to the nearest `.git`. A `.git` file (not a directory) whose `gitdir:` names `MAIN/.git/worktrees/NAME` is the cause.",
-    "repair": "When the main checkout tracks the command: `ln -sfn 'MAIN/RELATIVE/PATH' '~/.local/bin/remote-dev'`, with the same path relative to the main checkout. When it does not (the path is missing or resolves outside the main checkout): land remote-dev on main first, then relink.",
+    "detect": "Resolve the link with realpath and walk up to the nearest `.git`. A `.git` file (not a directory) whose `gitdir:` names `MAIN/.git/worktrees/NAME` is the cause. Then run the main checkout's copy with `--help`: a non-zero exit means it cannot start yet.",
+    "repair": "When the main checkout tracks the command and its copy starts: `ln -sfn 'MAIN/RELATIVE/PATH' '~/.local/bin/remote-dev'`, with the same path relative to the main checkout. When the copy does not start: `(cd 'MAIN' && bun install --frozen-lockfile)` first, then the same relink, as one command. When main does not track the command (the path is missing or resolves outside the main checkout): land remote-dev on main first, then relink.",
     "faults": [
       "faults/install-from-worktree.json",
+      "faults/install-from-worktree-main-not-ready.json",
       "faults/install-from-worktree-unlanded.json"
     ]
   }

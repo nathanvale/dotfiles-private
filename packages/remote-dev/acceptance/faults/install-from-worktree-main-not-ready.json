@@ -1,0 +1,48 @@
+{
+  "cause": "install-from-worktree",
+  "origin": "recorded",
+  "summary": "After PR 284 merged and main was pulled, ~/.local/bin/remote-dev still ran from the PR worktree. Main held the command, but its dependencies were not installed, so the main copy failed with: Cannot find module '@logtape/logtape'. A bare relink would have broken the installed command.",
+  "target": "pilot",
+  "observed": {
+    "sshConfig": {
+      "alias": "mac-mini",
+      "hostname": "192.168.1.100"
+    },
+    "route": {
+      "host": "en0",
+      "default": "en0"
+    },
+    "sharedLink": {
+      "pid": 70549,
+      "etime": "06:07",
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 45
+    },
+    "directConnection": {
+      "clientAddress": "192.168.1.104",
+      "mibPerSecond": 45
+    },
+    "container": "running",
+    "editor": {
+      "version": "1.147.0",
+      "commit": "8a14f0cc1b08d531eb83255ea3764ae22aa932b5",
+      "servers": [
+        "ready 8a14f0cc1b08d531eb83255ea3764ae22aa932b5"
+      ]
+    },
+    "install": "worktree-main-not-ready"
+  },
+  "expect": {
+    "cause": "install-from-worktree",
+    "exitCode": 3,
+    "repairAction": "(cd '{main}' && bun install --frozen-lockfile) && ln -sfn '{main}/packages/remote-dev/bin/remote-dev' '{home}/.local/bin/remote-dev'",
+    "messageIncludes": [
+      ".worktrees/",
+      "does not start"
+    ]
+  },
+  "evidence": {
+    "recorded": "2026-11-21T11:58:00+11:00",
+    "observation": "`bun -e 'await import(\"@logtape/logtape\")'` in the main checkout's packages/remote-dev failed, and its bin/remote-dev --help printed no usage line, while doctor from the worktree printed only the ln -sfn repair."
+  }
+}

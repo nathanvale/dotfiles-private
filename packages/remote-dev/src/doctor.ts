@@ -248,6 +248,46 @@ async function checkoutOf(path: string): Promise<{ gitEntry: string; root: strin
   return null;
 }
 
+/** True when the command at `path` answers --help, which connects to nothing. */
+async function startsFrom(probe: Probe, path: string): Promise<boolean> {
+  const help = await runProgram(path, ["--help"], { environment: stringEnvironment(probe.environment), timeoutMs: LOCAL_TIMEOUT_MS });
+  return help.kind === "exited" && help.exitCode === 0;
+}
+
+/** Where the installed command would live in the main checkout, and whether that checkout itself holds it. */
+async function mainCopyOf(checkout: { gitEntry: string; root: string }, installed: string): Promise<{ landed: boolean; mainRoot: string; path: string } | null> {
+  const gitdir = /^gitdir: (.+?)\s*$/m.exec(await readFile(checkout.gitEntry, "utf8"))?.[1];
+  const mainRoot = gitdir === undefined ? undefined : /^(.+)\/\.git\/worktrees\/[^/]+$/.exec(resolve(checkout.root, gitdir))?.[1];
+  if (mainRoot === undefined) return null;
+  const path = join(mainRoot, relative(checkout.root, installed));
+  // The copy counts only when the main checkout itself holds it, not a link into a worktree or release.
+  const realMain = await realpath(mainRoot).catch(() => null);
+  const realPath = await realpath(path).catch(() => null);
+  const holder = realPath === null ? null : await checkoutOf(realPath);
+  const landed = realMain !== null && holder !== null && holder.root === realMain && (await stat(holder.gitEntry)).isDirectory();
+  return { landed, mainRoot, path };
+}
+
+/** The repair for a worktree install: relink, installing dependencies first when the main copy cannot start. */
+async function worktreeRepair(probe: Probe, link: string, copy: { landed: boolean; mainRoot: string; path: string }) {
+  if (!copy.landed) {
+    return {
+      next: `The main checkout at ${copy.mainRoot} does not hold this command yet. Land its branch on main, relink ${link} into the main checkout, then run remote-dev doctor ${probe.target.id} again.`,
+      note: "",
+      repair: undefined,
+    };
+  }
+  const relink = `ln -sfn '${copy.path}' '${link}'`;
+  // A relink onto a copy that cannot start would break the installed command, so the repair installs first.
+  const starts = await startsFrom(probe, copy.path);
+  const repair = starts ? relink : `(cd '${copy.mainRoot}' && bun install --frozen-lockfile) && ${relink}`;
+  return {
+    next: `Run ${repair}, then run remote-dev doctor ${probe.target.id} again.`,
+    note: starts ? "" : " The main checkout's copy does not start yet; its dependencies may not be installed.",
+    repair,
+  };
+}
+
 async function install(probe: Probe): Promise<Found> {
   const link = join(probe.home, ".local", "bin", "remote-dev");
   if ((await lstat(link).catch(() => null)) === null) {
@@ -261,27 +301,17 @@ async function install(probe: Probe): Promise<Found> {
   if ((await stat(checkout.gitEntry)).isDirectory()) {
     return ok({ detail: `Installed from the main checkout at ${checkout.root}.`, id: "install", status: "ok" });
   }
-  const gitdir = /^gitdir: (.+?)\s*$/m.exec(await readFile(checkout.gitEntry, "utf8"))?.[1];
-  const worktreeOf = gitdir === undefined ? undefined : /^(.+)\/\.git\/worktrees\/[^/]+$/.exec(resolve(checkout.root, gitdir))?.[1];
-  if (worktreeOf === undefined) {
+  const copy = await mainCopyOf(checkout, installed);
+  if (copy === null) {
     return ok({ detail: `Installed from ${checkout.root}, whose .git file is not a worktree link.`, id: "install", status: "note" });
   }
-  const mainRoot = worktreeOf;
-  const candidate = join(mainRoot, relative(checkout.root, installed));
-  // The relink is safe only when the main checkout itself holds the command, not a link into a worktree or release.
-  const realMain = await realpath(mainRoot).catch(() => null);
-  const realCandidate = await realpath(candidate).catch(() => null);
-  const holder = realCandidate === null ? null : await checkoutOf(realCandidate);
-  const landed = realMain !== null && holder !== null && holder.root === realMain && (await stat(holder.gitEntry)).isDirectory();
-  const repair = landed ? `ln -sfn '${candidate}' '${link}'` : undefined;
+  const { next, note, repair } = await worktreeRepair(probe, link, copy);
   return refuse(
     probe,
     "install-from-worktree",
-    `Cause install-from-worktree. ${link} runs from the worktree at ${checkout.root}, so it changes whenever that branch changes.`,
+    `Cause install-from-worktree. ${link} runs from the worktree at ${checkout.root}, so it changes whenever that branch changes.${note}`,
     repair,
-    repair === undefined
-      ? `The main checkout at ${mainRoot} does not hold this command yet. Land its branch on main, relink ${link} into the main checkout, then run remote-dev doctor ${probe.target.id} again.`
-      : `Run ${repair}, then run remote-dev doctor ${probe.target.id} again.`,
+    next,
   );
 }
 
