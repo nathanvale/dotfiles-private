@@ -26,6 +26,7 @@ import { type Journal, openJournal, type Receipt } from "./scripts/journal.ts";
 import { runProvider } from "./scripts/provider.ts";
 import { accountCaller, providerPreflight } from "./scripts/transport.ts";
 import { adjudicate, applyWrite, JOURNAL_CORRUPT, previewWrite, unlockWrite } from "./scripts/writes.ts";
+import { accountCustodyMode } from "../../bin/credential-item.ts";
 
 const INTERNAL_CONTEXT = "mermaid-tier=keyless";
 const RUN_ID = /^mr-[0-9a-f-]{36}$/;
@@ -221,9 +222,9 @@ function prepareSchema(request: SchemaRequest): Prepared {
 // account tier's 1Password custody becomes effective only through it.
 function resolveCustody(request: SchemaRequest): CustodyResolution {
 	const registered = registeredAccount(request.env);
-	if (registered.ok) return { kind: "resolved", effective: { mode: "1password-below-mcporter", source: "plugin-state:registration" }, notYetEffective: null, subject: null };
+	if (registered.ok) return { kind: "resolved", effective: { mode: accountCustodyMode(), source: "plugin-state:registration" }, notYetEffective: null, subject: null };
 	if (registered.cause === "registration-invalid") return { kind: "refused", refusal: { kind: "domain", connectorCause: registered.cause, repair: registered.repair } };
-	return { kind: "resolved", effective: { mode: "keyless", source: "plugin-state:registration-absent" }, notYetEffective: { mode: "1password-below-mcporter", source: "plugin-state:registration-absent" }, subject: null };
+	return { kind: "resolved", effective: { mode: "keyless", source: "plugin-state:registration-absent" }, notYetEffective: { mode: accountCustodyMode(), source: "plugin-state:registration-absent" }, subject: null };
 }
 
 export const mermaidAdapter: Adapter = {

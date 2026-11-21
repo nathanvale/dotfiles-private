@@ -191,7 +191,7 @@ export interface InternalRole {
 // reads no credential, starts no process, and returns no item ID or path. A
 // declared mode that nothing has put into effect is notYetEffective, never
 // effective. subject names the selector whose value this custody is bound to.
-export type CustodyMode = "keyless" | "1password-below-mcporter" | "mcporter-native-vault" | "vendor-managed-profile";
+export type CustodyMode = "keyless" | "1password-below-mcporter" | "delivered-receiver-below-mcporter" | "mcporter-native-vault" | "vendor-managed-profile";
 export type CustodySource =
 	| "invocation-selector"
 	| "plugin-state:registration"

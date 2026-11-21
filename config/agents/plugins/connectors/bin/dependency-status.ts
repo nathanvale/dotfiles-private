@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import requirements from "../requirements.json";
 import { inspectSelectedMcporter } from "./mcporter-custody.ts";
+import { runningPluginRoot, usesPackagedMcporter } from "./mcporter-packaged.ts";
 import { stateRoot } from "./private-state.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 import { inspectSelectedOp } from "./setup/op.ts";
@@ -16,8 +17,13 @@ import { inspectSelectedMise, inspectSelectedUv, type SelectionView } from "./se
 // revision, and never an upstream latest, is ever selected.
 export const REQUIREMENTS_REVISION = `sha256:${createHash("sha256").update(JSON.stringify(requirements)).digest("hex")}`;
 
-export const DEPENDENCY_TOOLS = ["mcporter", "op", "mise", "uv"] as const;
-export type DependencyTool = (typeof DEPENDENCY_TOOLS)[number];
+const ALL_TOOLS = ["mcporter", "op", "mise", "uv"] as const;
+export type DependencyTool = (typeof ALL_TOOLS)[number];
+// The tools this platform declares. The Linux pilot stages MCPorter in the
+// plugin and receives credentials from its operator, so it declares no op,
+// mise, or uv (docs/adr/0009-run-connectors-in-the-linux-pilot.md).
+export const platformDependencyTools = (platform: string): readonly DependencyTool[] => (usesPackagedMcporter(platform) ? ["mcporter"] : ALL_TOOLS);
+export const DEPENDENCY_TOOLS: readonly DependencyTool[] = platformDependencyTools(process.platform);
 
 export interface RepairRoute {
 	readonly commandIdentity: string;
@@ -30,7 +36,8 @@ export interface DependencyStatus {
 	readonly required: string;
 	readonly state: "absent" | "ready" | "not-ready";
 	readonly ready: boolean;
-	// Relative to the XDG state root, so no home or state path is public.
+	// Relative to the XDG state root (the plugin root for the Linux pilot's
+	// staged MCPorter), so no home or state path is public.
 	readonly selected: { readonly executable: string; readonly version: string } | null;
 	readonly cause: string | null;
 	readonly repair: RepairRoute | null;
@@ -51,6 +58,8 @@ const READERS: Readonly<Record<DependencyTool, (env: EnvironmentSource) => Selec
 // A fresh object per row: the envelope's JSON-safety check refuses a value
 // reached twice, so rows never share one route object.
 function repairFor(tool: DependencyTool, present: boolean): RepairRoute {
+	// The staged copy is replaced only by rebuilding the pilot plugin from its source.
+	if (usesPackagedMcporter()) return { commandIdentity: "connectors.deps.status", command: "bun run build:pilot" };
 	if (tool === "mcporter" && !present) return { ...FIRST_USE };
 	return { commandIdentity: "connectors.deps.repair.preview", command: `connectors deps repair ${tool} --preview` };
 }
@@ -59,8 +68,12 @@ export function isDependencyTool(value: string): value is DependencyTool {
 	return (DEPENDENCY_TOOLS as readonly string[]).includes(value);
 }
 
+// A declared tool this platform deliberately replaces; never true on macOS.
+export const notRequiredOnPlatform = (name: string): boolean => (ALL_TOOLS as readonly string[]).includes(name) && !isDependencyTool(name);
+
 export function dependencyStatus(env: EnvironmentSource, tools: readonly DependencyTool[]): DependencyStatus[] {
-	const root = stateRoot(env);
+	// The Linux pilot's MCPorter lives in the plugin copy, not Connectors state.
+	const root = usesPackagedMcporter() ? runningPluginRoot() : stateRoot(env);
 	return tools.map((tool) => {
 		const view = READERS[tool](env);
 		const base = { tool, owner: "connectors" as const, required: view.required };

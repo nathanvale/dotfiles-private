@@ -33,6 +33,8 @@ whose `credential` field holds the TypeSafe API key:
 ```
 
 Configure records the item reference. Check proves custody readiness only.
+In the Linux agents pilot the key arrives through the operator's delivery;
+`credential-not-delivered` or `receiver-invalid` goes to the operator.
 Model listing contacts TypeSafe and returns available models and aliases.
 Credential values stay inside the internal Provider; environment key aliases
 and host overrides have no effect.

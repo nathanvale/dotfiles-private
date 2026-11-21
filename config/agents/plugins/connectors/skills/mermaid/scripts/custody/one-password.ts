@@ -3,13 +3,14 @@
 // through the shared Keychain reader, then its one credential field. The
 // credential returns to the caller process and nowhere else. Nothing here
 // creates, rotates, imports, prints, or logs a token.
-import { CREDENTIAL_VAULT, type OnePasswordFailure, readOnePasswordItem } from "../../../../bin/one-password-custody.ts";
+import { type CredentialItemFailure, readCredentialItem } from "../../../../bin/credential-item.ts";
+import { CREDENTIAL_VAULT } from "../../../../bin/one-password-custody.ts";
 import type { EnvironmentSource } from "../../../../bin/safe-environment.ts";
 import { readKeychain } from "../../../../bin/keychain-read.ts";
 
 export { CREDENTIAL_VAULT, OP_SETUP_REPAIR, SERVICE_TOKEN_HANDOFF } from "../../../../bin/one-password-custody.ts";
 
-export type CustodyFailure = OnePasswordFailure;
+export type CustodyFailure = CredentialItemFailure;
 
 export const itemHandoff = (itemId: string): string =>
 	`create the Mermaid API token in your Mermaid account settings and store it yourself in the credential field of the 1Password item with ID ${itemId}, the ID auth configure recorded, in the ${CREDENTIAL_VAULT} vault; Connectors never creates, rotates, or imports a token`;
@@ -27,7 +28,7 @@ function credentialOf(item: unknown, itemId: string): string | null {
 }
 
 export function readCredential(itemId: string, env: EnvironmentSource): { ok: true; credential: string } | { ok: false; cause: CustodyFailure } {
-	const read = readOnePasswordItem(itemId, env, readKeychain);
+	const read = readCredentialItem("mermaid", itemId, env, readKeychain);
 	if (!read.ok) return read;
 	const credential = credentialOf(read.item, itemId);
 	return credential === null ? { ok: false, cause: "credential-invalid" } : { ok: true, credential };

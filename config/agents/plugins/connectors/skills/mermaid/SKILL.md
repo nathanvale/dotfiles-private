@@ -126,6 +126,9 @@ died before its receipt existed sent nothing; `write-locked` names its
   (a receipt is unreadable, malformed, or misnamed; every write and recovery
   refuses until it is restored as `<runId>.json`, an owner-only 0600 file
   with its recorded JSON).
+- In the Linux agents pilot, `credential-not-delivered` or `receiver-invalid`
+  means the operator's key delivery is absent or broken: report the repair to
+  the operator. The pilot has no op, Keychain, or `setup` route.
 - `SCHEMA_ADAPTER_REFUSED` (`registry-not-keyless`): the keyless registry
   entry gained a credential key; restore it rather than retry.
 

@@ -19,6 +19,7 @@ import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { type DiscoveredManifest, discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 import { ensureMcporter, lockRecovery, releaseInterruptedSelection } from "./mcporter-custody.ts";
+import { usesPackagedMcporter } from "./mcporter-packaged.ts";
 import { type KeylessDataRoot, ownKeylessDataRoot } from "./provider-route.ts";
 import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, REQUIREMENTS_REVISION, type DependencyTool } from "./dependency-status.ts";
 import { applyDeps, PREVIEW_ID, previewDeps, type ApplyResult, type DepsRequest } from "./deps-repair.ts";
@@ -1518,19 +1519,26 @@ async function handleDepsUpdate(args: readonly string[]): Promise<void> {
 }
 
 const SETUP_EFFECTS = ["op", "mise", "uv"] as const;
+const LINUX_SETUP_REPAIR = "Nothing to set up on Linux: the pilot build stages MCPorter in the plugin, and the pilot operator delivers account keys to the Connectors receiver; run connectors deps status, then connectors auth check <connector>";
 const INTERACTIVE_SETUP_EFFECTS = ["op", "mise", "uv", "keychain-service-token"] as const;
 
-function emitSetup(causeCode: "SUCCESS_COMPLETED" | "DOMAIN_SETUP_FAILED_UNCHANGED" | "DOMAIN_SETUP_FAILED_PARTIAL" | "SCHEMA_SETUP_CONFIG_INVALID" | "USAGE_SETUP_MALFORMED" | "DOMAIN_SETUP_ATTENDED_REQUIRED" | "DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE" | "INTERNAL_SETUP_UNKNOWN", completed: string[], message: string): void {
+function setupRepair(causeCode: CauseCode): string {
+	if (causeCode === "INTERNAL_SETUP_UNKNOWN") return "Inspect the login Keychain item metadata and confirm scoped auth behavior before another setup attempt";
+	return setupInteractive ? "Inspect the reported effects, then run connectors setup --interactive in a terminal" : "Inspect the selected plugin-owned setup state, then run connectors setup again";
+}
+
+function emitSetup(causeCode: "SUCCESS_COMPLETED" | "DOMAIN_SETUP_FAILED_UNCHANGED" | "DOMAIN_SETUP_FAILED_PARTIAL" | "SCHEMA_SETUP_CONFIG_INVALID" | "USAGE_SETUP_MALFORMED" | "DOMAIN_SETUP_ATTENDED_REQUIRED" | "DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE" | "INTERNAL_SETUP_UNKNOWN", completed: string[], message: string, platformRefusal?: { repair: string; nextAction: string }): void {
 	const row = ADMITTED_CAUSE_ROWS[causeCode];
 	const effects = setupInteractive ? INTERACTIVE_SETUP_EFFECTS : SETUP_EFFECTS;
 	const uncertain = causeCode === "INTERNAL_SETUP_UNKNOWN" ? [effects[completed.length]!] : [];
+	const failedNext = platformRefusal?.nextAction ?? (setupInteractive ? "connectors.setup.interactive" : "connectors.setup");
 	emit({
 		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS,
 		result: {
 			runId: runId(), commandIdentity: setupInteractive ? "connectors.setup.interactive" : "connectors.setup", outcome: row.outcome, failureClass: row.failureClass,
 			exitCode: row.exitCode, data: row.outcome === "success" ? { installed: SETUP_EFFECTS, ...(setupInteractive ? { keychainServiceToken: "stored" } : {}) } : null,
-			retryable: false, repairAction: row.outcome === "success" ? null : causeCode === "INTERNAL_SETUP_UNKNOWN" ? "Inspect the login Keychain item metadata and confirm scoped auth behavior before another setup attempt" : setupInteractive ? "Inspect the reported effects, then run connectors setup --interactive in a terminal" : "Inspect the selected plugin-owned setup state, then run connectors setup again",
-			nextAction: row.outcome === "success" ? "connectors.status" : setupInteractive ? "connectors.setup.interactive" : "connectors.setup",
+			retryable: false, repairAction: row.outcome === "success" ? null : (platformRefusal?.repair ?? setupRepair(causeCode)),
+			nextAction: row.outcome === "success" ? "connectors.status" : failedNext,
 			effectClass: "repository-local", transactionState: row.transactionState, causeCode,
 			effects: { completed, remaining: effects.slice(completed.length + uncertain.length), uncertain, inventoryComplete: true },
 		},
@@ -1584,6 +1592,10 @@ async function handleSetup(args: readonly string[]): Promise<void> {
 	setupInteractive = args[0] === "--interactive";
 	if (args.length !== (setupInteractive ? 1 : 0)) {
 		emitSetup("USAGE_SETUP_MALFORMED", [], "connectors: use setup or setup --interactive");
+		return;
+	}
+	if (usesPackagedMcporter()) {
+		emitSetup("DOMAIN_SETUP_FAILED_UNCHANGED", [], "connectors: setup installs the macOS op, mise, and uv and a login Keychain token, none of which the Linux pilot uses", { repair: LINUX_SETUP_REPAIR, nextAction: "connectors.deps.status" });
 		return;
 	}
 	const terminal = setupInteractive ? openTerminal() : null;
