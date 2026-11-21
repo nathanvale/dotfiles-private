@@ -11,14 +11,15 @@
 // - only the admitted Connector Skills (PILOT_SKILLS), without their tests;
 // - vendor/mcporter: the pinned official MCPorter npm package and its
 //   dependencies, installed only by the committed lockfile's integrity, with
-//   a launcher bound to this host's Node.
+//   a launcher bound to this host's Node, and a record of that Node binary's
+//   sha256 and the mcporter package's digest for the per-use check.
 //
 // It writes only under --out (default: the gitignored dist/pilot here),
 // which must be absent or empty, plus Bun's own package cache. It installs
 // nothing into the pilot and never reads a credential.
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isNodePath, launcherText, PACKAGED_MCPORTER, PACKAGED_MCPORTER_DIR, releaseRecord, selectPackagedMcporter } from "../bin/mcporter-packaged.ts";
+import { isNodePath, launcherText, nodeDigest, PACKAGED_MCPORTER, PACKAGED_MCPORTER_DIR, packageDigest, releaseRecord, selectPackagedMcporter } from "../bin/mcporter-packaged.ts";
 
 // Admitted for the pilot. Figma and Canva are excluded by Nathan, Atlassian
 // is Monash-only, and NotebookLM needs a desktop browser profile (ADR 0009).
@@ -69,8 +70,14 @@ function stageMcporter(plugin: string, bun: string): void {
 	for (const file of ["package.json", "bun.lock"]) cpSync(path.join(locked, file), path.join(vendor, file));
 	if (lockedIntegrity(readFileSync(path.join(vendor, "bun.lock"), "utf8")) !== PACKAGED_MCPORTER.integrity) fail("config/mcporter-linux/bun.lock does not pin mcporter to the official release integrity");
 	run([bun, "install", "--frozen-lockfile", "--production", "--ignore-scripts", "--linker=hoisted", "--no-progress"], vendor, { PATH: `${path.dirname(bun)}:/usr/bin:/bin`, HOME: process.env.HOME ?? "/" });
+	// Record the bytes each use must find again: this host's Node binary and
+	// the mcporter package the lockfile just installed.
 	const node = hostNode();
-	writeFileSync(path.join(vendor, "release.json"), releaseRecord(node), { mode: 0o644 });
+	const nodeSha256 = nodeDigest(node);
+	const mcporterSha256 = packageDigest(path.join(vendor, "node_modules", "mcporter"));
+	if (nodeSha256 === null) fail("the resolved node is not a readable regular file");
+	if (mcporterSha256 === null) fail("the staged mcporter package holds something other than regular files and directories");
+	writeFileSync(path.join(vendor, "release.json"), releaseRecord({ node, nodeSha256, mcporterSha256 }), { mode: 0o644 });
 	writeFileSync(path.join(vendor, "mcporter"), launcherText(node), { mode: 0o755 });
 	chmodSync(path.join(vendor, "mcporter"), 0o755);
 }
