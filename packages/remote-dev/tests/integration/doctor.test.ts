@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   calls,
@@ -20,7 +20,7 @@ const ACCEPTANCE = join(import.meta.dir, "../../acceptance");
 const RUNNING = psOutput(PS.pilotRunning);
 const READY = "ready 8a14f0cc1b08d531eb83255ea3764ae22aa932b5";
 
-type Install = "absent" | "main-checkout" | "worktree" | "worktree-unlanded";
+type Install = "absent" | "main-checkout" | "worktree" | "worktree-main-not-ready" | "worktree-unlanded";
 
 interface Fault {
   cause: string;
@@ -87,10 +87,14 @@ async function install(world: World, kind: Install): Promise<string> {
   const main = join(world.dir, "code", "dotfiles");
   if (kind === "absent") return main;
   const root = kind === "main-checkout" ? main : join(main, ".worktrees", "remote-dev-x");
-  const roots = kind === "worktree" ? [main, root] : [root];
+  const roots = kind === "worktree-unlanded" || kind === "main-checkout" ? [root] : [main, root];
+  // The main copy answers --help like the real command, or fails like one whose dependencies are missing.
+  const mainCopy = kind === "worktree-main-not-ready" ? "#!/bin/sh\necho \"error: Cannot find module\" >&2\nexit 1\n" : "#!/bin/sh\nexit 0\n";
   for (const holder of roots) {
+    const command = join(holder, "packages", "remote-dev", "bin", "remote-dev");
     await mkdir(join(holder, "packages", "remote-dev", "bin"), { recursive: true });
-    await writeFile(join(holder, "packages", "remote-dev", "bin", "remote-dev"), "#!/bin/sh\n");
+    await writeFile(command, holder === main ? mainCopy : "#!/bin/sh\n");
+    await chmod(command, 0o755);
   }
   await mkdir(join(main, ".git"), { recursive: true });
   if (kind !== "main-checkout") await writeFile(join(root, ".git"), `gitdir: ${main}/.git/worktrees/remote-dev-x\n`);
@@ -154,7 +158,7 @@ for (const name of await faultFiles()) {
       commandIdentity: "remote-dev.doctor",
       data: null,
       outcome: "refused",
-      repairAction: fault.expect.repairAction.replace("{main}", main).replace("{home}", world.dir),
+      repairAction: fault.expect.repairAction.replaceAll("{main}", main).replaceAll("{home}", world.dir),
       transactionState: "unchanged",
     });
     const message = envelopeOf(output).message;

@@ -134,7 +134,7 @@ the exact repair in `repairAction`:
 | `link-unresponsive` | The shared link cannot complete a test transfer; a direct connection can | `ssh -O stop ALIAS` |
 | `link-stale-route` | sshd sees the shared link and a new connection from different addresses | `ssh -O stop ALIAS` |
 | `link-degraded` | The shared link moves under half the rate of a direct connection | `ssh -O stop ALIAS` |
-| `install-from-worktree` | The installed command runs from a git worktree | the `ln -sfn` command it prints |
+| `install-from-worktree` | The installed command runs from a git worktree | the command it prints: a relink, with `bun install` first when main's copy cannot start |
 
 `ssh -O stop` stops the shared link from taking new sessions; open sessions keep
 running and the next connection builds a fresh link. Host, container, tool and
