@@ -149,6 +149,36 @@ EXPECTED_SOURCE_MODES = {
     "CODEX-CATALOG-NOTICE": 0o600,
 }
 
+# A main Codex config: the worker marketplaces among other tables the installer must ignore.
+MAIN_CODEX_CONFIG = textwrap.dedent(
+    """\
+    model = "gpt-6.1"
+
+    [marketplaces.unrelated]
+    source_type = "local"
+    source = "/fixture/unrelated"
+
+    [marketplaces.pstack-codex-compat]
+    source_type = "local"
+    source = "/fixture/plugin-compat/pstack/0.15.32-codex.1/marketplace"
+
+    [marketplaces.personal]
+    source_type = "local"
+    source = "/fixture/dotfiles/config/agents/plugins"
+
+    [marketplaces.monash-plugins]
+    source_type = "git"
+    source = "git@github.com:nathanvale/monash-plugins.git"
+
+    [marketplaces.mattpocock]
+    source_type = "git"
+    source = "https://github.com/mattpocock/skills.git"
+
+    [plugins."personal@personal"]
+    enabled = true
+    """
+)
+
 BASELINE_TEXT = textwrap.dedent(
     """
     # Test-owned Herdr baseline.
@@ -261,6 +291,9 @@ class TerraInstallerProcessTests(unittest.TestCase):
         self.real_home = os.environ.get("HOME")
         # Every run names a temporary worker home, so no test can write the real one.
         self.worker_home = self.root / "worker codex home"
+        # ...and a temporary main Codex config, so no test reads the real one.
+        self.main_codex_config = self.root / "main codex config.toml"
+        self.main_codex_config.write_text(MAIN_CODEX_CONFIG, encoding="utf-8")
 
     def target(self, prefix: Path | None = None) -> Path:
         return (prefix or self.prefix) / "share" / "monash-foundry"
@@ -290,6 +323,7 @@ class TerraInstallerProcessTests(unittest.TestCase):
                 "--herdr-config",
                 str(selected_baseline),
                 *(() if "--worker-home" in args else ("--worker-home", str(self.worker_home))),
+                *(() if "--main-codex-config" in args else ("--main-codex-config", str(self.main_codex_config))),
                 *args,
             ],
             cwd=REPO_ROOT,
@@ -452,6 +486,55 @@ class TerraInstallerProcessTests(unittest.TestCase):
             self.assertEqual((self.worker_home / name).stat().st_mode & 0o777, 0o600)
         checked = self.run_installer("--check", "--host-role", "mini")
         self.assert_success(checked)
+
+    def test_worker_home_enables_the_worker_plugins_from_the_main_codex_marketplaces(self) -> None:
+        self.install_initial()
+        config = (self.worker_home / "config.toml").read_text(encoding="utf-8")
+        provider_end = config.index("# <<< monash-foundry codex-desktop provider v1 <<<")
+        block = config[config.index("# >>> monash-worker plugins:"):]
+        # Outside the provider block, which monash-codex-desktop's rollback removes whole.
+        self.assertGreater(config.index("# >>> monash-worker plugins:"), provider_end)
+        # Independent oracle: the fixture's marketplace sources, restated as TOML lines.
+        for line in ("[marketplaces.pstack-codex-compat]", 'source_type = "local"',
+                     'source = "/fixture/plugin-compat/pstack/0.15.32-codex.1/marketplace"',
+                     "[marketplaces.mattpocock]", 'source = "https://github.com/mattpocock/skills.git"',
+                     "[marketplaces.personal]", 'source = "/fixture/dotfiles/config/agents/plugins"',
+                     "[marketplaces.monash-plugins]", 'source = "git@github.com:nathanvale/monash-plugins.git"',
+                     '[plugins."pstack@pstack-codex-compat"]', '[plugins."mattpocock-skills@mattpocock"]',
+                     '[plugins."connectors@personal"]', '[plugins."monash-tools@monash-plugins"]'):
+            self.assertIn(line + "\n", block)
+        self.assertEqual(block.count("enabled = true"), 4)
+        # The personal plugin and unrelated marketplaces stay out of Monash workers.
+        self.assertNotIn("personal@personal", config)
+        self.assertNotIn("unrelated", config)
+        self.assertTrue(block.rstrip().endswith("# <<< monash-worker plugins <<<"))
+
+    def test_worker_home_refuses_a_main_config_without_a_worker_marketplace(self) -> None:
+        self.main_codex_config.write_text(MAIN_CODEX_CONFIG.replace("[marketplaces.mattpocock]", "[marketplaces.other]"),
+                                          encoding="utf-8")
+        before = tree_snapshot(self.root)
+        result = self.run_installer("--host-role", "mini")
+        self.assert_refusal(result)
+        self.assertIn("has no usable marketplace 'mattpocock' for mattpocock-skills@mattpocock", result.stderr)
+        self.assertEqual(tree_snapshot(self.root), before)
+
+    def test_worker_home_check_follows_a_main_codex_marketplace_change(self) -> None:
+        self.install_initial()
+        config = self.worker_home / "config.toml"
+        self.main_codex_config.write_text(MAIN_CODEX_CONFIG.replace("0.15.32-codex.1", "0.15.46-codex.1"),
+                                          encoding="utf-8")
+        checked = self.run_installer("--check", "--host-role", "mini")
+        self.assert_check_failure(checked)
+        self.assertIn(f"worker Codex file missing or out of date: {config}", checked.stderr)
+        installed = self.run_installer("--host-role", "mini")
+        self.assert_success(installed)
+        home = f"CODEX_HOME={shlex.quote(str(self.worker_home))}"
+        self.assertIn(f"{home} codex plugin marketplace upgrade && {home} codex plugin add pstack@pstack-codex-compat",
+                      installed.stdout)
+        self.assertIn(f"{home} codex plugin add monash-tools@monash-plugins", installed.stdout)
+        self.assertIn('source = "/fixture/plugin-compat/pstack/0.15.46-codex.1/marketplace"\n',
+                      config.read_text(encoding="utf-8"))
+        self.assert_success(self.run_installer("--check", "--host-role", "mini"))
 
     def test_worker_home_dry_run_plans_and_writes_nothing(self) -> None:
         planned = self.run_installer("--dry-run", "--host-role", "mini")

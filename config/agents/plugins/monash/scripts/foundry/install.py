@@ -63,6 +63,26 @@ CLAUDE_ALIAS_MIGRATION = {
 WORKER_PROFILE = "monash-sol"
 WORKER_FILES = ("config.toml", f"{WORKER_PROFILE}.config.toml")
 WORKER_HEADER = "# Managed by monash-foundry install.py for monash-worker. Rerun the installer to change it."
+# Plugins the worker home enables. Each marketplace entry is copied from the main Codex config,
+# so workers load the same plugin sources (and, for local marketplaces, the same versions) as
+# Nathan's own Codex. Personal stays out: Monash work keeps the personal domain separate.
+WORKER_PLUGINS = (
+    "pstack@pstack-codex-compat",
+    "mattpocock-skills@mattpocock",
+    "connectors@personal",
+    "monash-tools@monash-plugins",
+)
+WORKER_PLUGINS_BEGIN = "# >>> monash-worker plugins: marketplaces copied from the main Codex config by install.py >>>"
+WORKER_PLUGINS_END = "# <<< monash-worker plugins <<<"
+# A first `codex plugin add` would write inside the managed provider block, so the installer writes the
+# entries and these commands only fetch files: `upgrade` snapshots the git marketplaces, and `add` of a
+# plugin the config already declares copies it into the cache without editing the config.
+
+
+def worker_plugins_fetch(worker_home: Path) -> str:
+    home = f"CODEX_HOME={shlex.quote(str(worker_home))}"
+    return " && ".join((f"{home} codex plugin marketplace upgrade",
+                        *(f"{home} codex plugin add {plugin}" for plugin in WORKER_PLUGINS)))
 
 
 class InstallRefusal(RuntimeError):
@@ -467,7 +487,62 @@ def load_desktop_module(source: Path):
     return module
 
 
-def worker_home_files(source: Path, target: Path) -> dict[str, str]:
+def fallback_marketplaces(text: str) -> dict[str, object]:
+    """Read only [marketplaces.<bare name>] source_type and source strings, ignoring everything else."""
+    marketplaces: dict[str, dict[str, str]] = {}
+    current: dict[str, str] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            name = line[len("[marketplaces."):-1] if line.startswith("[marketplaces.") and line.endswith("]") else ""
+            current = marketplaces.setdefault(name, {}) if name.replace("-", "").isalnum() else None
+            continue
+        if current is None or "=" not in line:
+            continue
+        field, value = (part.strip() for part in line.split("=", 1))
+        if field in {"source_type", "source"}:
+            if field in current:
+                raise ValueError(f"duplicate field in a marketplace: {field}")
+            current[field] = fallback_toml_string(value, field)
+    return marketplaces
+
+
+def main_codex_marketplaces(main_config: Path) -> dict[str, object]:
+    try:
+        text = main_config.read_text(encoding="utf-8")
+        if tomllib is None:
+            return fallback_marketplaces(text)
+        parsed = tomllib.loads(text)
+    except (OSError, ValueError) as error:
+        # The parser's message can name personal tables, so only the path is reported.
+        raise InstallRefusal(f"cannot read the main Codex config for worker plugins: {main_config}") from error
+    marketplaces = parsed.get("marketplaces")
+    return marketplaces if isinstance(marketplaces, dict) else {}
+
+
+def worker_plugin_block(desktop, main_config: Path) -> str:
+    """The worker home's plugin section: the main Codex marketplace entries for WORKER_PLUGINS."""
+    marketplaces = main_codex_marketplaces(main_config)
+    lines = [WORKER_PLUGINS_BEGIN]
+    for name in dict.fromkeys(plugin.split("@", 1)[1] for plugin in WORKER_PLUGINS):
+        entry = marketplaces.get(name)
+        source_type = entry.get("source_type") if isinstance(entry, dict) else None
+        source = entry.get("source") if isinstance(entry, dict) else None
+        if not isinstance(source_type, str) or not isinstance(source, str) or not name.replace("-", "").isalnum():
+            plugins = ", ".join(plugin for plugin in WORKER_PLUGINS if plugin.endswith(f"@{name}"))
+            raise InstallRefusal(f"the main Codex config {main_config} has no usable marketplace '{name}' for "
+                                 f"{plugins}; add it there with `codex plugin marketplace add` and rerun")
+        lines += [f"[marketplaces.{name}]", f"source_type = {desktop.toml_string(source_type)}",
+                  f"source = {desktop.toml_string(source)}", ""]
+    for plugin in WORKER_PLUGINS:
+        lines += [f'[plugins."{plugin}"]', "enabled = true", ""]
+    lines.append(WORKER_PLUGINS_END)
+    return "\n".join(lines) + "\n"
+
+
+def worker_home_files(source: Path, target: Path, main_config: Path) -> dict[str, str]:
     desktop = load_desktop_module(source)
     config, _ = read_json_object(source / "config.json") or ({}, b"")
     codex = config.get("codex") if isinstance(config.get("codex"), dict) else {}
@@ -493,7 +568,8 @@ def worker_home_files(source: Path, target: Path) -> dict[str, str]:
         "network_access = true",
         "",
     ))
-    return {"config.toml": f"{WORKER_HEADER}\n{provider}", WORKER_FILES[1]: profile}
+    plugins = worker_plugin_block(desktop, main_config)
+    return {"config.toml": f"{WORKER_HEADER}\n{provider}\n{plugins}", WORKER_FILES[1]: profile}
 
 
 def worker_home_plan(home: Path, files: dict[str, str]) -> list[str]:
@@ -624,9 +700,9 @@ def rollback_problems(
 
 
 def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role: str, dry_run: bool,
-            worker_home: Path) -> int:
+            worker_home: Path, main_codex_config: Path) -> int:
     manifest = source_manifest(source, host_role)
-    worker_files = worker_home_files(source, target)
+    worker_files = worker_home_files(source, target, main_codex_config)
     worker_writes = worker_home_plan(worker_home, worker_files)
     config = target / "herdr.toml"
     safe_existing_parents((target, target / "backups", config, target / MANIFEST_NAME, bin_dir))
@@ -726,18 +802,21 @@ def install(source: Path, target: Path, bin_dir: Path, baseline: Path, host_role
         print("Known Claude alias drift migrated: the live Claude aliases are kept in the installed config.json")
     if backup_dir:
         print(f"Previous managed snapshot backed up at {backup_dir}")
+    if "config.toml" in worker_writes:
+        print(f"Worker plugins changed. Fetch them before the next worker runs: {worker_plugins_fetch(worker_home)}")
     return 0
 
 
-def worker_home_problems(source: Path, target: Path, worker_home: Path) -> list[str]:
-    files = worker_home_files(source, target)
+def worker_home_problems(source: Path, target: Path, worker_home: Path, main_codex_config: Path) -> list[str]:
+    files = worker_home_files(source, target, main_codex_config)
     if not worker_home.is_dir():
         return [f"missing worker Codex home: {worker_home}"]
     writes = worker_home_plan(worker_home, files)
     return [f"worker Codex file missing or out of date: {worker_home / name}" for name in writes]
 
 
-def check(source: Path, target: Path, bin_dir: Path, host_role: str, worker_home: Path) -> int:
+def check(source: Path, target: Path, bin_dir: Path, host_role: str, worker_home: Path,
+          main_codex_config: Path) -> int:
     expected = source_manifest(source, host_role)
     problems: list[str] = []
     try:
@@ -753,7 +832,7 @@ def check(source: Path, target: Path, bin_dir: Path, host_role: str, worker_home
         problems.extend(command_target_problems(bin_dir, target, required=True))
         if binding_state(config, target) not in {"owned", "legacy"}:
             problems.append(f"private Herdr config lacks exactly one owned Ctrl+G F binding: {config}")
-        problems.extend(worker_home_problems(source, target, worker_home))
+        problems.extend(worker_home_problems(source, target, worker_home, main_codex_config))
     except InstallRefusal as error:
         problems.append(str(error))
     if problems:
@@ -775,6 +854,12 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         type=Path,
         default=Path.home() / ".codex-monash-sol",
         help="Codex home for monash-worker exec workers (never ~/.codex)",
+    )
+    parser.add_argument(
+        "--main-codex-config",
+        type=Path,
+        default=Path.home() / ".codex/config.toml",
+        help="Codex config whose marketplaces the worker plugins are copied from (read only)",
     )
     parser.add_argument(
         "--herdr-config",
@@ -799,6 +884,9 @@ def main(argv: list[str]) -> int:
     worker_home = args.worker_home.expanduser()
     if not worker_home.is_absolute():
         worker_home = Path.cwd() / worker_home
+    main_codex_config = args.main_codex_config.expanduser()
+    if not main_codex_config.is_absolute():
+        main_codex_config = Path.cwd() / main_codex_config
     try:
         main_homes = {(Path.home() / ".codex").resolve()}
         inherited = os.environ.get("CODEX_HOME")
@@ -808,8 +896,9 @@ def main(argv: list[str]) -> int:
         if any(worker_home.resolve().is_relative_to(main) for main in main_homes):
             raise InstallRefusal("--worker-home must not be the main Codex home or inside it")
         if args.check:
-            return check(source, target, bin_dir, args.host_role, worker_home)
-        return install(source, target, bin_dir, baseline, args.host_role, args.dry_run, worker_home)
+            return check(source, target, bin_dir, args.host_role, worker_home, main_codex_config)
+        return install(source, target, bin_dir, baseline, args.host_role, args.dry_run, worker_home,
+                       main_codex_config)
     except InstallRefusal as error:
         print(f"Installation refused: {error}", file=sys.stderr)
         return 2
