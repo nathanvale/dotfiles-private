@@ -31,9 +31,12 @@ MCPorter on Linux:
 - Official npm package installed by a committed lockfile (chosen). The lock's
   sha512 for mcporter equals the official release tgz; every dependency
   installs only by its locked integrity, with lifecycle scripts off. Runs on
-  the pilot's Node 24. Per-use checks cover layout, launcher text, modes, and
-  version, not every dependency byte: weaker than the macOS signature check.
-  Each MCPorter bump needs a new lockfile.
+  the pilot's Node 24. Per-use checks cover layout, launcher text, modes, the
+  Node binary's recorded sha256, one recorded digest of the mcporter package's
+  files, and the reported version. They do not cover the bytes of MCPorter's
+  dependencies, which the lockfile pins at install time only, and the Node
+  digest is the build host's own, not an upstream pin: weaker than the macOS
+  signature check. Each MCPorter bump needs a new lockfile.
 - Compile MCPorter for bun-linux-arm64 from the pinned commit. Matches the
   macOS shape, but the digest becomes ours, not upstream's.
 - Wait for an upstream Linux release. Blocks the pilot indefinitely.
@@ -63,9 +66,14 @@ proven, so it stays on the live-proof list.
 `pilot/build.ts` (`bun run build:pilot`) builds a directory marketplace on the
 Linux arm64 host. It holds the front door compiled for bun-linux-arm64, only
 the admitted Skills, and `vendor/mcporter`: the locked package plus a launcher
-bound to the host's Node. On Linux the front door selects that staged copy
-read-only (`bin/mcporter-packaged.ts`), declares MCPorter as its only
-dependency, and refuses `setup` and `deps repair` with a rebuild handoff.
+bound to the host's Node. The build records, in `vendor/mcporter/release.json`,
+the sha256 of that Node binary and one digest over every file of the staged
+mcporter package. On Linux the front door selects that staged copy read-only
+(`bin/mcporter-packaged.ts`): before each use, and before Node or MCPorter
+runs, it recomputes both digests and refuses a difference as
+`packaged-node-mismatch` or `packaged-mcporter-mismatch`. It declares MCPorter
+as its only dependency, and refuses `setup`, `deps repair`, and every staged
+MCPorter failure with a rebuild handoff, never an in-place repair.
 Account-key, Mermaid, and JEV custody reads its item through
 `bin/credential-item.ts`, which asks the receiver on Linux
 (`bin/delivered-credential.ts`) and 1Password on macOS. The receiver for a
@@ -81,15 +89,39 @@ its targets, and the pilot-side receiver lifecycle.
 Positive: the pilot gets Connectors without its token or op; the macOS route
 is untouched; a lapsed lease refuses with an operator handoff and never falls
 back to keyless mode. Negative: a 66 MB Node dependency tree the pilot build
-owns; per-use MCPorter checks are weaker than on macOS; the macOS test suite
-cannot run on Linux, so macOS proof stays with CI. Neutral: the receiver
-answers whoever can reach its socket as this user, as git's own cache does.
+owns; per-use MCPorter checks are weaker than on macOS; each use hashes the
+122 MB Node binary and the 2 MB mcporter package, about 50 ms beside the
+existing 32 ms version check (measured in a scratch container from the pilot
+image, 21 November 2026); the record sits in the same plugin copy as the
+front door, so it catches a changed Node or package, not a writer who
+replaces the whole copy; the macOS test suite cannot run on Linux, so macOS
+proof stays with CI. Neutral: the receiver answers whoever can reach its
+socket as this user, as git's own cache does.
 
 ## Confirmation
 
 `tests/linux-pilot.test.ts` proves platform tools, staged-MCPorter selection,
-the lockfile pin, receiver reads, and the packaged build with a real git
-receiver holding a sentinel. Live proof: in a fresh pilot Claude Code session
-the Skills list, keyless Context7 and Firecrawl reads succeed, and Context7
-account mode reads with the delivered key. A Notion attended login and read
-in the task browser remains to be proven. macOS CI keeps `bun run test`.
+the recorded Node and package digests, the lockfile pin, receiver reads with
+their ownership and symlink refusals, and the packaged build with a real git
+receiver holding a sentinel. Its two Linux process tests run in no hosted
+check; macOS CI skips them and keeps `bun run test`.
+
+Observed live, each with a record:
+
+- On the pilot, keyless reads through the staged MCPorter: Firecrawl
+  `firecrawl_search` (17 November 2026 UTC) and Context7 `resolve-library-id`
+  (18 November 2026 UTC), retained in the pilot's Connectors evidence state.
+- In a scratch container from the pilot image (21 November 2026, recorded on
+  dotfiles-private pull request 291 and its digest follow-up): the pilot
+  build, the Linux process tests, a keyless Context7 schema and read, and
+  `auth check` against a real git credential-cache receiver holding a
+  sentinel.
+
+Not proven:
+
+- A Context7 account-mode read with a real delivered key. An earlier draft
+  listed it as live proof. No record of it exists: Connectors retains keyless
+  reads only, and every recorded receiver check used a sentinel.
+- The Skills list in a fresh pilot Claude Code session: reported by the
+  DOTF-10 task, with no retained record.
+- A Notion attended login and read in the task browser.
