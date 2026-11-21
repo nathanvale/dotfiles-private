@@ -33,6 +33,8 @@ const LOCAL_TIMEOUT_MS = 10_000;
 const DEGRADED_RATIO = 0.5;
 const MIB = 1024 * 1024;
 const MARKER = "remote-dev-sample ";
+/** macOS VPN interfaces: WireGuard and Tailscale (utun), IPsec, and PPP. */
+const TUNNEL_INTERFACE = /^(utun|ipsec|ppp)\d+$/;
 /** Doctor's own SSH calls never start a shared link: they use one if it exists, or go direct. */
 const NO_NEW_MASTER = ["-o", "ControlMaster=no"];
 
@@ -77,15 +79,20 @@ async function network(probe: Probe): Promise<Found> {
   if (toHost.kind === "missing") return fail(probe, "tool-unavailable");
   const routed = toHost.kind === "exited" && toHost.exitCode === 0 ? toHost.stdout : "";
   const hostInterface = routeInterface(routed);
-  // macOS answers any address with the default route; a private host there sits on no network this Mac is joined to.
+  // macOS answers any address with the default route. A private host there is unreachable,
+  // unless the default route is a VPN tunnel that carries every address (a full tunnel).
   const onlyDefault = /destination:\s*default\b/.test(routed) && isPrivateAddress(hostname);
-  if (hostInterface === null || onlyDefault) {
+  const tunnel = hostInterface !== null && TUNNEL_INTERFACE.test(hostInterface);
+  if (hostInterface === null || (onlyDefault && !tunnel)) {
     return refuse(probe, "network-no-route", `Cause network-no-route. This Mac has no route to ${hostname} (${alias}).`);
+  }
+  if (onlyDefault) {
+    return ok({ detail: `${alias} (${hostname}) is reached through the VPN tunnel ${hostInterface}, the default route.`, id: "network", status: "ok" });
   }
   const toDefault = await local(probe, "route", ["-n", "get", "default"]);
   const defaultInterface = toDefault.kind === "exited" ? routeInterface(toDefault.stdout) : null;
-  const tunnel = defaultInterface !== null && defaultInterface !== hostInterface ? `; the default route uses ${defaultInterface}` : "";
-  return ok({ detail: `${alias} (${hostname}) is reached through ${hostInterface}${tunnel}.`, id: "network", status: "ok" });
+  const other = defaultInterface !== null && defaultInterface !== hostInterface ? `; the default route uses ${defaultInterface}` : "";
+  return ok({ detail: `${alias} (${hostname}) is reached through ${hostInterface}${other}.`, id: "network", status: "ok" });
 }
 
 /** Age from ps etime ([[dd-]hh:]mm:ss), rounded for people. */

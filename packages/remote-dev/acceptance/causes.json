@@ -2,7 +2,7 @@
   {
     "name": "network-no-route",
     "detects": "This Mac has no route to the host's address.",
-    "detect": "Resolve the host with `ssh -G ALIAS` (hostname line), then `route -n get HOSTNAME`. A non-zero exit, no `interface:` line, or `destination: default` for a private (RFC 1918, link-local or 100.64/10) address is the cause. macOS answers any unknown address with the default route.",
+    "detect": "Resolve the host with `ssh -G ALIAS` (hostname line), then `route -n get HOSTNAME`. The cause is a non-zero exit, no `interface:` line, or `destination: default` for a private (RFC 1918, link-local or 100.64/10) address on an interface that is not a VPN tunnel (`utun*`, `ipsec*`, `ppp*`). macOS answers any unknown address with the default route; a full-tunnel VPN as the default route does reach the host.",
     "repair": "Join the host's network or connect the VPN that reaches it. Then run `remote-dev doctor TARGET` again.",
     "faults": [
       "faults/network-no-route.json"

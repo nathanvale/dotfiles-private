@@ -1,7 +1,7 @@
 {
   "cause": "link-stale-route",
   "origin": "derived",
-  "summary": "The reverse of 21 November: a link opened at home is used away from home, where On-Demand WireGuard carries new connections.",
+  "summary": "The reverse of 21 November: a link opened at home is used away from home, where a full-tunnel WireGuard carries new connections. The host matches only the default route, which is the tunnel.",
   "target": "pilot",
   "observed": {
     "sshConfig": {
@@ -9,7 +9,7 @@
       "hostname": "192.168.1.100"
     },
     "route": {
-      "host": "utun7",
+      "host": null,
       "default": "utun7"
     },
     "sharedLink": {
@@ -38,5 +38,8 @@
       "from 192.168.1.104",
       "from 192.168.2.2"
     ]
+  },
+  "evidence": {
+    "observation": "Not observed live. The route answer is derived from the 21 November default route (utun7) and from macOS answering `destination: default` for an address with no specific route. `route -n get 192.168.1.100` while away on WireGuard settles it."
   }
 }
