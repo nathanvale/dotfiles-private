@@ -173,6 +173,7 @@ MAIN_CODEX_CONFIG = textwrap.dedent(
     [marketplaces.mattpocock]
     source_type = "git"
     source = "https://github.com/mattpocock/skills.git"
+    ref = "d1478fcb140db0b93c0c8df17bcfd311844749d0"
 
     [plugins."personal@personal"]
     enabled = true
@@ -498,6 +499,7 @@ class TerraInstallerProcessTests(unittest.TestCase):
         for line in ("[marketplaces.pstack-codex-compat]", 'source_type = "local"',
                      'source = "/fixture/plugin-compat/pstack/0.15.32-codex.1/marketplace"',
                      "[marketplaces.mattpocock]", 'source = "https://github.com/mattpocock/skills.git"',
+                     'ref = "d1478fcb140db0b93c0c8df17bcfd311844749d0"',
                      "[marketplaces.personal]", 'source = "/fixture/dotfiles/config/agents/plugins"',
                      "[marketplaces.monash-plugins]", 'source = "git@github.com:nathanvale/monash-plugins.git"',
                      '[plugins."pstack@pstack-codex-compat"]', '[plugins."mattpocock-skills@mattpocock"]',

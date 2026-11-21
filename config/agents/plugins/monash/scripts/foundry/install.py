@@ -502,7 +502,7 @@ def fallback_marketplaces(text: str) -> dict[str, object]:
         if current is None or "=" not in line:
             continue
         field, value = (part.strip() for part in line.split("=", 1))
-        if field in {"source_type", "source"}:
+        if field in {"source_type", "source", "ref"}:
             if field in current:
                 raise ValueError(f"duplicate field in a marketplace: {field}")
             current[field] = fallback_toml_string(value, field)
@@ -535,7 +535,15 @@ def worker_plugin_block(desktop, main_config: Path) -> str:
             raise InstallRefusal(f"the main Codex config {main_config} has no usable marketplace '{name}' for "
                                  f"{plugins}; add it there with `codex plugin marketplace add` and rerun")
         lines += [f"[marketplaces.{name}]", f"source_type = {desktop.toml_string(source_type)}",
-                  f"source = {desktop.toml_string(source)}", ""]
+                  f"source = {desktop.toml_string(source)}"]
+        # A pinned ref keeps workers on the exact commit Nathan's Codex uses.
+        ref = entry.get("ref")
+        if isinstance(ref, str):
+            lines.append(f"ref = {desktop.toml_string(ref)}")
+        sparse = entry.get("sparse_paths")
+        if isinstance(sparse, list) and all(isinstance(path, str) for path in sparse):
+            lines.append(f"sparse_paths = [{', '.join(desktop.toml_string(path) for path in sparse)}]")
+        lines.append("")
     for plugin in WORKER_PLUGINS:
         lines += [f'[plugins."{plugin}"]', "enabled = true", ""]
     lines.append(WORKER_PLUGINS_END)
